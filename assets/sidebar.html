@@ -1094,6 +1094,11 @@ window.addEventListener('keydown', (e) => {
     }
   }
 });
+
+// Request initial state from Rust
+sendCommand({ action: 'ready' });
+window.addEventListener('DOMContentLoaded', () => sendCommand({ action: 'ready' }));
+setTimeout(() => sendCommand({ action: 'ready' }), 100);
 </script>
 </body>
 </html>

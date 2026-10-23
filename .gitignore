@@ -1,1 +1,5 @@
 /target
+Eclipse.app
+*.dmg
+scripts/icon_512.png
+scripts/AppIcon.iconset

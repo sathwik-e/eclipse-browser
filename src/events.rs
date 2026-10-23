@@ -27,6 +27,7 @@ pub enum IpcCommand {
     HibernateTab { id: usize },
     UpdateConfig { config: BrowserConfig },
     OpenDevtools,
+    Ready,
 }
 
 #[derive(Debug, Clone, Serialize)]

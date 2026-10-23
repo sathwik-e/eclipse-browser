@@ -8,7 +8,6 @@ use wry::{Rect, WebView, WebViewBuilder};
 use crate::config::BrowserConfig;
 use crate::events::{BrowserUiState, IpcCommand, UserEvent};
 use crate::tab::{get_default_favicon, Tab};
-use crate::ui_assets::SIDEBAR_HTML;
 
 pub struct BrowserApp {
     pub window: Arc<Window>,
@@ -43,14 +42,27 @@ impl BrowserApp {
         let proxy_clone = proxy.clone();
         let sidebar_webview = WebViewBuilder::new()
             .with_bounds(sidebar_bounds)
-            .with_transparent(true)
+            .with_transparent(false)
             .with_devtools(true)
-            .with_html(SIDEBAR_HTML)
+            .with_custom_protocol("eclipse".into(), move |_id, req| {
+                let path = req.uri().path();
+                let body = match path {
+                    "/sidebar" | "sidebar" => crate::ui_assets::SIDEBAR_HTML.as_bytes().to_vec(),
+                    "/newtab" | "newtab" => crate::ui_assets::NEWTAB_HTML.as_bytes().to_vec(),
+                    "/settings" | "settings" => crate::ui_assets::SETTINGS_HTML.as_bytes().to_vec(),
+                    _ => crate::ui_assets::SIDEBAR_HTML.as_bytes().to_vec(),
+                };
+                wry::http::Response::builder()
+                    .header("content-type", "text/html")
+                    .body(std::borrow::Cow::Owned(body))
+                    .unwrap()
+            })
+            .with_url("eclipse://sidebar")
             .with_ipc_handler(move |req| {
                 let body = req.body().clone();
                 let _ = proxy_clone.send_event(UserEvent::Ipc(body));
             })
-            .build(&window)
+            .build_as_child(&*window)
             .expect("Failed to initialize sidebar webview");
 
         let mut app = Self {
@@ -231,9 +243,12 @@ impl BrowserApp {
                 IpcCommand::OpenDevtools => {
                     if let Some(tab) = self.tabs.iter().find(|t| t.id == self.active_tab_id) {
                         if let Some(ref wv) = tab.webview {
-                            let _ = wv.evaluate_script("console.log('Zenith DevTools');");
+                            let _ = wv.evaluate_script("console.log('Eclipse DevTools');");
                         }
                     }
+                }
+                IpcCommand::Ready => {
+                    self.broadcast_state();
                 }
             }
         }

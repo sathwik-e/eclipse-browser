@@ -67,30 +67,82 @@ impl Tab {
         let proxy2 = proxy.clone();
         let proxy3 = proxy;
 
+        // Hardware FairPlay DRM compatibility shim
         let drm_script = r#"
             (function() {
-                if (window.__zenith_drm_shimmed) return;
-                window.__zenith_drm_shimmed = true;
-                // Enable standard fullscreen if needed
+                if (window.__eclipse_drm_shimmed) return;
+                window.__eclipse_drm_shimmed = true;
                 if (!document.fullscreenEnabled && document.webkitFullscreenEnabled) {
                     document.fullscreenEnabled = true;
                 }
             })();
         "#;
 
+        // Advanced AdBlocker, Tracker Shield & YouTube Ad Auto-Skipper
         let adblock_script = if config.adblock_enabled {
             r#"
             (function() {
+                if (window.__eclipse_shields_active) return;
+                window.__eclipse_shields_active = true;
+
+                // 1. DNT & Global Privacy Control Spoofing
+                try {
+                    Object.defineProperty(navigator, 'doNotTrack', { value: '1', configurable: false });
+                    Object.defineProperty(navigator, 'globalPrivacyControl', { value: true, configurable: false });
+                } catch(e) {}
+
+                // 2. Neutralize common tracking analytics & telemetry functions
+                window.ga = window.ga || function() {};
+                window.gtag = window.gtag || function() {};
+                window._fbq = window.fbq = window.fbq || function() {};
+                window._hsq = window._hsq || [];
+
+                // 3. Cosmetic Ad Blocking CSS injection
                 const style = document.createElement('style');
                 style.textContent = `
                     .adsbygoogle, [id^="google_ads_"], .ad-banner, .ad-unit,
-                    .advertisement, .ad-container, [data-ad-slot] {
+                    .advertisement, .ad-container, [data-ad-slot], .ytp-ad-overlay-container,
+                    .ytp-ad-message-container, ytd-promoted-sparkles-web-renderer,
+                    ytd-display-ad-renderer, ytd-banner-promo-renderer,
+                    ytd-ad-slot-renderer, #player-ads, .sparkles-light-cta,
+                    div[id*="ad-slot"], div[class*="ad_unit"], div[class*="Sponsored"],
+                    .trc_related_container, .outbrain, .taboola {
                         display: none !important;
                         visibility: hidden !important;
                         height: 0 !important;
+                        max-height: 0 !important;
+                        overflow: hidden !important;
+                        opacity: 0 !important;
+                        pointer-events: none !important;
                     }
                 `;
-                document.head && document.head.appendChild(style);
+                if (document.head) {
+                    document.head.appendChild(style);
+                } else {
+                    document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+                }
+
+                // 4. YouTube Video Ad Auto-Skipper & Interruptor Neutralizer
+                if (location.hostname.includes('youtube.com')) {
+                    setInterval(() => {
+                        // Click standard skip button if present
+                        const skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern');
+                        if (skipBtn) {
+                            skipBtn.click();
+                        }
+                        // Close overlay ads
+                        const closeBtn = document.querySelector('.ytp-ad-overlay-close-button');
+                        if (closeBtn) {
+                            closeBtn.click();
+                        }
+                        // Skip video ad immediately to the end if ad is playing
+                        const adShowing = document.querySelector('.ad-showing, .ad-interrupting');
+                        const video = document.querySelector('video');
+                        if (adShowing && video && isFinite(video.duration)) {
+                            video.currentTime = video.duration;
+                        }
+                    }, 250);
+                }
             })();
             "#
         } else {
@@ -105,6 +157,16 @@ impl Tab {
             .with_autoplay(true)
             .with_devtools(true)
             .with_initialization_script(&init_script)
+            .with_download_started_handler(|_url, path| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+                let mut download_dir = std::path::PathBuf::from(home);
+                download_dir.push("Downloads");
+                if let Some(file_name) = path.file_name() {
+                    download_dir.push(file_name);
+                    *path = download_dir;
+                }
+                true
+            })
             .with_on_page_load_handler(move |event, url| {
                 match event {
                     PageLoadEvent::Started => {
@@ -153,7 +215,7 @@ impl Tab {
         };
 
         builder = builder.with_url(&target_url);
-        builder.build(window).expect("Failed to build tab webview")
+        builder.build_as_child(&**window).expect("Failed to build tab webview as child")
     }
 
     pub fn set_visible(&self, visible: bool) {
@@ -197,7 +259,7 @@ impl Tab {
 
     pub fn hibernate(&mut self) {
         if self.webview.is_some() {
-            self.webview = None; // Drops WKWebView NSView immediately from memory!
+            self.webview = None; // Drops WKWebView NSView immediately from memory
             self.is_hibernated = true;
         }
     }

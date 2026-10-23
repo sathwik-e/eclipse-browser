@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eclipse Settings</title>
+<style>
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  background: #07070B;
+  color: #ECEFF4;
+  padding: 40px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.corona-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #050508 55%, #181926 75%, #F59E0B 100%);
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+}
+h1 { font-size: 26px; font-weight: 700; }
+p.sub { color: #9CA3AF; font-size: 14px; margin-bottom: 30px; }
+.card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 22px;
+  margin-bottom: 20px;
+  backdrop-filter: blur(20px);
+}
+.card h2 { font-size: 16px; margin-bottom: 10px; color: #F59E0B; }
+.card p { font-size: 13px; color: #9CA3AF; line-height: 1.6; }
+.pill {
+  display: inline-block;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #10B981;
+  font-weight: 600;
+  margin-top: 8px;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="corona-icon"></div>
+  <h1>Eclipse Engine Settings</h1>
+</div>
+<p class="sub">Ultra-minimalist WebKit browser engineered with Rust.</p>
+
+<div class="card">
+  <h2>Real-Time Customization</h2>
+  <p>Press <strong>⌘,</strong> or click the <strong>⚙ Settings</strong> icon on the bottom sidebar to adjust themes, accent corona colors, tab width, ad blocking shields, and memory hibernation in real time.</p>
+</div>
+
+<div class="card">
+  <h2>Apple FairPlay Streaming (4K HDR DRM)</h2>
+  <p>Eclipse directly utilizes Apple's native AVFoundation and Secure Enclave hardware pipeline for encrypted media. Netflix, Apple TV+, and Amazon Prime Video stream up to 4K HDR and Dolby Vision natively with zero CPU overhead.</p>
+  <div class="pill">Hardware DRM Ready</div>
+</div>
+
+<div class="card">
+  <h2>RAM Optimization & Tab Sleeping</h2>
+  <p>Unlike Chromium or standard Safari, Eclipse drops the underlying NSView and memory buffers for background tabs that stay inactive, maintaining a lean process footprint under 50 MB.</p>
+  <div class="pill">Zero-Leak Hibernation</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eclipse · New Tab</title>
+<style>
+:root {
+  --bg: #07070B;
+  --card-bg: rgba(255, 255, 255, 0.035);
+  --card-hover: rgba(255, 255, 255, 0.075);
+  --accent: #F59E0B;
+  --accent-glow: rgba(245, 158, 11, 0.35);
+  --text-main: #F9FAFB;
+  --text-dim: #9CA3AF;
+  --border: rgba(255, 255, 255, 0.07);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", sans-serif;
+  background: radial-gradient(circle at 50% 12%, #181524 0%, #0c0a14 45%, var(--bg) 80%);
+  color: var(--text-main);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Ambient Eclipse Corona Glow */
+.eclipse-halo {
+  position: absolute;
+  top: -140px;
+  width: 480px;
+  height: 480px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(245, 158, 11, 0.18) 0%, rgba(139, 92, 246, 0.12) 40%, transparent 70%);
+  filter: blur(50px);
+  pointer-events: none;
+  animation: pulseCorona 8s ease-in-out infinite alternate;
+}
+
+@keyframes pulseCorona {
+  0% { transform: scale(0.95); opacity: 0.7; }
+  100% { transform: scale(1.1); opacity: 1; }
+}
+
+.hero {
+  text-align: center;
+  margin-bottom: 34px;
+  z-index: 1;
+}
+
+.eclipse-emblem {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #050508 55%, #181926 75%, var(--accent) 100%);
+  box-shadow: 0 0 28px var(--accent-glow), inset -3px -3px 8px rgba(0,0,0,0.8);
+  border: 1px solid rgba(245, 158, 11, 0.6);
+  position: relative;
+  margin: 0 auto 16px auto;
+}
+
+.eclipse-emblem::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  transform: rotate(-35deg);
+  opacity: 0.9;
+  filter: drop-shadow(0 0 8px var(--accent));
+}
+
+.clock {
+  font-size: 64px;
+  font-weight: 200;
+  letter-spacing: -1.5px;
+  margin-bottom: 6px;
+  background: linear-gradient(180deg, #FFFFFF 30%, #D1D5DB 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.greeting {
+  font-size: 15px;
+  color: var(--text-dim);
+  font-weight: 400;
+  letter-spacing: 0.3px;
+}
+
+.search-card {
+  width: 100%;
+  max-width: 560px;
+  position: relative;
+  margin-bottom: 36px;
+  z-index: 1;
+}
+
+.search-input {
+  width: 100%;
+  height: 48px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  padding: 0 52px 0 22px;
+  color: white;
+  font-size: 14.5px;
+  outline: none;
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.45);
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.search-input:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--accent);
+  box-shadow: 0 12px 35px rgba(245, 158, 11, 0.22);
+}
+
+.search-icon {
+  position: absolute;
+  right: 18px;
+  top: 14px;
+  width: 20px;
+  height: 20px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 112px);
+  gap: 16px;
+  margin-bottom: 44px;
+  z-index: 1;
+}
+
+.tile {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  height: 104px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--text-main);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.tile:hover {
+  background: var(--card-hover);
+  transform: translateY(-4px);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+}
+
+.tile-icon {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tile-icon svg { width: 28px; height: 28px; }
+.tile-title { font-size: 11.5px; font-weight: 500; color: #E5E7EB; }
+
+.specs-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+  z-index: 1;
+  backdrop-filter: blur(10px);
+}
+
+.specs-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10B981;
+  box-shadow: 0 0 8px #10B981;
+}
+</style>
+</head>
+<body>
+
+<div class="eclipse-halo"></div>
+
+<div class="hero">
+  <div class="eclipse-emblem"></div>
+  <div class="clock" id="clock">12:00</div>
+  <div class="greeting" id="greeting">Welcome to Eclipse</div>
+</div>
+
+<div class="search-card">
+  <input type="text" class="search-input" id="search-box" placeholder="Search the cosmos or enter address..." autofocus />
+  <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+</div>
+
+<div class="grid">
+  <a class="tile" href="https://netflix.com">
+    <div class="tile-icon"><svg viewBox="0 0 24 24" fill="#E50914"><path d="M5.398 0v24L9.89 12.38V0H5.398zm13.204 0L14.11 12.38V24h4.492V0zm-4.492 12.38L9.89 0h4.22z"/></svg></div>
+    <div class="tile-title">Netflix (4K HDR)</div>
+  </a>
+  <a class="tile" href="https://youtube.com">
+    <div class="tile-icon"><svg viewBox="0 0 24 24" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg></div>
+    <div class="tile-title">YouTube</div>
+  </a>
+  <a class="tile" href="https://github.com">
+    <div class="tile-icon"><svg viewBox="0 0 24 24" fill="#FFFFFF"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg></div>
+    <div class="tile-title">GitHub</div>
+  </a>
+  <a class="tile" href="https://open.spotify.com">
+    <div class="tile-icon"><svg viewBox="0 0 24 24" fill="#1DB954"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg></div>
+    <div class="tile-title">Spotify</div>
+  </a>
+</div>
+
+<div class="specs-badge">
+  <div class="specs-dot"></div>
+  <span>macOS System WebKit · Apple FairPlay Hardware DRM · Metal 3 Pipeline</span>
+</div>
+
+<script>
+function updateClock() {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  document.getElementById('clock').textContent = hours + ':' + minutes;
+
+  const hr = now.getHours();
+  let greet = 'Good evening';
+  if (hr < 12) greet = 'Good morning';
+  else if (hr < 18) greet = 'Good afternoon';
+  document.getElementById('greeting').textContent = greet + ' · Eclipse WebKit';
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+document.getElementById('search-box').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    const q = e.target.value.trim();
+    if (q) {
+      if (/^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}/.test(q)) {
+        location.href = q.startsWith('http') ? q : 'https://' + q;
+      } else {
+        location.href = 'https://duckduckgo.com/?q=' + encodeURIComponent(q);
+      }
+    }
+  }
+});
+</script>
+</body>
+</html>

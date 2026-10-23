@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eclipse Navigation</title>
+<style>
+:root {
+  --bg-sidebar: rgba(13, 14, 20, 0.86);
+  --bg-card: rgba(255, 255, 255, 0.035);
+  --bg-card-hover: rgba(255, 255, 255, 0.075);
+  --bg-card-active: rgba(245, 158, 11, 0.12);
+  --accent: #F59E0B;
+  --accent-glow: rgba(245, 158, 11, 0.35);
+  --text-main: #F9FAFB;
+  --text-muted: #9CA3AF;
+  --text-dim: #6B7280;
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-active: rgba(245, 158, 11, 0.55);
+  --font-stack: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+  --sidebar-w: 275px;
+}
+
+[data-theme="void"] {
+  --bg-sidebar: #050507;
+  --bg-card: #0e0e12;
+  --bg-card-hover: #17171d;
+  --bg-card-active: #22222b;
+  --accent: #FFFFFF;
+  --accent-glow: rgba(255, 255, 255, 0.25);
+  --border-active: #52525B;
+}
+
+[data-theme="lunar"] {
+  --bg-sidebar: rgba(15, 23, 42, 0.90);
+  --bg-card-active: rgba(56, 189, 248, 0.15);
+  --accent: #38BDF8;
+  --accent-glow: rgba(56, 189, 248, 0.4);
+  --border-active: #38BDF8;
+}
+
+[data-theme="nebula"] {
+  --bg-sidebar: rgba(20, 10, 30, 0.92);
+  --bg-card-active: rgba(217, 70, 239, 0.18);
+  --accent: #D946EF;
+  --accent-glow: rgba(217, 70, 239, 0.4);
+  --border-active: #06B6D4;
+}
+
+[data-theme="aurora"] {
+  --bg-sidebar: rgba(10, 25, 22, 0.90);
+  --bg-card-active: rgba(16, 185, 129, 0.15);
+  --accent: #10B981;
+  --accent-glow: rgba(16, 185, 129, 0.4);
+  --border-active: #34D399;
+}
+
+[data-theme="sol"] {
+  --bg-sidebar: rgba(248, 249, 250, 0.94);
+  --bg-card: rgba(0, 0, 0, 0.035);
+  --bg-card-hover: rgba(0, 0, 0, 0.065);
+  --bg-card-active: rgba(245, 158, 11, 0.14);
+  --text-main: #111827;
+  --text-muted: #4B5563;
+  --text-dim: #9CA3AF;
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-active: rgba(245, 158, 11, 0.6);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  font-family: var(--font-stack);
+  background: var(--bg-sidebar);
+  color: var(--text-main);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  backdrop-filter: blur(35px) saturate(180%);
+  -webkit-backdrop-filter: blur(35px) saturate(180%);
+  border-right: 1px solid var(--border-subtle);
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* macOS Traffic lights safe zone */
+.window-drag-bar {
+  height: 38px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 14px;
+  -webkit-app-region: drag;
+}
+
+.browser-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 12px 14px;
+}
+
+/* Eclipse Solar Corona Icon */
+.brand-icon-wrap {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brand-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #050508 55%, #181926 75%, var(--accent) 100%);
+  box-shadow: 0 0 14px var(--accent-glow), inset -2px -2px 5px rgba(0,0,0,0.8);
+  border: 1px solid var(--border-active);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brand-corona {
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  transform: rotate(-35deg);
+  opacity: 0.85;
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+
+.brand-text {
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  background: linear-gradient(135deg, var(--text-main) 40%, var(--accent) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.brand-tag {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-card-hover);
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  margin-left: auto;
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.brand-tag-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #10B981;
+  box-shadow: 0 0 5px #10B981;
+}
+
+/* Omnibar & Nav buttons */
+.nav-container {
+  padding: 0 10px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nav-buttons-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.btn-icon {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-icon:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+}
+
+.btn-icon:active {
+  transform: scale(0.92);
+}
+
+.btn-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+}
+
+.omnibar-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.omnibar-input {
+  width: 100%;
+  height: 33px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 0 30px 0 28px;
+  color: var(--text-main);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.omnibar-input:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.omnibar-lock {
+  position: absolute;
+  left: 8px;
+  width: 12px;
+  height: 12px;
+  color: #10B981;
+  pointer-events: none;
+}
+
+.omnibar-go {
+  position: absolute;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s;
+}
+
+.omnibar-go:hover {
+  color: var(--accent);
+}
+
+/* Spaces / Workspaces */
+.workspaces-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.workspace-pill {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-weight: 500;
+}
+
+.workspace-pill:hover {
+  color: var(--text-main);
+  background: var(--bg-card-hover);
+}
+
+.workspace-pill.active {
+  color: var(--text-main);
+  background: var(--bg-card-hover);
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Pinned quick launch row */
+.pinned-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+
+.pinned-item {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.pinned-item:hover {
+  background: var(--bg-card-hover);
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.pinned-item.netflix { color: #E50914; }
+.pinned-item.youtube { color: #FF0000; }
+.pinned-item.github { color: #FFFFFF; }
+.pinned-item.spotify { color: #1DB954; }
+
+.pinned-item svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+/* Vertical Tab List */
+.tabs-header {
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.tab-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.tab-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.tab-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+}
+
+.tab-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tab-card:hover {
+  background: var(--bg-card-hover);
+  border-color: rgba(255, 255, 255, 0.14);
+  transform: translateX(2px);
+}
+
+.tab-card.active {
+  background: var(--bg-card-active);
+  border-color: var(--border-active);
+  box-shadow: 0 0 14px var(--accent-glow);
+}
+
+.tab-card.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+
+.tab-favicon {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.tab-favicon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.tab-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.tab-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-card.active .tab-title {
+  font-weight: 600;
+}
+
+.tab-meta {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tab-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.tab-badge-hibernated {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(107, 114, 128, 0.2);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.tab-close {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: all 0.15s ease;
+}
+
+.tab-card:hover .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: rgba(239, 68, 68, 0.25);
+  color: #EF4444;
+}
+
+/* Bottom Bar */
+.bottom-bar {
+  padding: 10px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.btn-new-tab {
+  width: 100%;
+  height: 33px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-subtle);
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-new-tab:hover {
+  background: var(--bg-card-hover);
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.bottom-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ram-pill {
+  font-size: 10.5px;
+  color: #10B981;
+  background: rgba(16, 185, 129, 0.12);
+  padding: 3px 8px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.bottom-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Customizer Drawer */
+.drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-sidebar);
+  display: none;
+  flex-direction: column;
+  z-index: 1000;
+  padding: 18px 14px;
+  overflow-y: auto;
+}
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.drawer-title {
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drawer-section {
+  margin-bottom: 18px;
+}
+
+.section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.theme-btn {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.theme-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent);
+}
+
+.accent-colors {
+  display: flex;
+  gap: 8px;
+}
+
+.accent-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+  border: 2px solid transparent;
+}
+
+.accent-dot:hover {
+  transform: scale(1.15);
+}
+
+.accent-dot.active {
+  border-color: #FFFFFF;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  font-size: 12px;
+}
+
+.toggle-switch {
+  width: 34px;
+  height: 18px;
+  border-radius: 10px;
+  background: var(--bg-card-hover);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.toggle-switch.on {
+  background: var(--accent);
+}
+
+.toggle-knob {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s ease;
+}
+
+.toggle-switch.on .toggle-knob {
+  transform: translateX(16px);
+}
+
+.css-editor {
+  width: 100%;
+  height: 80px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: #F59E0B;
+  font-family: monospace;
+  font-size: 11px;
+  padding: 8px;
+  resize: vertical;
+  outline: none;
+}
+</style>
+</head>
+<body>
+
+<div class="window-drag-bar"></div>
+
+<div class="browser-brand">
+  <div class="brand-icon-wrap">
+    <div class="brand-icon">
+      <div class="brand-corona"></div>
+    </div>
+  </div>
+  <div class="brand-text">Eclipse</div>
+  <div class="brand-tag">
+    <div class="brand-tag-dot"></div>
+    WebKit Fast
+  </div>
+</div>
+
+<div class="nav-container">
+  <div class="nav-buttons-row">
+    <button class="btn-icon" id="btn-back" title="Back (⌘[)">
+      <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <button class="btn-icon" id="btn-forward" title="Forward (⌘])">
+      <svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+    </button>
+    <button class="btn-icon" id="btn-reload" title="Reload (⌘R)">
+      <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </button>
+    <button class="btn-icon" id="btn-shield" title="Shield: Active (AdBlock & Tracker Protection)" style="color: #10B981;">
+      <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    </button>
+  </div>
+
+  <div class="omnibar-wrapper">
+    <svg class="omnibar-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </svg>
+    <input type="text" id="omnibar" class="omnibar-input" placeholder="Search or type URL..." spellcheck="false" autocomplete="off" />
+    <button id="omnibar-go" class="omnibar-go">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="workspaces-row">
+  <div class="workspace-pill active" data-ws="Default">Orbit</div>
+  <div class="workspace-pill" data-ws="Media">Cinema</div>
+  <div class="workspace-pill" data-ws="Work">Studio</div>
+  <div class="workspace-pill" data-ws="Dev">Code</div>
+</div>
+
+<div class="pinned-row">
+  <div class="pinned-item netflix" title="Netflix (FairPlay DRM 4K HDR)" onclick="navigateTo('https://netflix.com')">
+    <svg viewBox="0 0 24 24"><path d="M5.398 0v24L9.89 12.38V0H5.398zm13.204 0L14.11 12.38V24h4.492V0zm-4.492 12.38L9.89 0h4.22z"/></svg>
+  </div>
+  <div class="pinned-item youtube" title="YouTube" onclick="navigateTo('https://youtube.com')">
+    <svg viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+  </div>
+  <div class="pinned-item github" title="GitHub" onclick="navigateTo('https://github.com')">
+    <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+  </div>
+  <div class="pinned-item spotify" title="Spotify" onclick="navigateTo('https://open.spotify.com')">
+    <svg viewBox="0 0 24 24"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
+  </div>
+</div>
+
+<div class="tabs-header">
+  <span>Vertical Tabs</span>
+  <span id="tab-count-badge">0</span>
+</div>
+
+<div class="tab-list" id="tab-container"></div>
+
+<div class="bottom-bar">
+  <button class="btn-new-tab" id="btn-new-tab">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+    New Tab (⌘T)
+  </button>
+  <div class="bottom-info-row">
+    <div class="ram-pill" id="ram-meter" title="Process Resident RAM Footprint">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      <span id="ram-text">42 MB</span>
+    </div>
+    <div class="bottom-buttons">
+      <button class="btn-icon" id="btn-settings" title="Customization & Engine (⌘,)">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <button class="btn-icon" id="btn-collapse" title="Collapse Sidebar (⌘B)">
+        <svg viewBox="0 0 24 24"><path d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Customization Drawer -->
+<div class="drawer" id="settings-drawer">
+  <div class="drawer-header">
+    <div class="drawer-title">
+      <span>⚙️</span> Eclipse Customization
+    </div>
+    <button class="btn-icon" id="btn-close-drawer">
+      <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-label">Aesthetic Themes</div>
+    <div class="theme-grid">
+      <button class="theme-btn" onclick="applyTheme('eclipse')">Eclipse Corona</button>
+      <button class="theme-btn" onclick="applyTheme('void')">Pitch Void (OLED)</button>
+      <button class="theme-btn" onclick="applyTheme('lunar')">Lunar Frost</button>
+      <button class="theme-btn" onclick="applyTheme('nebula')">Nebula Neon</button>
+      <button class="theme-btn" onclick="applyTheme('aurora')">Boreal Aurora</button>
+      <button class="theme-btn" onclick="applyTheme('sol')">Daylight Sol</button>
+    </div>
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-label">Accent Corona Color</div>
+    <div class="accent-colors">
+      <div class="accent-dot active" style="background:#F59E0B;" onclick="applyAccent('#F59E0B')" title="Solar Amber"></div>
+      <div class="accent-dot" style="background:#8B5CF6;" onclick="applyAccent('#8B5CF6')" title="Ultraviolet"></div>
+      <div class="accent-dot" style="background:#38BDF8;" onclick="applyAccent('#38BDF8')" title="Lunar Blue"></div>
+      <div class="accent-dot" style="background:#10B981;" onclick="applyAccent('#10B981')" title="Emerald"></div>
+      <div class="accent-dot" style="background:#EC4899;" onclick="applyAccent('#EC4899')" title="Rose Flare"></div>
+      <div class="accent-dot" style="background:#FFFFFF;" onclick="applyAccent('#FFFFFF')" title="Pure Star"></div>
+    </div>
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-label">Media & DRM Capabilities</div>
+    <div class="toggle-row">
+      <span>Apple FairPlay DRM (4K HDR)</span>
+      <div class="toggle-switch on" id="toggle-drm"><div class="toggle-knob"></div></div>
+    </div>
+    <div class="toggle-row">
+      <span>Hardware Autoplay & AVFoundation</span>
+      <div class="toggle-switch on" id="toggle-autoplay"><div class="toggle-knob"></div></div>
+    </div>
+    <div class="toggle-row">
+      <span>Shields: Ad & Tracker Blocker</span>
+      <div class="toggle-switch on" id="toggle-adblock"><div class="toggle-knob"></div></div>
+    </div>
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-label">RAM Optimizer & Tab Sleeping</div>
+    <div class="toggle-row">
+      <span>Auto-Hibernate Background Tabs</span>
+      <select id="select-hibernate" style="background:var(--bg-card);color:var(--text-main);border:1px solid var(--border-subtle);border-radius:5px;padding:4px 8px;outline:none;font-size:11px;">
+        <option value="5">After 5 mins</option>
+        <option value="15" selected>After 15 mins</option>
+        <option value="30">After 30 mins</option>
+        <option value="0">Never</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-label">Default Search Engine</div>
+    <select id="select-engine" style="width:100%;background:var(--bg-card);color:var(--text-main);border:1px solid var(--border-subtle);border-radius:6px;padding:6px;outline:none;font-size:12px;">
+      <option value="duckduckgo">DuckDuckGo (Privacy)</option>
+      <option value="google">Google</option>
+      <option value="brave">Brave Search</option>
+      <option value="ecosia">Ecosia</option>
+      <option value="kagi">Kagi</option>
+    </select>
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-label">Live Custom CSS Injection</div>
+    <textarea class="css-editor" id="custom-css-input" placeholder="/* Inject custom CSS directly into Eclipse */"></textarea>
+  </div>
+</div>
+
+<script>
+let currentConfig = {};
+let currentTabs = [];
+let activeTabId = 0;
+let currentWorkspace = 'Default';
+
+function sendCommand(cmd) {
+  if (window.ipc) {
+    window.ipc.postMessage(JSON.stringify(cmd));
+  } else {
+    console.log("IPC Command:", cmd);
+  }
+}
+
+function navigateTo(url) {
+  sendCommand({ action: 'navigate', url: url });
+}
+
+const omnibar = document.getElementById('omnibar');
+omnibar.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    const val = omnibar.value.trim();
+    if (val) {
+      sendCommand({ action: 'navigate', url: val });
+      omnibar.blur();
+    }
+  }
+});
+
+document.getElementById('omnibar-go').addEventListener('click', () => {
+  const val = omnibar.value.trim();
+  if (val) sendCommand({ action: 'navigate', url: val });
+});
+
+document.getElementById('btn-back').addEventListener('click', () => sendCommand({ action: 'go_back' }));
+document.getElementById('btn-forward').addEventListener('click', () => sendCommand({ action: 'go_forward' }));
+document.getElementById('btn-reload').addEventListener('click', () => sendCommand({ action: 'reload' }));
+document.getElementById('btn-new-tab').addEventListener('click', () => sendCommand({ action: 'new_tab' }));
+document.getElementById('btn-collapse').addEventListener('click', () => sendCommand({ action: 'toggle_sidebar' }));
+
+const drawer = document.getElementById('settings-drawer');
+document.getElementById('btn-settings').addEventListener('click', () => {
+  drawer.style.display = 'flex';
+});
+document.getElementById('btn-close-drawer').addEventListener('click', () => {
+  drawer.style.display = 'none';
+  saveConfigChanges();
+});
+
+document.querySelectorAll('.workspace-pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    document.querySelectorAll('.workspace-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    currentWorkspace = pill.dataset.ws;
+    sendCommand({ action: 'set_workspace', workspace: currentWorkspace });
+    renderTabs();
+  });
+});
+
+function applyTheme(name) {
+  document.body.setAttribute('data-theme', name);
+  currentConfig.theme = name;
+  saveConfigChanges();
+}
+
+function applyAccent(color) {
+  document.documentElement.style.setProperty('--accent', color);
+  document.documentElement.style.setProperty('--accent-glow', color + '59');
+  currentConfig.accent_color = color;
+  document.querySelectorAll('.accent-dot').forEach(dot => {
+    dot.classList.toggle('active', dot.style.background.toLowerCase() === color.toLowerCase());
+  });
+  saveConfigChanges();
+}
+
+function saveConfigChanges() {
+  currentConfig.search_engine = document.getElementById('select-engine').value;
+  currentConfig.tab_hibernation_mins = parseInt(document.getElementById('select-hibernate').value, 10);
+  currentConfig.custom_css = document.getElementById('custom-css-input').value;
+  sendCommand({ action: 'update_config', config: currentConfig });
+}
+
+window.updateBrowserState = function(state) {
+  currentTabs = state.tabs || [];
+  activeTabId = state.active_tab_id || 0;
+  currentConfig = state.config || {};
+
+  if (state.active_url && document.activeElement !== omnibar) {
+    omnibar.value = state.active_url.replace(/^https?:\/\//, '').replace(/^eclipse:\/\//, '');
+  }
+
+  if (state.memory_mb) {
+    document.getElementById('ram-text').textContent = state.memory_mb.toFixed(0) + ' MB';
+  }
+
+  if (state.config) {
+    if (state.config.theme) document.body.setAttribute('data-theme', state.config.theme);
+    if (state.config.accent_color) {
+      document.documentElement.style.setProperty('--accent', state.config.accent_color);
+      document.documentElement.style.setProperty('--accent-glow', state.config.accent_color + '59');
+    }
+  }
+
+  renderTabs();
+};
+
+function renderTabs() {
+  const container = document.getElementById('tab-container');
+  container.innerHTML = '';
+
+  const filtered = currentTabs.filter(t => !t.workspace || t.workspace === currentWorkspace || t.workspace === 'Default');
+  document.getElementById('tab-count-badge').textContent = filtered.length;
+
+  filtered.forEach(tab => {
+    const card = document.createElement('div');
+    card.className = 'tab-card' + (tab.id === activeTabId ? ' active' : '');
+
+    let iconSvg = getFaviconSvg(tab.favicon);
+
+    card.innerHTML = `
+      <div class="tab-favicon">${iconSvg}</div>
+      <div class="tab-title-wrap">
+        <div class="tab-title">${escapeHtml(tab.title || 'New Tab')}</div>
+        <div class="tab-meta">${escapeHtml(cleanUrl(tab.url))}</div>
+      </div>
+      <div class="tab-actions">
+        ${tab.is_loading ? '<div class="tab-spinner"></div>' : ''}
+        ${tab.is_hibernated ? '<span class="tab-badge-hibernated" title="Memory freed: 0 MB active">💤 0 MB</span>' : ''}
+        <button class="tab-close" title="Close Tab">&times;</button>
+      </div>
+    `;
+
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.tab-close')) {
+        e.stopPropagation();
+        sendCommand({ action: 'close_tab', id: tab.id });
+      } else {
+        sendCommand({ action: 'select_tab', id: tab.id });
+      }
+    });
+
+    container.appendChild(card);
+  });
+}
+
+function cleanUrl(url) {
+  if (!url || url.startsWith('eclipse://')) return 'New Tab';
+  try {
+    const u = new URL(url);
+    return u.hostname;
+  } catch (e) {
+    return url;
+  }
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function getFaviconSvg(type) {
+  switch (type) {
+    case 'netflix':
+      return '<svg viewBox="0 0 24 24" fill="#E50914"><path d="M5.398 0v24L9.89 12.38V0H5.398zm13.204 0L14.11 12.38V24h4.492V0zm-4.492 12.38L9.89 0h4.22z"/></svg>';
+    case 'youtube':
+      return '<svg viewBox="0 0 24 24" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>';
+    case 'github':
+      return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>';
+    case 'spotify':
+      return '<svg viewBox="0 0 24 24" fill="#1DB954"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>';
+    case 'eclipse':
+      return '<svg viewBox="0 0 24 24" fill="var(--accent)"><circle cx="12" cy="12" r="8"/></svg>';
+    default:
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+  }
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey) {
+    if (e.key === 't') {
+      e.preventDefault();
+      sendCommand({ action: 'new_tab' });
+    } else if (e.key === 'w') {
+      e.preventDefault();
+      sendCommand({ action: 'close_tab', id: activeTabId });
+    } else if (e.key === 'r') {
+      e.preventDefault();
+      sendCommand({ action: 'reload' });
+    } else if (e.key === '[') {
+      e.preventDefault();
+      sendCommand({ action: 'go_back' });
+    } else if (e.key === ']') {
+      e.preventDefault();
+      sendCommand({ action: 'go_forward' });
+    } else if (e.key === 'b') {
+      e.preventDefault();
+      sendCommand({ action: 'toggle_sidebar' });
+    } else if (e.key === ',') {
+      e.preventDefault();
+      drawer.style.display = drawer.style.display === 'flex' ? 'none' : 'flex';
+    } else if (e.key === 'l' || e.key === 'k') {
+      e.preventDefault();
+      omnibar.focus();
+      omnibar.select();
+    }
+  }
+});
+</script>
+</body>
+</html>

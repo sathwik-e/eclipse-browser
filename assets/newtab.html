@@ -8,11 +8,6 @@
 <style>
 :root {
   --bg-deep: #090A0F;
-  --bg-horizon: #121521;
-  --surface: rgba(255, 255, 255, 0.045);
-  --surface-hover: rgba(255, 255, 255, 0.08);
-  --border-hairline: rgba(255, 255, 255, 0.085);
-  --border-focus: rgba(94, 158, 255, 0.45);
   --accent: #5E9EFF;
   --text-primary: rgba(255, 255, 255, 0.94);
   --text-secondary: rgba(255, 255, 255, 0.56);
@@ -29,217 +24,64 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", sans-serif;
-  background: radial-gradient(120% 90% at 50% 0%, var(--bg-horizon) 0%, var(--bg-deep) 70%);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", -system-ui, sans-serif;
+  background-color: var(--bg-deep);
   color: var(--text-primary);
   min-height: 100vh;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 40px 24px;
-  position: relative;
+  padding: 24px;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
 
-.celestial-arc {
-  position: absolute;
-  top: -320px;
-  width: 760px;
-  height: 420px;
-  border-radius: 50%;
-  border-bottom: 0.5px solid rgba(94, 158, 255, 0.18);
-  background: radial-gradient(50% 50% at 50% 100%, rgba(94, 158, 255, 0.12) 0%, transparent 80%);
-  pointer-events: none;
-  animation: arcBreathe 8s ease-in-out infinite alternate;
-}
-
-@keyframes arcBreathe {
-  from { opacity: 0.6; transform: scale(0.98); }
-  to { opacity: 1; transform: scale(1.02); }
-}
-
-/* Top-right quick utility bar on New Tab */
-.top-utilities {
-  position: absolute;
-  top: 18px;
-  right: 22px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  z-index: 5;
-  animation: heroFadeIn 0.4s var(--ease-spring);
-}
-
-.utility-btn {
-  height: 30px;
-  padding: 0 11px;
-  border-radius: 8px;
-  background: var(--surface);
-  border: 0.5px solid var(--border-hairline);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-family: inherit;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  transition: all 0.2s var(--ease-spring);
-}
-
-.utility-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text-primary);
-  border-color: rgba(94, 158, 255, 0.3);
-  transform: translateY(-1.5px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-}
-
-.utility-btn:active {
-  transform: scale(0.95);
-}
-
-.utility-btn svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  stroke-width: 1.75;
-  fill: none;
-  transition: transform 0.2s var(--ease-spring);
-}
-
-.utility-btn:hover svg {
-  transform: scale(1.1);
-}
-
-.hero {
-  text-align: center;
-  margin-bottom: 30px;
-  z-index: 1;
-  animation: heroFadeIn 0.5s var(--ease-spring);
-}
-
-@keyframes heroFadeIn {
-  from { opacity: 0; transform: translateY(14px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.eclipse-mark-wrap {
-  position: relative;
-  width: 62px;
-  height: 62px;
-  margin: 0 auto 16px auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.eclipse-mark-glow {
-  position: absolute;
-  inset: -8px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(94, 158, 255, 0.45) 0%, rgba(94, 158, 255, 0) 70%);
-  filter: blur(12px);
-  animation: blueCoronaPulse 4s ease-in-out infinite;
-  pointer-events: none;
-}
-
-.eclipse-mark {
-  width: 54px;
-  height: 54px;
-  display: block;
-  object-fit: contain;
-  filter: drop-shadow(0 0 16px rgba(94, 158, 255, 0.65));
-  animation: blueEclipseBreathe 4s ease-in-out infinite;
-  transition: transform 0.35s var(--ease-spring), filter 0.35s ease;
-  pointer-events: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.eclipse-mark-wrap:hover .eclipse-mark {
-  transform: scale(1.15) rotate(10deg);
-  filter: drop-shadow(0 0 24px rgba(94, 158, 255, 0.95));
-}
-
-@keyframes blueEclipseBreathe {
-  0%, 100% {
-    filter: drop-shadow(0 0 10px rgba(94, 158, 255, 0.5));
-    transform: scale(1);
-  }
-  50% {
-    filter: drop-shadow(0 0 20px rgba(94, 158, 255, 0.85));
-    transform: scale(1.04);
-  }
-}
-
-@keyframes blueCoronaPulse {
-  0%, 100% {
-    opacity: 0.6;
-    transform: scale(0.95);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.12);
-  }
-}
-
-.clock {
-  font-size: 60px;
-  font-weight: 200;
-  letter-spacing: -1.8px;
-  line-height: 1.05;
-  margin-bottom: 6px;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-  transition: transform 0.3s var(--ease-spring);
-}
-
-.clock:hover {
-  transform: scale(1.02);
-}
-
-.greeting {
-  font-size: 14px;
-  color: var(--text-secondary);
-  font-weight: 400;
-  letter-spacing: -0.1px;
-}
-
-.top-utilities {
-  display: flex;
-}
-
-/* Arc-Style Cosmic Command Bar */
+/* Cosmic Centered Search Bar */
 .command-bar-card {
   width: 100%;
-  max-width: 580px;
+  max-width: 620px;
   background: rgba(16, 20, 30, 0.88);
-  backdrop-filter: blur(40px) saturate(200%);
-  -webkit-backdrop-filter: blur(40px) saturate(200%);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(44px) saturate(200%);
+  -webkit-backdrop-filter: blur(44px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.13);
   border-radius: 18px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65), 0 0 24px rgba(94, 158, 255, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.72), 0 0 24px rgba(94, 158, 255, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.1);
   overflow: hidden;
   z-index: 10;
-  animation: heroFadeIn 0.35s var(--ease-spring);
-  margin-bottom: 28px;
-  transition: all 0.25s var(--ease-spring);
+  animation: cardFadeIn 0.32s var(--ease-spring);
+  transition: border-color 0.25s var(--ease-spring), box-shadow 0.25s var(--ease-spring), transform 0.25s var(--ease-spring);
+}
+
+@keyframes cardFadeIn {
+  from { opacity: 0; transform: scale(0.97) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 .command-bar-card:focus-within {
-  border-color: rgba(94, 158, 255, 0.65);
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.75), 0 0 36px rgba(94, 158, 255, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  border-color: rgba(94, 158, 255, 0.6);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.8), 0 0 36px rgba(94, 158, 255, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.command-bar-card.is-loading {
+  border-color: rgba(94, 158, 255, 0.75);
+  box-shadow: 0 32px 84px rgba(0, 0, 0, 0.85), 0 0 42px rgba(94, 158, 255, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  animation: cardLoadingPulse 2.2s ease-in-out infinite;
+}
+
+@keyframes cardLoadingPulse {
+  0%, 100% {
+    box-shadow: 0 32px 84px rgba(0, 0, 0, 0.85), 0 0 30px rgba(94, 158, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  }
+  50% {
+    box-shadow: 0 32px 84px rgba(0, 0, 0, 0.85), 0 0 52px rgba(94, 158, 255, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  }
 }
 
 .command-bar-header {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 13px 18px;
-  border-bottom: none;
+  padding: 15px 20px;
   position: relative;
 }
 
@@ -248,11 +90,12 @@ body {
 }
 
 .command-bar-icon {
-  width: 19px;
-  height: 19px;
-  color: #5E9EFF;
-  filter: drop-shadow(0 0 6px rgba(94, 158, 255, 0.5));
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+  filter: drop-shadow(0 0 8px rgba(94, 158, 255, 0.6));
   flex-shrink: 0;
+  transition: transform 0.2s var(--ease-spring);
 }
 
 .command-bar-input {
@@ -261,10 +104,12 @@ body {
   border: none;
   outline: none;
   color: #FFFFFF;
-  font-size: 15.5px;
+  font-size: 16px;
   font-family: inherit;
   font-weight: 450;
   letter-spacing: -0.2px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .command-bar-input::placeholder {
@@ -272,20 +117,155 @@ body {
 }
 
 .command-bar-badge {
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 500;
   color: rgba(255, 255, 255, 0.5);
   background: rgba(255, 255, 255, 0.08);
   border: 0.5px solid rgba(255, 255, 255, 0.12);
-  padding: 3px 8px;
+  padding: 4px 9px;
   border-radius: 6px;
   display: flex;
   align-items: center;
   gap: 4px;
   pointer-events: none;
   user-select: none;
+  transition: opacity 0.15s ease;
 }
 
+/* Celestial Eclipse Loader in Search Bar */
+.search-loader-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  animation: loaderFadeIn 0.2s ease-out;
+}
+
+@keyframes loaderFadeIn {
+  from { opacity: 0; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.eclipse-loader {
+  width: 22px;
+  height: 22px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.eclipse-star {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 38%, #ffffff 0%, #93c5fd 25%, #38bdf8 55%, #1d4ed8 100%);
+  box-shadow: 0 0 6px #38bdf8, 0 0 12px rgba(56, 189, 248, 0.75);
+  animation: starLuminescence 2.2s ease-in-out infinite;
+  z-index: 1;
+}
+
+.eclipse-corona {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  pointer-events: none;
+  border: 1px solid rgba(147, 197, 253, 0.9);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.8), inset 0 0 6px rgba(37, 99, 235, 0.6);
+  animation: coronaFlare 2.2s ease-in-out infinite;
+  z-index: 0;
+}
+
+.eclipse-moon {
+  position: absolute;
+  width: 11.5px;
+  height: 11.5px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #0f172a 0%, #030712 100%);
+  box-shadow: inset -1px -1px 2px rgba(147, 197, 253, 0.5);
+  animation: moonTransit 2.2s cubic-bezier(0.42, 0, 0.58, 1) infinite;
+  z-index: 2;
+}
+
+.eclipse-diamond {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 5px #ffffff, 0 0 9px #93c5fd;
+  pointer-events: none;
+  animation: diamondFlash 2.2s ease-in-out infinite;
+  z-index: 3;
+}
+
+@keyframes moonTransit {
+  0% {
+    transform: translateX(-16px) scale(0.9);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(0px) scale(1.02);
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(16px) scale(0.9);
+    opacity: 0;
+  }
+}
+
+@keyframes starLuminescence {
+  0%, 100% {
+    transform: scale(0.95);
+    filter: brightness(1) drop-shadow(0 0 5px rgba(56, 189, 248, 0.7));
+  }
+  50% {
+    transform: scale(1.08);
+    filter: brightness(1.35) drop-shadow(0 0 14px rgba(56, 189, 248, 1));
+  }
+}
+
+@keyframes coronaFlare {
+  0%, 100% {
+    transform: scale(0.85);
+    opacity: 0.3;
+    box-shadow: 0 0 4px rgba(37, 99, 235, 0.4);
+  }
+  46%, 54% {
+    transform: scale(1.38);
+    opacity: 1;
+    box-shadow: 0 0 16px rgba(147, 197, 253, 0.95), 0 0 24px rgba(56, 189, 248, 0.85), inset 0 0 8px rgba(96, 165, 250, 0.9);
+  }
+}
+
+@keyframes diamondFlash {
+  0%, 43% {
+    opacity: 0;
+    transform: translate(4px, -4px) scale(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(4.5px, -4.5px) scale(1.6);
+  }
+  57%, 100% {
+    opacity: 0;
+    transform: translate(5px, -5px) scale(0);
+  }
+}
+
+/* Command Bar Results Dropdown */
 .command-bar-results {
   padding: 6px;
   display: none;
@@ -299,8 +279,8 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
   cursor: pointer;
   transition: all 0.15s var(--ease-spring);
   color: var(--text-secondary);
@@ -361,274 +341,6 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
-/* Favorites / Shortcuts Grid */
-.favorites-section {
-  width: 100%;
-  max-width: 540px;
-  z-index: 1;
-  animation: heroFadeIn 0.7s var(--ease-spring);
-}
-
-.favorites-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  padding: 0 4px;
-}
-
-.favorites-label {
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--text-tertiary);
-  letter-spacing: 0.2px;
-}
-
-.favorites-add-link {
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  font-family: inherit;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  transition: all 0.2s var(--ease-spring);
-}
-
-.favorites-add-link:hover {
-  background: var(--surface);
-  color: var(--text-primary);
-  transform: translateY(-1px);
-}
-
-.favorites-add-link:active {
-  transform: scale(0.95);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-  gap: 12px;
-}
-
-@keyframes tileEntrance {
-  from { opacity: 0; transform: translateY(14px) scale(0.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.tile {
-  position: relative;
-  background: var(--surface);
-  border: 0.5px solid var(--border-hairline);
-  border-radius: 13px;
-  height: 90px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  text-decoration: none;
-  color: var(--text-primary);
-  transition: all 0.22s var(--ease-spring);
-  cursor: pointer;
-}
-
-.tile:hover {
-  background: var(--surface-hover);
-  border-color: rgba(94, 158, 255, 0.32);
-  transform: translateY(-4px) scale(1.025);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35), 0 0 14px rgba(94, 158, 255, 0.16);
-}
-
-.tile:active {
-  transform: scale(0.96);
-}
-
-.tile.add-tile {
-  border-style: dashed;
-  color: var(--text-tertiary);
-}
-
-.tile.add-tile:hover {
-  border-style: solid;
-  border-color: var(--accent);
-  color: var(--text-primary);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3), 0 0 16px rgba(94, 158, 255, 0.25);
-}
-
-.tile-icon {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.tile-icon svg {
-  width: 22px;
-  height: 22px;
-}
-
-.tile-icon img {
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  object-fit: contain;
-}
-
-.tile-title {
-  font-size: 11.5px;
-  font-weight: 450;
-  color: var(--text-secondary);
-  max-width: 88px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tile:hover .tile-title {
-  color: var(--text-primary);
-}
-
-/* Hover Edit / Remove buttons on each shortcut tile */
-.tile-controls {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  display: flex;
-  gap: 3px;
-  opacity: 0;
-  transition: opacity 0.14s ease;
-}
-
-.tile:hover .tile-controls {
-  opacity: 1;
-}
-
-.tile-ctrl-btn {
-  width: 19px;
-  height: 19px;
-  border-radius: 5px;
-  border: 0.5px solid rgba(255, 255, 255, 0.12);
-  background: rgba(10, 12, 18, 0.78);
-  color: var(--text-secondary);
-  font-size: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.tile-ctrl-btn:hover {
-  color: var(--text-primary);
-  background: rgba(25, 28, 38, 0.95);
-}
-
-.tile-ctrl-btn.del:hover {
-  color: #F87171;
-}
-
-/* Shortcut Editor Modal */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.62);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  display: none;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-
-.modal-card {
-  width: 100%;
-  max-width: 360px;
-  background: #141722;
-  border: 0.5px solid rgba(255, 255, 255, 0.16);
-  border-radius: 14px;
-  padding: 20px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.modal-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.field label {
-  font-size: 11.5px;
-  color: var(--text-secondary);
-}
-
-.field input {
-  height: 36px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 0.5px solid var(--border-hairline);
-  padding: 0 12px;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-family: inherit;
-  outline: none;
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.field input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2.5px rgba(94, 158, 255, 0.18);
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.btn {
-  height: 32px;
-  padding: 0 14px;
-  border-radius: 8px;
-  border: 0.5px solid var(--border-hairline);
-  background: var(--surface);
-  color: var(--text-primary);
-  font-size: 12.5px;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-.btn:hover {
-  background: var(--surface-hover);
-}
-
-.btn.primary {
-  background: var(--accent);
-  color: #090A0F;
-  font-weight: 600;
-  border-color: transparent;
-}
-
-.btn.danger {
-  color: #F87171;
-  margin-right: auto;
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -641,28 +353,6 @@ body {
 </head>
 <body>
 
-<div class="celestial-arc"></div>
-
-<div class="top-utilities">
-  <button class="utility-btn" id="btn-add-shortcut-top" title="Add Shortcut">
-    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-    <span>Add Shortcut</span>
-  </button>
-  <button class="utility-btn" id="btn-open-prefs" title="Preferences (⌘,)">
-    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-    <span>Preferences</span>
-  </button>
-</div>
-
-<div class="hero">
-  <div class="eclipse-mark-wrap">
-    <div class="eclipse-mark-glow"></div>
-    <img class="eclipse-mark" src="eclipse://localhost/icon" alt="" draggable="false" onerror="this.style.display='none'" />
-  </div>
-  <div class="clock" id="clock">12:00</div>
-  <div class="greeting" id="greeting">Good afternoon</div>
-</div>
-
 <div class="command-bar-card" id="command-card">
   <div class="command-bar-header">
     <svg class="command-bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -670,63 +360,50 @@ body {
       <path d="m20 20-3.5-3.5"/>
     </svg>
     <input type="text" class="command-bar-input" id="search-box" placeholder="Search the cosmos..." autofocus spellcheck="false" autocomplete="off" />
-    <div class="command-bar-badge" title="Press Enter to search or open">
+    <div class="command-bar-badge" id="command-badge" title="Press Enter to search or open">
       <span>↵ Return</span>
+    </div>
+    <div class="search-loader-wrap" id="search-loader" style="display: none;" title="Loading...">
+      <div class="eclipse-loader">
+        <div class="eclipse-corona"></div>
+        <div class="eclipse-star"></div>
+        <div class="eclipse-moon"></div>
+        <div class="eclipse-diamond"></div>
+      </div>
     </div>
   </div>
   <div class="command-bar-results" id="command-bar-results" style="display: none;"></div>
 </div>
 
-<div class="favorites-section">
-  <div class="favorites-header">
-    <span class="favorites-label">Quick Links</span>
-    <button class="favorites-add-link" id="btn-edit-shortcuts">+ Add Shortcut</button>
-  </div>
-  <div class="grid" id="favorites-grid"></div>
-</div>
-
-<!-- Add / Edit Shortcut Modal -->
-<div class="modal-backdrop" id="shortcut-modal">
-  <div class="modal-card">
-    <div class="modal-title" id="modal-title">Add Shortcut</div>
-    <div class="field">
-      <label for="shortcut-name">Name</label>
-      <input type="text" id="shortcut-name" placeholder="e.g. Apple, GitHub, YouTube" />
-    </div>
-    <div class="field">
-      <label for="shortcut-url">URL</label>
-      <input type="text" id="shortcut-url" placeholder="https://example.com" />
-    </div>
-    <div class="modal-actions">
-      <button class="btn danger" id="modal-delete" style="display:none;">Delete</button>
-      <button class="btn" id="modal-cancel">Cancel</button>
-      <button class="btn primary" id="modal-save">Save</button>
-    </div>
-  </div>
-</div>
-
 <script>
-const DEFAULT_FAVORITES = [
-  { title: 'Gmail', url: 'https://mail.google.com', icon: 'gmail' },
-  { title: 'Netflix', url: 'https://www.netflix.com', icon: 'netflix' },
-  { title: 'YouTube', url: 'https://www.youtube.com', icon: 'youtube' },
-  { title: 'Remotasks', url: 'https://www.remotasks.com', icon: 'remotasks' },
-  { title: 'Outlook', url: 'https://outlook.live.com', icon: 'outlook' },
-  { title: 'Instagram', url: 'https://www.instagram.com', icon: 'instagram' },
-  { title: 'GitHub', url: 'https://github.com', icon: 'github' },
-  { title: 'Apple', url: 'https://www.apple.com', icon: 'apple' }
-];
-
 let openTabs = [];
 let selectedIndex = 0;
 
-const DEFAULT_COMMAND_ITEMS = [
-  { id: null, title: 'YouTube', url: 'https://www.youtube.com', icon: 'youtube', is_open: true },
-  { id: null, title: 'Mail - Elaprolu Sathwik - Outlook', url: 'https://outlook.live.com', icon: 'outlook', is_open: true },
-  { id: null, title: 'Gmail', url: 'https://mail.google.com', icon: 'gmail', is_open: true },
-  { id: null, title: 'Remotasks', url: 'https://www.remotasks.com', icon: 'remotasks', is_open: true },
-  { id: null, title: 'Contact the Team', url: 'https://eclipse.browser/contact', icon: 'chat', is_open: false }
-];
+function postIpc(cmd) {
+  if (window.__eclipseIpc) {
+    window.__eclipseIpc(cmd);
+    return;
+  }
+  if (window.ipc && typeof window.ipc.postMessage === 'function') {
+    window.ipc.postMessage(JSON.stringify(cmd));
+  }
+}
+
+function setLoading(isLoading) {
+  const card = document.getElementById('command-card');
+  const badge = document.getElementById('command-badge');
+  const loader = document.getElementById('search-loader');
+  if (!card) return;
+  if (isLoading) {
+    card.classList.add('is-loading');
+    if (badge) badge.style.display = 'none';
+    if (loader) loader.style.display = 'flex';
+  } else {
+    card.classList.remove('is-loading');
+    if (loader) loader.style.display = 'none';
+    if (badge) badge.style.display = 'flex';
+  }
+}
 
 function getCommandItems() {
   const query = (document.getElementById('search-box').value || '').trim();
@@ -772,24 +449,6 @@ function getCommandItems() {
           url: t.url,
           icon: t.favicon || 'globe',
           is_open: true
-        });
-      });
-  }
-
-  // 4. Filter favorites
-  if (favorites && favorites.length > 0) {
-    favorites
-      .filter(f => (
-        (f.title && f.title.toLowerCase().includes(qLower)) ||
-        (f.url && f.url.toLowerCase().includes(qLower))
-      ))
-      .forEach(f => {
-        items.push({
-          id: null,
-          title: f.title,
-          url: f.url,
-          icon: f.icon || 'globe',
-          is_open: false
         });
       });
   }
@@ -864,76 +523,18 @@ function updateSelection() {
 }
 
 function executeCommandItem(item) {
+  setLoading(true);
   if (item.id !== null && item.id !== undefined) {
     postIpc({ action: 'select_tab', id: item.id });
   } else {
-    if (favorites && favorites.length > 0) {
-      const favIdx = favorites.findIndex(f => {
-        try {
-          const a = new URL(f.url.startsWith('http') ? f.url : 'https://' + f.url).hostname.replace(/^www\./, '').toLowerCase();
-          const b = new URL(item.url.startsWith('http') ? item.url : 'https://' + item.url).hostname.replace(/^www\./, '').toLowerCase();
-          return a === b || a.endsWith('.' + b) || b.endsWith('.' + a);
-        } catch (_) {
-          return false;
-        }
-      });
-      if (favIdx !== -1) {
-        postIpc({ action: 'open_favorite', index: favIdx });
-        return;
-      }
-    }
     routeQuery(item.url);
   }
 }
 
-let favorites = (window.__ECLIPSE_CONFIG__ && window.__ECLIPSE_CONFIG__.favorites)
-  ? window.__ECLIPSE_CONFIG__.favorites
-  : DEFAULT_FAVORITES;
-let editingIdx = null;
-
-function postIpc(cmd) {
-  if (window.__eclipseIpc) {
-    window.__eclipseIpc(cmd);
-    return;
-  }
-  if (window.ipc && typeof window.ipc.postMessage === 'function') {
-    window.ipc.postMessage(JSON.stringify(cmd));
-  }
-}
-
-let clockTimer = null;
-
-function scheduleClock() {
-  const now = new Date();
-  const delay = 60000 - (now.getSeconds() * 1000 + now.getMilliseconds()) + 50;
-  clockTimer = setTimeout(() => {
-    updateClock();
-    scheduleClock();
-  }, delay);
-}
-
-function updateClock() {
-  const now = new Date();
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  document.getElementById('clock').textContent = hours + ':' + minutes;
-
-  const hr = now.getHours();
-  let greet = 'Good evening';
-  if (hr < 12) greet = 'Good morning';
-  else if (hr < 18) greet = 'Good afternoon';
-  document.getElementById('greeting').textContent = greet;
-}
-window.addEventListener('pageshow', () => {
-  if (clockTimer) clearTimeout(clockTimer);
-  scheduleClock();
-});
-updateClock();
-scheduleClock();
-
 function routeQuery(input) {
-  const q = input.trim();
+  const q = (input || '').trim();
   if (!q) return;
+  setLoading(true);
   if (window.__eclipseIpc || (window.ipc && typeof window.ipc.postMessage === 'function')) {
     postIpc({ action: 'navigate', url: q });
   } else {
@@ -968,205 +569,52 @@ searchBox.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     searchBox.value = '';
     renderCommandResults();
+    setLoading(false);
   }
 });
+
 searchBox.addEventListener('input', () => {
   renderCommandResults();
 });
 
-document.getElementById('btn-open-prefs').addEventListener('click', () => {
-  postIpc({ action: 'open_settings_tab' });
-});
-
-function getIconHtml(fav) {
-  const icon = (fav.icon || '').toLowerCase();
-  const url = (fav.url || '').toLowerCase();
-  const title = (fav.title || '').toLowerCase();
-  if (fav.is_search || icon === 'search') {
+function getIconHtml(item) {
+  if (item.is_search) {
     return '<svg viewBox="0 0 24 24" fill="none" stroke="#5E9EFF" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>';
   }
-  if (icon === 'globe') {
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>';
+  if (item.icon && item.icon.startsWith('http')) {
+    return `<img src="${escapeHtml(item.icon)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='block';" /><svg style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>`;
   }
-  if (icon === 'gmail' || title.includes('gmail') || url.includes('mail.google.com') || url.includes('gmail.com')) {
-    return '<svg viewBox="0 0 24 24"><path fill="#EA4335" d="M12 13.5L2.5 6.4V19c0 .8.7 1.5 1.5 1.5h16c.8 0 1.5-.7 1.5-1.5V6.4L12 13.5z"/><path fill="#4285F4" d="M22 6c0-.8-.7-1.5-1.5-1.5H3.5C2.7 4.5 2 5.2 2 6l10 7.5L22 6z"/></svg>';
-  }
-  if (icon === 'remotasks' || title.includes('remotasks') || url.includes('remotasks.com')) {
-    return '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#059669"/><path d="M7 6h6a4 4 0 0 1 4 4c0 2-1.5 3.5-3.5 3.8L18 18h-3l-4-4.5H9.5V18H7V6zm2.5 2v4H13c1.1 0 2-.9 2-2s-.9-2-2-2H9.5z" fill="#FFFFFF"/></svg>';
-  }
-  if (icon === 'outlook' || title.includes('outlook') || url.includes('outlook') || url.includes('live.com') || url.includes('microsoft')) {
-    return '<svg viewBox="0 0 24 24"><path fill="#0078D4" d="M1 5h14v14H1z"/><circle cx="8" cy="12" r="3.5" fill="#FFFFFF"/><path fill="#28A8EA" d="M15 7.5L23 4v16l-8-3.5V7.5z"/></svg>';
-  }
-  if (icon === 'instagram' || title.includes('instagram') || url.includes('instagram.com')) {
-    return '<svg viewBox="0 0 24 24"><defs><linearGradient id="n_ig" x1="0%" y1="100%" x2="100%" y2="0%"><stop offset="0%" stop-color="#fdf497"/><stop offset="5%" stop-color="#fdf497"/><stop offset="45%" stop-color="#fd5949"/><stop offset="60%" stop-color="#d6249f"/><stop offset="90%" stop-color="#285AEB"/></linearGradient></defs><rect width="24" height="24" rx="6" fill="url(#n_ig)"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="#FFFFFF" stroke-width="2"/><circle cx="17.5" cy="6.5" r="1.2" fill="#FFFFFF"/></svg>';
-  }
-  if (icon === 'chat' || icon === 'discord' || title.includes('contact') || title.includes('team') || url.includes('contact') || url.includes('discord')) {
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
-  }
-  if (icon === 'apple' || title.includes('apple') || url.includes('apple.com')) {
-    return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.96 6.33c.67-.81 1.12-1.94 1-3.08-.96.04-2.13.64-2.82 1.45-.61.7-.11 1.86-.98 2.97 1.08.08 2.13-.53 2.8-1.34z"/></svg>';
-  }
-  if (icon === 'github' || title.includes('github') || url.includes('github.com')) {
-    return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>';
-  }
-  if (icon === 'youtube' || title.includes('youtube') || url.includes('youtube.com')) {
-    return '<svg viewBox="0 0 24 24" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>';
-  }
-  if (icon === 'netflix' || title.includes('netflix') || url.includes('netflix.com')) {
-    return '<svg viewBox="0 0 24 24" fill="#E50914"><path d="M5.398 0v24L9.89 12.38V0H5.398zm13.204 0L14.11 12.38V24h4.492V0zm-4.492 12.38L9.89 0h4.22z"/></svg>';
-  }
-  if (fav.url) {
-    try {
-      const u = new URL(fav.url.startsWith('http') ? fav.url : 'https://' + fav.url);
-      const host = escapeHtml(u.hostname);
-      return `<img src="https://${host}/favicon.ico" loading="lazy" decoding="async" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='block';" /><svg style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>`;
-    } catch (_) {}
-  }
-  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>';
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>';
 }
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function renderFavorites(force = false) {
-  const signature = JSON.stringify(favorites);
-  if (!force && signature === renderFavorites.lastSignature) return;
-  renderFavorites.lastSignature = signature;
-  const grid = document.getElementById('favorites-grid');
-  grid.innerHTML = '';
-
-  favorites.forEach((fav, idx) => {
-    const tile = document.createElement('div');
-    tile.className = 'tile';
-    tile.style.animation = `tileEntrance 0.36s var(--ease-spring) ${idx * 0.045}s both`;
-    tile.innerHTML = `
-      <div class="tile-controls">
-        <button class="tile-ctrl-btn edit" title="Edit Shortcut"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>
-        <button class="tile-ctrl-btn del" title="Remove Shortcut"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
-      </div>
-      <div class="tile-icon">${getIconHtml(fav)}</div>
-      <div class="tile-title">${escapeHtml(fav.title)}</div>
-    `;
-    tile.addEventListener('click', (e) => {
-      if (e.target.closest('.edit')) {
-        e.stopPropagation();
-        openShortcutModal(idx);
-      } else if (e.target.closest('.del')) {
-        e.stopPropagation();
-        favorites.splice(idx, 1);
-        renderFavorites();
-        postIpc({ action: 'delete_favorite', index: idx });
-      } else {
-        routeQuery(fav.url);
-      }
-    });
-    tile.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      openShortcutModal(idx);
-    });
-    grid.appendChild(tile);
-  });
-
-  // Add "+ New Shortcut" tile at the end of the grid
-  const addTile = document.createElement('div');
-  addTile.className = 'tile add-tile';
-  addTile.title = 'Add a new favorite shortcut';
-  addTile.innerHTML = `
-    <div class="tile-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 5v14M5 12h14"/></svg>
-    </div>
-    <div class="tile-title">Add Shortcut</div>
-  `;
-  addTile.addEventListener('click', () => openShortcutModal(null));
-  grid.appendChild(addTile);
-}
-
-const modal = document.getElementById('shortcut-modal');
-const nameInput = document.getElementById('shortcut-name');
-const urlInput = document.getElementById('shortcut-url');
-const deleteBtn = document.getElementById('modal-delete');
-
-function openShortcutModal(index = null) {
-  editingIdx = index;
-  if (index !== null && favorites[index]) {
-    document.getElementById('modal-title').textContent = 'Edit Shortcut';
-    nameInput.value = favorites[index].title || '';
-    urlInput.value = favorites[index].url || '';
-    deleteBtn.style.display = 'inline-block';
-  } else {
-    document.getElementById('modal-title').textContent = 'Add Shortcut';
-    nameInput.value = '';
-    urlInput.value = '';
-    deleteBtn.style.display = 'none';
+window.onEclipseStateUpdated = function(state) {
+  if (!state) return;
+  if (typeof state.is_loading === 'boolean') {
+    setLoading(state.is_loading);
   }
-  modal.style.display = 'flex';
-  nameInput.focus();
-}
-
-function closeShortcutModal() {
-  modal.style.display = 'none';
-  editingIdx = null;
-}
-
-document.getElementById('btn-edit-shortcuts').addEventListener('click', () => openShortcutModal(null));
-document.getElementById('btn-add-shortcut-top').addEventListener('click', () => openShortcutModal(null));
-document.getElementById('modal-cancel').addEventListener('click', closeShortcutModal);
-
-document.getElementById('modal-save').addEventListener('click', () => {
-  const title = nameInput.value.trim();
-  const url = urlInput.value.trim();
-  if (!url) return;
-  const normalizedUrl = url.startsWith('http') || url.startsWith('eclipse://') ? url : 'https://' + url;
-  const entry = { title: title || url, url: normalizedUrl, icon: '' };
-  if (editingIdx !== null && favorites[editingIdx]) {
-    favorites[editingIdx] = entry;
-  } else {
-    favorites.push(entry);
+  if (Array.isArray(state.tabs)) {
+    openTabs = state.tabs;
+    if (searchBox.value.trim()) {
+      renderCommandResults();
+    }
   }
-  renderFavorites();
-  postIpc({
-    action: 'save_favorite',
-    index: editingIdx,
-    title: title || url,
-    url: normalizedUrl
-  });
-  closeShortcutModal();
-});
-
-deleteBtn.addEventListener('click', () => {
-  if (editingIdx !== null) {
-    const idx = editingIdx;
-    favorites.splice(idx, 1);
-    renderFavorites();
-    postIpc({ action: 'delete_favorite', index: idx });
-  }
-  closeShortcutModal();
-});
-
-urlInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    document.getElementById('modal-save').click();
-  } else if (e.key === 'Escape') {
-    closeShortcutModal();
-  }
-});
+};
 
 window.onEclipseConfigUpdated = function(cfg) {
-  if (cfg && Array.isArray(cfg.favorites)) {
-    favorites = cfg.favorites;
-    renderFavorites();
-  }
   if (cfg && cfg.accent_color) {
     document.documentElement.style.setProperty('--accent', cfg.accent_color);
   }
 };
 
-if (window.__ECLIPSE_CONFIG__) {
-  window.onEclipseConfigUpdated(window.__ECLIPSE_CONFIG__);
-} else {
-  renderFavorites();
-}
+window.addEventListener('DOMContentLoaded', () => {
+  if (searchBox) {
+    searchBox.focus();
+  }
+});
 </script>
 </body>
 </html>

@@ -3,68 +3,58 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
 <title>Eclipse Navigation</title>
 <style>
 :root {
-  --bg-sidebar: rgba(13, 14, 20, 0.86);
-  --bg-card: rgba(255, 255, 255, 0.035);
-  --bg-card-hover: rgba(255, 255, 255, 0.075);
-  --bg-card-active: rgba(245, 158, 11, 0.12);
-  --accent: #F59E0B;
-  --accent-glow: rgba(245, 158, 11, 0.35);
-  --text-main: #F9FAFB;
-  --text-muted: #9CA3AF;
-  --text-dim: #6B7280;
-  --border-subtle: rgba(255, 255, 255, 0.07);
-  --border-active: rgba(245, 158, 11, 0.55);
-  --font-stack: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
-  --sidebar-w: 275px;
+  --bg-sidebar: rgba(15, 17, 23, 0.78);
+  --bg-drawer: rgba(16, 18, 25, 0.96);
+  --bg-card: rgba(255, 255, 255, 0.045);
+  --bg-card-hover: rgba(255, 255, 255, 0.08);
+  --bg-card-active: rgba(255, 255, 255, 0.12);
+  --accent: #5E9EFF;
+  --accent-subtle: rgba(94, 158, 255, 0.18);
+  --accent-glow: rgba(94, 158, 255, 0.35);
+  --text-main: rgba(255, 255, 255, 0.93);
+  --text-muted: rgba(255, 255, 255, 0.64);
+  --text-dim: rgba(255, 255, 255, 0.40);
+  --border-hairline: rgba(255, 255, 255, 0.085);
+  --border-active: rgba(255, 255, 255, 0.18);
+  --font-stack: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", sans-serif;
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 [data-theme="void"] {
-  --bg-sidebar: #050507;
-  --bg-card: #0e0e12;
-  --bg-card-hover: #17171d;
-  --bg-card-active: #22222b;
-  --accent: #FFFFFF;
-  --accent-glow: rgba(255, 255, 255, 0.25);
-  --border-active: #52525B;
+  --bg-sidebar: rgba(8, 9, 12, 0.86);
+  --bg-drawer: rgba(10, 11, 15, 0.97);
 }
 
 [data-theme="lunar"] {
-  --bg-sidebar: rgba(15, 23, 42, 0.90);
-  --bg-card-active: rgba(56, 189, 248, 0.15);
-  --accent: #38BDF8;
-  --accent-glow: rgba(56, 189, 248, 0.4);
-  --border-active: #38BDF8;
+  --bg-sidebar: rgba(17, 23, 35, 0.80);
+  --bg-drawer: rgba(17, 23, 35, 0.96);
 }
 
 [data-theme="nebula"] {
-  --bg-sidebar: rgba(20, 10, 30, 0.92);
-  --bg-card-active: rgba(217, 70, 239, 0.18);
-  --accent: #D946EF;
-  --accent-glow: rgba(217, 70, 239, 0.4);
-  --border-active: #06B6D4;
+  --bg-sidebar: rgba(21, 16, 31, 0.80);
+  --bg-drawer: rgba(21, 16, 31, 0.96);
 }
 
 [data-theme="aurora"] {
-  --bg-sidebar: rgba(10, 25, 22, 0.90);
-  --bg-card-active: rgba(16, 185, 129, 0.15);
-  --accent: #10B981;
-  --accent-glow: rgba(16, 185, 129, 0.4);
-  --border-active: #34D399;
+  --bg-sidebar: rgba(13, 23, 23, 0.80);
+  --bg-drawer: rgba(13, 23, 23, 0.96);
 }
 
 [data-theme="sol"] {
-  --bg-sidebar: rgba(248, 249, 250, 0.94);
-  --bg-card: rgba(0, 0, 0, 0.035);
-  --bg-card-hover: rgba(0, 0, 0, 0.065);
-  --bg-card-active: rgba(245, 158, 11, 0.14);
-  --text-main: #111827;
-  --text-muted: #4B5563;
-  --text-dim: #9CA3AF;
-  --border-subtle: rgba(0, 0, 0, 0.08);
-  --border-active: rgba(245, 158, 11, 0.6);
+  --bg-sidebar: rgba(244, 245, 248, 0.84);
+  --bg-drawer: rgba(248, 249, 251, 0.97);
+  --bg-card: rgba(0, 0, 0, 0.045);
+  --bg-card-hover: rgba(0, 0, 0, 0.075);
+  --bg-card-active: rgba(0, 0, 0, 0.11);
+  --text-main: rgba(17, 24, 39, 0.92);
+  --text-muted: rgba(55, 65, 81, 0.76);
+  --text-dim: rgba(107, 114, 128, 0.76);
+  --border-hairline: rgba(0, 0, 0, 0.085);
+  --border-active: rgba(0, 0, 0, 0.16);
 }
 
 * {
@@ -75,6 +65,11 @@
   -webkit-user-select: none;
 }
 
+html {
+  background: transparent;
+  height: 100%;
+}
+
 body {
   font-family: var(--font-stack);
   background: var(--bg-sidebar);
@@ -83,142 +78,169 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  backdrop-filter: blur(35px) saturate(180%);
-  -webkit-backdrop-filter: blur(35px) saturate(180%);
-  border-right: 1px solid var(--border-subtle);
-  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  border-right: none;
+  border-radius: 10px;
+  -webkit-font-smoothing: antialiased;
+  transition: width 0.28s var(--ease-spring);
 }
 
-/* macOS Traffic lights safe zone */
-.window-drag-bar {
-  height: 38px;
-  width: 100%;
+/* Arc-Style Header Bar with Vertical Traffic Lights + Navigation */
+.arc-header-row {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  padding: 0 14px;
-  -webkit-app-region: drag;
-}
-
-.browser-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 14px 12px 14px;
-}
-
-/* Eclipse Solar Corona Icon */
-.brand-icon-wrap {
-  position: relative;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.brand-icon {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #050508 55%, #181926 75%, var(--accent) 100%);
-  box-shadow: 0 0 14px var(--accent-glow), inset -2px -2px 5px rgba(0,0,0,0.8);
-  border: 1px solid var(--border-active);
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.brand-corona {
-  position: absolute;
-  inset: -2px;
-  border-radius: 50%;
-  border: 1.5px solid transparent;
-  border-top-color: var(--accent);
-  border-right-color: var(--accent);
-  transform: rotate(-35deg);
-  opacity: 0.85;
-  filter: drop-shadow(0 0 4px var(--accent));
-}
-
-.brand-text {
-  font-size: 13.5px;
-  font-weight: 700;
-  letter-spacing: 0.6px;
-  background: linear-gradient(135deg, var(--text-main) 40%, var(--accent) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.brand-tag {
-  font-size: 9px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--bg-card-hover);
-  color: var(--accent);
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  margin-left: auto;
-  border: 1px solid var(--border-subtle);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.brand-tag-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #10B981;
-  box-shadow: 0 0 5px #10B981;
-}
-
-/* Omnibar & Nav buttons */
-.nav-container {
-  padding: 0 10px 10px 10px;
-  display: flex;
-  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 10px 6px 12px;
+  flex-shrink: 0;
   gap: 8px;
+  transition: all 0.28s var(--ease-spring);
 }
 
-.nav-buttons-row {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+.traffic-lights-horizontal {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 7px !important;
+  flex-shrink: 0;
+  padding: 4px 2px;
 }
 
-.btn-icon {
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
+.traffic-lights-vertical {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 5px !important;
+  flex-shrink: 0;
+  padding: 2px 2px;
+}
+
+.traffic-lights-vertical:hover .tl-btn,
+.traffic-lights-horizontal:hover .tl-btn {
+  transform: scale(1.05);
+}
+
+.traffic-lights-vertical:hover .tl-btn svg,
+.traffic-lights-horizontal:hover .tl-btn svg {
+  opacity: 1;
+}
+
+.tl-btn {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 0.5px solid rgba(0, 0, 0, 0.25);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.15s ease;
+  padding: 0;
+  position: relative;
+  transition: transform 0.18s var(--ease-spring), filter 0.18s ease;
+}
+
+.traffic-lights-horizontal:hover .tl-btn {
+  transform: scale(1.05);
+}
+
+.tl-btn:hover {
+  transform: scale(1.18) !important;
+  filter: brightness(1.1);
+}
+
+.tl-btn:active {
+  transform: scale(0.92) !important;
+}
+
+.tl-btn.close {
+  background: #FF5F56;
+}
+
+.tl-btn.minimize {
+  background: #FFBD2E;
+}
+
+.tl-btn.zoom {
+  background: #28C840;
+}
+
+.tl-btn svg {
+  width: 7px;
+  height: 7px;
+  stroke: rgba(45, 0, 0, 0.78);
+  stroke-width: 2.2;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.traffic-lights-horizontal:hover .tl-btn svg {
+  opacity: 1;
+}
+
+.header-drag-space {
+  flex: 1;
+  height: 28px;
+  cursor: default;
+}
+
+.header-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.btn-icon {
+  background: transparent;
+  border: 0.5px solid transparent;
+  color: var(--text-muted);
+  width: 27px;
+  height: 27px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s var(--ease-spring);
+  flex-shrink: 0;
 }
 
 .btn-icon:hover {
   background: var(--bg-card-hover);
   color: var(--text-main);
-  border-color: rgba(255, 255, 255, 0.18);
-  transform: translateY(-1px);
+  transform: scale(1.06);
 }
 
 .btn-icon:active {
-  transform: scale(0.92);
+  background: var(--bg-card-active);
+  transform: scale(0.94);
+}
+
+.btn-icon.disabled {
+  opacity: 0.35;
+  transform: none !important;
+}
+
+.btn-icon.shield-active {
+  color: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent-glow));
 }
 
 .btn-icon svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   stroke: currentColor;
-  stroke-width: 2;
+  stroke-width: 1.75;
   fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.2s var(--ease-spring);
+}
+
+/* Arc Omnibar Row */
+.arc-omnibar-row {
+  padding: 4px 10px 8px 10px;
+  flex-shrink: 0;
 }
 
 .omnibar-wrapper {
@@ -230,36 +252,44 @@ body {
 
 .omnibar-input {
   width: 100%;
-  height: 33px;
+  height: 32px;
   background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-hairline);
   border-radius: 8px;
-  padding: 0 30px 0 28px;
+  padding: 0 28px 0 28px;
   color: var(--text-main);
   font-size: 12px;
   font-family: inherit;
   outline: none;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.24s var(--ease-spring);
+}
+
+.omnibar-input::placeholder {
+  color: var(--text-dim);
+  transition: opacity 0.2s ease;
 }
 
 .omnibar-input:focus {
   background: rgba(255, 255, 255, 0.08);
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow);
+  box-shadow: 0 0 0 2.5px var(--accent-subtle), 0 4px 18px rgba(94, 158, 255, 0.22);
+  transform: scale(1.01);
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .omnibar-lock {
   position: absolute;
-  left: 8px;
+  left: 9px;
   width: 12px;
   height: 12px;
-  color: #10B981;
+  color: var(--text-dim);
   pointer-events: none;
 }
 
 .omnibar-go {
   position: absolute;
-  right: 6px;
+  right: 5px;
   width: 20px;
   height: 20px;
   border-radius: 5px;
@@ -270,107 +300,297 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.15s;
+  transition: color 0.14s ease;
 }
 
 .omnibar-go:hover {
-  color: var(--accent);
+  color: var(--text-main);
 }
 
-/* Spaces / Workspaces */
-.workspaces-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 10px 8px 10px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.workspace-pill {
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 5px;
+.omnibar-tune {
+  position: absolute;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
   color: var(--text-dim);
   cursor: pointer;
-  transition: all 0.15s ease;
-  font-weight: 500;
-}
-
-.workspace-pill:hover {
-  color: var(--text-main);
-  background: var(--bg-card-hover);
-}
-
-.workspace-pill.active {
-  color: var(--text-main);
-  background: var(--bg-card-hover);
-  font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.25);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-/* Pinned quick launch row */
-.pinned-row {
   display: flex;
   align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.omnibar-tune:hover {
+  color: var(--accent);
+  background: var(--bg-card-hover);
+  transform: scale(1.08);
+}
+
+/* Arc Favorites Grid Section (3 columns of squircle app tiles) */
+.arc-favorites-section {
+  padding: 0 10px 8px 10px;
+  flex-shrink: 0;
+}
+
+.arc-favorites-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
-  padding: 8px 10px;
-  overflow-x: auto;
 }
 
 .pinned-item {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  height: 44px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-  flex-shrink: 0;
   position: relative;
+  color: var(--text-muted);
+  transition: transform 0.26s cubic-bezier(0.16, 1, 0.3, 1),
+              background 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, box-shadow;
 }
 
 .pinned-item:hover {
-  background: var(--bg-card-hover);
-  transform: translateY(-2px);
-  border-color: rgba(255, 255, 255, 0.22);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(94, 158, 255, 0.45);
+  color: #FFFFFF;
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 16px rgba(94, 158, 255, 0.3);
 }
 
-.pinned-item.netflix { color: #E50914; }
-.pinned-item.youtube { color: #FF0000; }
-.pinned-item.github { color: #FFFFFF; }
-.pinned-item.spotify { color: #1DB954; }
+.pinned-item:active {
+  transform: scale(0.94);
+  transition-duration: 0.08s;
+}
+
+.pinned-item.active {
+  background: rgba(94, 158, 255, 0.18);
+  border-color: #5E9EFF;
+  color: #FFFFFF;
+  transform: scale(1.02);
+  box-shadow: 0 0 0 1.5px rgba(94, 158, 255, 0.5), 0 8px 24px rgba(94, 158, 255, 0.35);
+}
+
+.pinned-item.active::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: #5E9EFF;
+  box-shadow: 0 0 8px #5E9EFF;
+  animation: pillGlow 2.5s ease-in-out infinite alternate;
+}
+
+.pinned-item.loading svg,
+.pinned-item.loading .favicon-img {
+  animation: favoriteLoadingPulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes favoriteLoadingPulse {
+  0% { transform: scale(0.92); opacity: 0.6; filter: drop-shadow(0 0 4px var(--accent)); }
+  100% { transform: scale(1.08); opacity: 1; filter: drop-shadow(0 0 12px var(--accent)); }
+}
+
+@keyframes pillGlow {
+  from { opacity: 0.7; transform: scaleX(0.85); }
+  to { opacity: 1; transform: scaleX(1.15); filter: drop-shadow(0 0 6px #5E9EFF); }
+}
 
 .pinned-item svg {
-  width: 16px;
-  height: 16px;
-  fill: currentColor;
+  width: 20px;
+  height: 20px;
+}
+
+.pinned-item .favicon-img {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.pinned-badge-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: var(--text-muted);
+  border: none;
+  font-size: 10px;
+  line-height: 1;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pinned-item:hover .pinned-badge-btn {
+  display: flex;
+}
+
+.pinned-badge-btn:hover {
+  color: #F87171;
+}
+
+/* Arc Space Switcher Row */
+.arc-space-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  margin: 0 10px 4px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 550;
+  transition: all 0.18s ease;
+}
+
+.arc-space-row:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+}
+
+.arc-space-icon {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.arc-space-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Arc "+ New Tab" Capsule Button */
+.arc-newtab-row {
+  padding: 2px 10px 8px 10px;
+  flex-shrink: 0;
+}
+
+.arc-newtab-btn {
+  width: 100%;
+  height: 33px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  cursor: pointer;
+  transition: all 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, background, box-shadow;
+}
+
+.arc-newtab-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text-main);
+  border-color: rgba(94, 158, 255, 0.35);
+  transform: translateY(-1px) scale(1.01);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.arc-newtab-btn:active {
+  transform: scale(0.97);
+  transition-duration: 0.08s;
+}
+
+.arc-workspace-divider {
+  height: 1px;
+  background: var(--border-hairline);
+  margin: 4px 10px 8px 10px;
+  flex-shrink: 0;
+}
+
+/* Arc Bottom Toolbar */
+.arc-bottom-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 8px 10px 10px 10px;
+  border-top: 0.5px solid var(--border-hairline);
+  flex-shrink: 0;
+}
+
+.bottom-left-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* Vertical Tab List */
 .tabs-header {
-  padding: 6px 12px;
+  padding: 7px 8px 3px 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
+  font-size: 10.5px;
+  letter-spacing: 0.2px;
   color: var(--text-dim);
-  font-weight: 600;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.tabs-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inline-newtab-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: none;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.inline-newtab-btn:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+}
+
+.inline-newtab-btn svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
 }
 
 .tab-list {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 10px;
+  padding: 4px 8px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 2px;
 }
 
 .tab-list::-webkit-scrollbar {
@@ -386,36 +606,62 @@ body {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 10px;
+  gap: 8px;
+  padding: 6px 9px;
   border-radius: 8px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  background: transparent;
+  border: 0.5px solid transparent;
   cursor: pointer;
-  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+              background 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.2s ease;
+  min-height: 34px;
+  contain: content;
+  animation: tabSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+@keyframes tabSlideIn {
+  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.tab-card.tab-closing {
+  opacity: 0 !important;
+  transform: translateX(18px) scale(0.92) !important;
+  pointer-events: none;
 }
 
 .tab-card:hover {
-  background: var(--bg-card-hover);
-  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.07);
   transform: translateX(2px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}
+
+.tab-card:active {
+  transform: scale(0.985);
+  transition-duration: 0.08s;
 }
 
 .tab-card.active {
-  background: var(--bg-card-active);
-  border-color: var(--border-active);
-  box-shadow: 0 0 14px var(--accent-glow);
+  background: rgba(255, 255, 255, 0.11);
+  border-color: rgba(94, 158, 255, 0.35);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25), inset 0 0 0 0.5px rgba(94, 158, 255, 0.3);
 }
 
 .tab-card.active::before {
   content: "";
   position: absolute;
   left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 3px;
+  top: 5px;
+  bottom: 5px;
+  width: 3.5px;
   border-radius: 0 3px 3px 0;
   background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .tab-favicon {
@@ -425,30 +671,55 @@ body {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: var(--accent);
+  color: var(--text-muted);
+  transition: transform 0.2s var(--ease-spring);
+}
+
+.tab-card:hover .tab-favicon {
+  transform: scale(1.1);
+}
+
+.tab-card.active .tab-favicon {
+  color: var(--text-main);
 }
 
 .tab-favicon svg {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
+}
+
+.tab-favicon .favicon-img {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  object-fit: contain;
 }
 
 .tab-title-wrap {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .tab-title {
   font-size: 12px;
-  font-weight: 500;
-  color: var(--text-main);
+  font-weight: 450;
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 0.15s ease;
+}
+
+.tab-card:hover .tab-title,
+.tab-card.active .tab-title {
+  color: var(--text-main);
 }
 
 .tab-card.active .tab-title {
-  font-weight: 600;
+  font-weight: 550;
 }
 
 .tab-meta {
@@ -462,16 +733,154 @@ body {
 .tab-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
+  flex-shrink: 0;
 }
 
-.tab-spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid rgba(255, 255, 255, 0.1);
-  border-top-color: var(--accent);
+/* Celestial Eclipse Loading Animation (Blue Star covered by Moon) */
+.eclipse-loader {
+  width: 18px;
+  height: 18px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.eclipse-star {
+  position: absolute;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  background: radial-gradient(circle at 38% 38%, #ffffff 0%, #93c5fd 25%, #38bdf8 55%, #1d4ed8 100%);
+  box-shadow: 0 0 5px #38bdf8, 0 0 10px rgba(56, 189, 248, 0.7);
+  animation: starLuminescence 2.2s ease-in-out infinite;
+  z-index: 1;
+}
+
+.eclipse-corona {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  pointer-events: none;
+  border: 1px solid rgba(147, 197, 253, 0.9);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.8), inset 0 0 5px rgba(37, 99, 235, 0.6);
+  animation: coronaFlare 2.2s ease-in-out infinite;
+  z-index: 0;
+}
+
+.eclipse-moon {
+  position: absolute;
+  width: 9.6px;
+  height: 9.6px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #0f172a 0%, #030712 100%);
+  box-shadow: inset -0.8px -0.8px 1.5px rgba(147, 197, 253, 0.45);
+  animation: moonTransit 2.2s cubic-bezier(0.42, 0, 0.58, 1) infinite;
+  z-index: 2;
+}
+
+.eclipse-diamond {
+  position: absolute;
+  width: 2.5px;
+  height: 2.5px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 4px #ffffff, 0 0 8px #93c5fd;
+  pointer-events: none;
+  animation: diamondFlash 2.2s ease-in-out infinite;
+  z-index: 3;
+}
+
+@keyframes moonTransit {
+  0% {
+    transform: translateX(-14px) scale(0.9);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(0px) scale(1.02);
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(14px) scale(0.9);
+    opacity: 0;
+  }
+}
+
+@keyframes starLuminescence {
+  0%, 100% {
+    transform: scale(0.95);
+    filter: brightness(1) drop-shadow(0 0 4px rgba(56, 189, 248, 0.7));
+  }
+  50% {
+    transform: scale(1.08);
+    filter: brightness(1.35) drop-shadow(0 0 12px rgba(56, 189, 248, 1));
+  }
+}
+
+@keyframes coronaFlare {
+  0%, 100% {
+    transform: scale(0.85);
+    opacity: 0.3;
+    box-shadow: 0 0 4px rgba(37, 99, 235, 0.4);
+  }
+  46%, 54% {
+    transform: scale(1.38);
+    opacity: 1;
+    box-shadow: 0 0 14px rgba(147, 197, 253, 0.95), 0 0 22px rgba(56, 189, 248, 0.8), inset 0 0 7px rgba(96, 165, 250, 0.9);
+  }
+}
+
+@keyframes diamondFlash {
+  0%, 43% {
+    opacity: 0;
+    transform: translate(3.5px, -3.5px) scale(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(4px, -4px) scale(1.5);
+  }
+  57%, 100% {
+    opacity: 0;
+    transform: translate(4.5px, -4.5px) scale(0);
+  }
+}
+
+.omnibar-loader {
+  position: absolute;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+#btn-reload.is-loading svg {
+  animation: spin 0.85s linear infinite;
+  color: var(--accent);
+  filter: drop-shadow(0 0 7px var(--accent-glow));
+}
+
+.pinned-item.loading::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 9px;
+  border: 1.5px solid var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+  animation: coronaFlare 2s ease-in-out infinite;
+  pointer-events: none;
 }
 
 @keyframes spin {
@@ -479,15 +888,40 @@ body {
 }
 
 .tab-badge-hibernated {
-  font-size: 9px;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: rgba(107, 114, 128, 0.2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-dim);
-  font-weight: 600;
+  width: 14px;
+  height: 14px;
 }
 
-.tab-close {
+.tab-badge-hibernated svg {
+  width: 11px;
+  height: 11px;
+}
+
+.tab-badge-audible {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+
+.tab-badge-audible svg {
+  width: 11px;
+  height: 11px;
+  animation: audioPulse 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes audioPulse {
+  from { transform: scale(0.95); opacity: 0.8; }
+  to { transform: scale(1.15); opacity: 1; filter: drop-shadow(0 0 4px var(--accent)); }
+}
+
+.tab-action-btn {
   width: 18px;
   height: 18px;
   border-radius: 4px;
@@ -499,50 +933,89 @@ body {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: all 0.15s ease;
+  transition: opacity 0.16s ease, background 0.16s ease, color 0.16s ease, transform 0.16s var(--ease-spring);
 }
 
-.tab-card:hover .tab-close {
+.tab-card:hover .tab-action-btn {
   opacity: 1;
 }
 
-.tab-close:hover {
-  background: rgba(239, 68, 68, 0.25);
-  color: #EF4444;
+.tab-action-btn:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+  transform: scale(1.12);
+}
+
+.tab-action-btn.close:hover {
+  background: rgba(239, 68, 68, 0.22);
+  color: #F87171;
+  transform: scale(1.15);
+}
+
+.tab-action-btn:active {
+  transform: scale(0.92);
+}
+
+.tab-action-btn svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  fill: none;
 }
 
 /* Bottom Bar */
 .bottom-bar {
-  padding: 10px;
-  border-top: 1px solid var(--border-subtle);
+  padding: 7px 8px 9px 8px;
+  border-top: 0.5px solid var(--border-hairline);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  background: rgba(0, 0, 0, 0.12);
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .btn-new-tab {
   width: 100%;
-  height: 33px;
+  height: 30px;
   border-radius: 8px;
   background: var(--bg-card);
-  border: 1px dashed var(--border-subtle);
+  border: 0.5px solid var(--border-hairline);
   color: var(--text-main);
   font-size: 12px;
   font-weight: 500;
+  font-family: inherit;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
+  justify-content: flex-start;
+  padding: 0 10px;
+  gap: 8px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.22s var(--ease-spring);
 }
 
 .btn-new-tab:hover {
   background: var(--bg-card-hover);
-  border-style: solid;
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: rgba(94, 158, 255, 0.35);
+  transform: translateY(-1.5px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.btn-new-tab:active {
+  transform: scale(0.97);
+}
+
+.btn-new-tab svg {
+  transition: transform 0.25s var(--ease-spring);
+}
+
+.btn-new-tab:hover svg {
+  transform: rotate(90deg);
+}
+
+.btn-new-tab-shortcut {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-dim);
 }
 
 .bottom-info-row {
@@ -553,89 +1026,159 @@ body {
 
 .ram-pill {
   font-size: 10.5px;
-  color: #10B981;
-  background: rgba(16, 185, 129, 0.12);
-  padding: 3px 8px;
+  color: var(--text-dim);
+  padding: 2px 6px;
   border-radius: 5px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-weight: 600;
-  border: 1px solid rgba(16, 185, 129, 0.25);
+  gap: 5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.ram-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.28);
 }
 
 .bottom-buttons {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
-/* Customizer Drawer */
+/* =========================================================
+   Arc-Style Fluid Popout Floating Sidebar
+   ========================================================= */
+body.floating-popout {
+  box-shadow: 14px 0 52px rgba(0, 0, 0, 0.78), 0 0 1px rgba(255, 255, 255, 0.16);
+  border-right: 1px solid rgba(255, 255, 255, 0.15);
+  background: var(--bg-sidebar);
+  backdrop-filter: blur(36px) saturate(190%);
+  -webkit-backdrop-filter: blur(36px) saturate(190%);
+  animation: sidebarPopoutIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
+}
+
+body.floating-popout.sliding-out {
+  animation: sidebarPopoutOut 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
+}
+
+@keyframes sidebarPopoutIn {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes sidebarPopoutOut {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+#btn-collapse.is-collapsed svg {
+  transform: rotate(180deg);
+}
+
+/* Preferences Drawer & Shortcut Modal */
 .drawer {
   position: fixed;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  background: var(--bg-sidebar);
+  background: var(--bg-drawer);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
   display: none;
   flex-direction: column;
   z-index: 1000;
-  padding: 18px 14px;
+  padding: 16px 14px;
   overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 .drawer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-hairline);
 }
 
 .drawer-title {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+  color: var(--text-main);
+}
+
+.drawer-title svg {
+  width: 14px;
+  height: 14px;
+  stroke: var(--text-muted);
+  stroke-width: 1.75;
+  fill: none;
 }
 
 .drawer-section {
-  margin-bottom: 18px;
+  margin-bottom: 15px;
 }
 
 .section-label {
-  font-size: 11px;
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.5px;
   color: var(--text-dim);
-  margin-bottom: 8px;
+  margin-bottom: 7px;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
+  gap: 5px;
 }
 
 .theme-btn {
-  padding: 8px 10px;
+  padding: 7px 10px;
   border-radius: 6px;
   background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-main);
+  border: 0.5px solid var(--border-hairline);
+  color: var(--text-muted);
   font-size: 11px;
+  font-family: inherit;
   cursor: pointer;
   text-align: left;
-  transition: all 0.15s ease;
+  transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
 }
 
 .theme-btn:hover {
   background: var(--bg-card-hover);
+  color: var(--text-main);
+}
+
+.theme-btn.active {
+  background: var(--bg-card-active);
+  color: var(--text-main);
   border-color: var(--accent);
+  font-weight: 500;
 }
 
 .accent-colors {
@@ -644,38 +1187,42 @@ body {
 }
 
 .accent-dot {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   cursor: pointer;
-  transition: transform 0.15s ease;
-  border: 2px solid transparent;
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+  border: 1.5px solid rgba(255, 255, 255, 0.15);
 }
 
 .accent-dot:hover {
-  transform: scale(1.15);
+  transform: scale(1.1);
 }
 
 .accent-dot.active {
   border-color: #FFFFFF;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.2);
 }
 
 .toggle-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 0;
-  font-size: 12px;
+  padding: 6px 0;
+  font-size: 11.5px;
+  color: var(--text-muted);
 }
 
 .toggle-switch {
-  width: 34px;
+  width: 32px;
   height: 18px;
-  border-radius: 10px;
+  border-radius: 9px;
   background: var(--bg-card-hover);
+  border: 0.5px solid var(--border-hairline);
   position: relative;
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition: background 0.18s ease;
+  flex-shrink: 0;
 }
 
 .toggle-switch.on {
@@ -686,51 +1233,451 @@ body {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: white;
+  background: #FFFFFF;
   position: absolute;
-  top: 2px;
+  top: 1.5px;
   left: 2px;
-  transition: transform 0.2s ease;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 .toggle-switch.on .toggle-knob {
-  transform: translateX(16px);
+  transform: translateX(13px);
+}
+
+.select-control {
+  background: var(--bg-card);
+  color: var(--text-main);
+  border: 0.5px solid var(--border-hairline);
+  border-radius: 6px;
+  padding: 5px 8px;
+  outline: none;
+  font-size: 11.5px;
+  font-family: inherit;
 }
 
 .css-editor {
   width: 100%;
-  height: 80px;
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--border-subtle);
+  height: 68px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 0.5px solid var(--border-hairline);
   border-radius: 6px;
-  color: #F59E0B;
-  font-family: monospace;
+  color: var(--text-main);
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 11px;
   padding: 8px;
   resize: vertical;
   outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Shortcuts list in drawer */
+.fav-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fav-manager-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-card);
+  border: 0.5px solid var(--border-hairline);
+  border-radius: 6px;
+  font-size: 11.5px;
+}
+
+.fav-manager-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.fav-manager-title {
+  font-weight: 500;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fav-manager-url {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fav-manager-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.btn-small {
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 0.5px solid var(--border-hairline);
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.btn-small:hover {
+  border-color: var(--accent);
+}
+
+.btn-small.primary {
+  background: var(--accent);
+  color: #090A0F;
+  font-weight: 600;
+  border-color: transparent;
+}
+
+.btn-small.danger:hover {
+  border-color: #F87171;
+  color: #F87171;
+}
+
+/* Shortcut Edit Modal inside Sidebar */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 14px;
+}
+
+.modal-card {
+  width: 100%;
+  background: var(--bg-drawer);
+  border: 0.5px solid var(--border-active);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.modal-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modal-field label {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.modal-input {
+  width: 100%;
+  height: 30px;
+  border-radius: 6px;
+  background: var(--bg-card);
+  border: 0.5px solid var(--border-hairline);
+  padding: 0 9px;
+  color: var(--text-main);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.modal-input:focus {
+  border-color: var(--accent);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* Transient downloads / zoom notifications */
+#toast-container {
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  bottom: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  z-index: 3000;
+  pointer-events: none;
+}
+
+.toast {
+  max-width: 100%;
+  padding: 7px 11px;
+  border-radius: 8px;
+  background: rgba(24, 27, 36, 0.96);
+  border: 0.5px solid var(--border-active);
+  color: var(--text-main);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+  overflow-wrap: anywhere;
+  animation: toast-in 0.16s ease-out;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.toast.leaving {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+body.collapsed #toast-container {
+  display: none;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+/* Arc-Style Floating Command Bar */
+.arc-cmd-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(4, 6, 12, 0.72);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 8px;
+  animation: cmdFadeIn 0.18s var(--ease-spring);
+}
+
+@keyframes cmdFadeIn {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.arc-cmd-modal {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  background: rgba(18, 22, 34, 0.96);
+  border: 1px solid rgba(94, 158, 255, 0.45);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 24px rgba(94, 158, 255, 0.25);
+  overflow: hidden;
+  max-height: 85vh;
+}
+
+.arc-cmd-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.08);
+}
+
+.arc-cmd-search-icon {
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.arc-cmd-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-main);
+}
+
+.arc-cmd-input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.arc-cmd-close-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 0.15s ease;
+}
+
+.arc-cmd-close-btn:hover {
+  color: #FFF;
+}
+
+.arc-cmd-hint-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.25);
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.05);
+}
+
+.arc-cmd-hint-row kbd {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.7);
+  font-family: inherit;
+}
+
+.arc-cmd-results {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  max-height: 380px;
+  padding: 6px;
+  gap: 2px;
+}
+
+.arc-cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+  border: 0.5px solid transparent;
+}
+
+.arc-cmd-item:hover,
+.arc-cmd-item.active {
+  background: rgba(94, 158, 255, 0.18);
+  border-color: rgba(94, 158, 255, 0.35);
+}
+
+.arc-cmd-item-icon {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.arc-cmd-item-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.arc-cmd-item-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.arc-cmd-item-sub {
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.arc-cmd-section-title {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.35);
+  padding: 8px 10px 4px 10px;
+  font-weight: 600;
 }
 </style>
+<style id="sidebar-custom-css"></style>
 </head>
 <body>
 
-<div class="window-drag-bar"></div>
-
-<div class="browser-brand">
-  <div class="brand-icon-wrap">
-    <div class="brand-icon">
-      <div class="brand-corona"></div>
+<!-- Arc-Style Floating Command Bar Overlay -->
+<div id="arc-command-bar" class="arc-cmd-overlay" style="display: none;">
+  <div class="arc-cmd-modal" id="arc-cmd-modal">
+    <div class="arc-cmd-input-wrap">
+      <svg class="arc-cmd-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="7"/>
+        <path d="m20 20-3.5-3.5"/>
+      </svg>
+      <input type="text" id="arc-cmd-input" class="arc-cmd-input" placeholder="Search or type a URL..." spellcheck="false" autocomplete="off" />
+      <button id="arc-cmd-close" class="arc-cmd-close-btn" title="Close (esc)">&times;</button>
     </div>
-  </div>
-  <div class="brand-text">Eclipse</div>
-  <div class="brand-tag">
-    <div class="brand-tag-dot"></div>
-    WebKit Fast
+    <div class="arc-cmd-hint-row">
+      <span><kbd>↵</kbd> open in new tab</span>
+      <span><kbd>esc</kbd> cancel</span>
+    </div>
+    <div id="arc-cmd-results" class="arc-cmd-results"></div>
   </div>
 </div>
 
-<div class="nav-container">
-  <div class="nav-buttons-row">
+<div class="arc-header-row">
+  <!-- Horizontal macOS Traffic Lights (Red, Yellow, Green) -->
+  <div class="traffic-lights-horizontal" id="traffic-lights" title="Window Controls">
+    <button class="tl-btn close" id="tl-close" title="Close Window">
+      <svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg>
+    </button>
+    <button class="tl-btn minimize" id="tl-minimize" title="Minimize Window">
+      <svg viewBox="0 0 12 12"><path d="M2.5 6h7"/></svg>
+    </button>
+    <button class="tl-btn zoom" id="tl-zoom" title="Toggle Fullscreen">
+      <svg viewBox="0 0 12 12"><path d="M6 2.5v7M2.5 6h7"/></svg>
+    </button>
+  </div>
+
+  <div class="header-drag-space" id="window-drag-handle" title="Drag to move window"></div>
+
+  <!-- Right side header actions: Toggle Sidebar, Back, Forward, Reload -->
+  <div class="header-nav-actions">
+    <button class="btn-icon" id="btn-collapse" title="Toggle Sidebar (⌘S)">
+      <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="9" y1="4" x2="9" y2="20" stroke="currentColor" stroke-width="1.8"/></svg>
+    </button>
     <button class="btn-icon" id="btn-back" title="Back (⌘[)">
       <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
     </button>
@@ -738,131 +1685,171 @@ body {
       <svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
     </button>
     <button class="btn-icon" id="btn-reload" title="Reload (⌘R)">
-      <svg viewBox="0 0 24 24"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
     </button>
-    <button class="btn-icon" id="btn-shield" title="Shield: Active (AdBlock & Tracker Protection)" style="color: #10B981;">
+    <button class="btn-icon shield-active" id="btn-shield" title="Shields & Adblock" style="display:none;">
       <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
     </button>
+    <button id="btn-top-newtab" style="display:none;"></button>
+    <button id="btn-top-settings" style="display:none;"></button>
   </div>
+</div>
 
+<!-- Compact Address Bar: domain with settings/tune icon -->
+<div class="arc-omnibar-row">
   <div class="omnibar-wrapper">
     <svg class="omnibar-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+      <rect x="5" y="11" width="14" height="10" rx="2"/>
+      <circle cx="12" cy="16" r="1.5"/>
+      <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
     </svg>
-    <input type="text" id="omnibar" class="omnibar-input" placeholder="Search or type URL..." spellcheck="false" autocomplete="off" />
-    <button id="omnibar-go" class="omnibar-go">
+    <input type="text" id="omnibar" class="omnibar-input" placeholder="Search or Enter URL..." spellcheck="false" autocomplete="off" />
+    <div id="omnibar-loader" class="omnibar-loader" title="Loading...">
+      <div class="eclipse-loader">
+        <div class="eclipse-corona"></div>
+        <div class="eclipse-star"></div>
+        <div class="eclipse-moon"></div>
+        <div class="eclipse-diamond"></div>
+      </div>
+    </div>
+    <button id="btn-omnibar-tune" class="omnibar-tune" title="Site Settings & Filters">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="4" y1="21" x2="4" y2="14"/>
+        <line x1="4" y1="10" x2="4" y2="3"/>
+        <line x1="12" y1="21" x2="12" y2="12"/>
+        <line x1="12" y1="8" x2="12" y2="3"/>
+        <line x1="20" y1="21" x2="20" y2="16"/>
+        <line x1="20" y1="12" x2="20" y2="3"/>
+        <line x1="1" y1="14" x2="7" y2="14"/>
+        <line x1="9" y1="8" x2="15" y2="8"/>
+        <line x1="17" y1="16" x2="23" y2="16"/>
+      </svg>
+    </button>
+    <button id="omnibar-go" class="omnibar-go" title="Go" style="display:none;">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
     </button>
   </div>
 </div>
 
-<div class="workspaces-row">
-  <div class="workspace-pill active" data-ws="Default">Orbit</div>
-  <div class="workspace-pill" data-ws="Media">Cinema</div>
-  <div class="workspace-pill" data-ws="Work">Studio</div>
-  <div class="workspace-pill" data-ws="Dev">Code</div>
+<!-- Pinned Shortcuts Grid: 3-column squircle grid -->
+<div class="arc-favorites-section" id="pinned-section">
+  <div class="arc-favorites-grid" id="pinned-container"></div>
 </div>
 
-<div class="pinned-row">
-  <div class="pinned-item netflix" title="Netflix (FairPlay DRM 4K HDR)" onclick="navigateTo('https://netflix.com')">
-    <svg viewBox="0 0 24 24"><path d="M5.398 0v24L9.89 12.38V0H5.398zm13.204 0L14.11 12.38V24h4.492V0zm-4.492 12.38L9.89 0h4.22z"/></svg>
-  </div>
-  <div class="pinned-item youtube" title="YouTube" onclick="navigateTo('https://youtube.com')">
-    <svg viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
-  </div>
-  <div class="pinned-item github" title="GitHub" onclick="navigateTo('https://github.com')">
-    <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
-  </div>
-  <div class="pinned-item spotify" title="Spotify" onclick="navigateTo('https://open.spotify.com')">
-    <svg viewBox="0 0 24 24"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
-  </div>
+<div class="workspaces-row" id="workspaces-row" style="display:none;"></div>
+<button id="btn-add-favorite" style="display:none;"></button>
+
+<!-- Workspace & Tabs: Briefcase Work Header + Divider + New Tab + Tab List -->
+<div class="arc-space-row" id="space-selector-btn" title="Current Space (Click to Switch)">
+  <span class="arc-space-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
+      <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+    </svg>
+  </span>
+  <span class="arc-space-title" id="workspace-label">Work</span>
 </div>
 
-<div class="tabs-header">
-  <span>Vertical Tabs</span>
-  <span id="tab-count-badge">0</span>
+<div class="arc-workspace-divider"></div>
+
+<div class="arc-newtab-row">
+  <button class="arc-newtab-btn" id="btn-header-newtab" title="New Tab (⌘T)">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+    <span>New Tab</span>
+  </button>
 </div>
 
+<!-- Tab List -->
 <div class="tab-list" id="tab-container"></div>
 
-<div class="bottom-bar">
-  <button class="btn-new-tab" id="btn-new-tab">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-    New Tab (⌘T)
-  </button>
-  <div class="bottom-info-row">
-    <div class="ram-pill" id="ram-meter" title="Process Resident RAM Footprint">
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-      <span id="ram-text">42 MB</span>
-    </div>
-    <div class="bottom-buttons">
-      <button class="btn-icon" id="btn-settings" title="Customization & Engine (⌘,)">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-      </button>
-      <button class="btn-icon" id="btn-collapse" title="Collapse Sidebar (⌘B)">
-        <svg viewBox="0 0 24 24"><path d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/></svg>
-      </button>
-    </div>
+<!-- Bottom Footer Row: Settings and Utility on Left, Plus on Right -->
+<div class="arc-bottom-bar">
+  <div class="bottom-left-actions">
+    <button class="btn-icon" id="btn-settings" title="Preferences (⌘,)">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+    <button class="btn-icon" id="btn-archive" title="Archive / Reopen Closed Tab (⇧⌘T)">
+      <svg viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
+    </button>
   </div>
+  <div style="flex:1"></div>
+  <div class="ram-pill" id="ram-meter" title="Process Memory">
+    <span class="ram-dot"></span>
+    <span id="ram-text">42 MB</span>
+  </div>
+  <button class="btn-icon" id="btn-new-tab" title="New Tab (⌘T)">
+    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
 </div>
 
-<!-- Customization Drawer -->
+<!-- Preferences & Shortcuts Drawer -->
 <div class="drawer" id="settings-drawer">
   <div class="drawer-header">
     <div class="drawer-title">
-      <span>⚙️</span> Eclipse Customization
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span>Preferences</span>
     </div>
-    <button class="btn-icon" id="btn-close-drawer">
-      <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
-    </button>
-  </div>
-
-  <div class="drawer-section">
-    <div class="section-label">Aesthetic Themes</div>
-    <div class="theme-grid">
-      <button class="theme-btn" onclick="applyTheme('eclipse')">Eclipse Corona</button>
-      <button class="theme-btn" onclick="applyTheme('void')">Pitch Void (OLED)</button>
-      <button class="theme-btn" onclick="applyTheme('lunar')">Lunar Frost</button>
-      <button class="theme-btn" onclick="applyTheme('nebula')">Nebula Neon</button>
-      <button class="theme-btn" onclick="applyTheme('aurora')">Boreal Aurora</button>
-      <button class="theme-btn" onclick="applyTheme('sol')">Daylight Sol</button>
+    <div style="display:flex;gap:4px;">
+      <button class="btn-small" id="btn-open-full-settings" title="Open in Full Tab">Full View</button>
+      <button class="btn-icon" id="btn-close-drawer" title="Close">
+        <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
     </div>
   </div>
 
   <div class="drawer-section">
-    <div class="section-label">Accent Corona Color</div>
-    <div class="accent-colors">
-      <div class="accent-dot active" style="background:#F59E0B;" onclick="applyAccent('#F59E0B')" title="Solar Amber"></div>
-      <div class="accent-dot" style="background:#8B5CF6;" onclick="applyAccent('#8B5CF6')" title="Ultraviolet"></div>
-      <div class="accent-dot" style="background:#38BDF8;" onclick="applyAccent('#38BDF8')" title="Lunar Blue"></div>
-      <div class="accent-dot" style="background:#10B981;" onclick="applyAccent('#10B981')" title="Emerald"></div>
-      <div class="accent-dot" style="background:#EC4899;" onclick="applyAccent('#EC4899')" title="Rose Flare"></div>
-      <div class="accent-dot" style="background:#FFFFFF;" onclick="applyAccent('#FFFFFF')" title="Pure Star"></div>
+    <div class="section-label">
+      <span>Shortcuts & Favorites</span>
+      <button class="btn-small primary" id="btn-drawer-add-fav">+ Add</button>
+    </div>
+    <div class="fav-manager-list" id="drawer-fav-list"></div>
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-label"><span>Appearance</span></div>
+    <div class="theme-grid" id="theme-grid">
+      <button class="theme-btn" data-theme-val="eclipse" onclick="applyTheme('eclipse')">Eclipse Dark</button>
+      <button class="theme-btn" data-theme-val="void" onclick="applyTheme('void')">Deep Space</button>
+      <button class="theme-btn" data-theme-val="lunar" onclick="applyTheme('lunar')">Lunar Slate</button>
+      <button class="theme-btn" data-theme-val="nebula" onclick="applyTheme('nebula')">Nebula Dusk</button>
+      <button class="theme-btn" data-theme-val="aurora" onclick="applyTheme('aurora')">Aurora Boreal</button>
+      <button class="theme-btn" data-theme-val="sol" onclick="applyTheme('sol')">Daylight Sol</button>
     </div>
   </div>
 
   <div class="drawer-section">
-    <div class="section-label">Media & DRM Capabilities</div>
-    <div class="toggle-row">
-      <span>Apple FairPlay DRM (4K HDR)</span>
-      <div class="toggle-switch on" id="toggle-drm"><div class="toggle-knob"></div></div>
-    </div>
-    <div class="toggle-row">
-      <span>Hardware Autoplay & AVFoundation</span>
-      <div class="toggle-switch on" id="toggle-autoplay"><div class="toggle-knob"></div></div>
-    </div>
-    <div class="toggle-row">
-      <span>Shields: Ad & Tracker Blocker</span>
-      <div class="toggle-switch on" id="toggle-adblock"><div class="toggle-knob"></div></div>
+    <div class="section-label"><span>Accent Color</span></div>
+    <div class="accent-colors" id="accent-colors">
+      <div class="accent-dot" data-color="#5E9EFF" style="background:#5E9EFF;" onclick="applyAccent('#5E9EFF')" title="Celestial Blue"></div>
+      <div class="accent-dot" data-color="#E5A93C" style="background:#E5A93C;" onclick="applyAccent('#E5A93C')" title="Solar Ring"></div>
+      <div class="accent-dot" data-color="#A78BFA" style="background:#A78BFA;" onclick="applyAccent('#A78BFA')" title="Ultraviolet"></div>
+      <div class="accent-dot" data-color="#34D399" style="background:#34D399;" onclick="applyAccent('#34D399')" title="Aurora Green"></div>
+      <div class="accent-dot" data-color="#F472B6" style="background:#F472B6;" onclick="applyAccent('#F472B6')" title="Supernova Rose"></div>
+      <div class="accent-dot" data-color="#E5E7EB" style="background:#E5E7EB;" onclick="applyAccent('#E5E7EB')" title="Lunar Silver"></div>
     </div>
   </div>
 
   <div class="drawer-section">
-    <div class="section-label">RAM Optimizer & Tab Sleeping</div>
+    <div class="section-label"><span>Privacy & Media</span></div>
     <div class="toggle-row">
-      <span>Auto-Hibernate Background Tabs</span>
-      <select id="select-hibernate" style="background:var(--bg-card);color:var(--text-main);border:1px solid var(--border-subtle);border-radius:5px;padding:4px 8px;outline:none;font-size:11px;">
+      <span>Apple FairPlay DRM</span>
+      <div class="toggle-switch on" id="toggle-drm" role="switch" aria-checked="true"><div class="toggle-knob"></div></div>
+    </div>
+    <div class="toggle-row">
+      <span>Media Autoplay</span>
+      <div class="toggle-switch on" id="toggle-autoplay" role="switch" aria-checked="true"><div class="toggle-knob"></div></div>
+    </div>
+    <div class="toggle-row">
+      <span>Cosmetic Ad &amp; Tracker Shields</span>
+      <div class="toggle-switch on" id="toggle-adblock" role="switch" aria-checked="true"><div class="toggle-knob"></div></div>
+    </div>
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-label"><span>Tab Hibernation</span></div>
+    <div class="toggle-row">
+      <span>Suspend Inactive Tabs</span>
+      <select id="select-hibernate" class="select-control">
         <option value="5">After 5 mins</option>
         <option value="15" selected>After 15 mins</option>
         <option value="30">After 30 mins</option>
@@ -872,9 +1859,9 @@ body {
   </div>
 
   <div class="drawer-section">
-    <div class="section-label">Default Search Engine</div>
-    <select id="select-engine" style="width:100%;background:var(--bg-card);color:var(--text-main);border:1px solid var(--border-subtle);border-radius:6px;padding:6px;outline:none;font-size:12px;">
-      <option value="duckduckgo">DuckDuckGo (Privacy)</option>
+    <div class="section-label"><span>Search Engine</span></div>
+    <select id="select-engine" class="select-control" style="width:100%;">
+      <option value="duckduckgo">DuckDuckGo</option>
       <option value="google">Google</option>
       <option value="brave">Brave Search</option>
       <option value="ecosia">Ecosia</option>
@@ -882,30 +1869,140 @@ body {
     </select>
   </div>
 
-  <div class="drawer-section">
-    <div class="section-label">Live Custom CSS Injection</div>
-    <textarea class="css-editor" id="custom-css-input" placeholder="/* Inject custom CSS directly into Eclipse */"></textarea>
+
+</div>
+
+<!-- Add / Edit Shortcut Modal -->
+<div class="modal-backdrop" id="fav-modal">
+  <div class="modal-card">
+    <div class="modal-title" id="fav-modal-title">Add Shortcut</div>
+    <div class="modal-field">
+      <label for="fav-name-input">Title</label>
+      <input type="text" id="fav-name-input" class="modal-input" placeholder="e.g. Apple, GitHub, NASA" />
+    </div>
+    <div class="modal-field">
+      <label for="fav-url-input">Address (URL)</label>
+      <input type="text" id="fav-url-input" class="modal-input" placeholder="https://example.com" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn-small danger" id="fav-modal-delete" style="margin-right:auto;display:none;">Delete</button>
+      <button class="btn-small" id="fav-modal-cancel">Cancel</button>
+      <button class="btn-small primary" id="fav-modal-save">Save</button>
+    </div>
   </div>
 </div>
 
+<!-- Transient browser notifications (downloads, zoom, …) -->
+<div id="toast-container" aria-live="polite"></div>
+
 <script>
-let currentConfig = {};
+const WORKSPACE_NAMES = {
+  Default: 'Work',
+  Work: 'Work',
+  Media: 'Media',
+  Dev: 'Dev'
+};
+
+let currentConfig = {
+  theme: 'eclipse',
+  accent_color: '#5E9EFF',
+  sidebar_width: 232,
+  sidebar_collapsed: false,
+  search_engine: 'duckduckgo',
+  drm_fairplay_enabled: true,
+  autoplay_enabled: true,
+  tab_hibernation_mins: 15,
+  adblock_enabled: true,
+  custom_css: '',
+  custom_user_agent: '',
+  favorites: [
+    { title: 'Gmail', url: 'https://mail.google.com', icon: 'gmail' },
+    { title: 'Netflix', url: 'https://www.netflix.com', icon: 'netflix' },
+    { title: 'YouTube', url: 'https://www.youtube.com', icon: 'youtube' },
+    { title: 'Remotasks', url: 'https://www.remotasks.com', icon: 'remotasks' },
+    { title: 'Outlook', url: 'https://outlook.live.com', icon: 'outlook' },
+    { title: 'Instagram', url: 'https://www.instagram.com', icon: 'instagram' },
+    { title: 'GitHub', url: 'https://github.com', icon: 'github' },
+    { title: 'Apple', url: 'https://www.apple.com', icon: 'apple' },
+    { title: 'Discord', url: 'https://discord.com', icon: 'chat' }
+  ]
+};
 let currentTabs = [];
 let activeTabId = 0;
+let lastState = null;
+let activeUrl = '';
+let activeTitle = '';
 let currentWorkspace = 'Default';
+let lastPinnedSignature = '';
+let lastFavManagerSignature = '';
+let lastConfigKey = '';
+let lastWorkspaceKey = '';
+let drawerOpen = false;
+let editingFavoriteIndex = null;
 
 function sendCommand(cmd) {
-  if (window.ipc) {
+  // The Rust side only accepts chrome commands carrying this webview's
+  // private token. The helper is installed by the native sidebar bootstrap.
+  if (window.__eclipseIpc) {
+    window.__eclipseIpc(cmd);
+    return;
+  }
+  if (window.ipc && typeof window.ipc.postMessage === 'function') {
     window.ipc.postMessage(JSON.stringify(cmd));
-  } else {
-    console.log("IPC Command:", cmd);
   }
 }
+
+// Surface chrome-side JavaScript failures on stderr during development and
+// smoke tests instead of silently shipping a broken sidebar.
+window.addEventListener('error', (event) => {
+  if (!event || !event.message) return;
+  sendCommand({
+    action: 'chrome_error',
+    message: `${event.message} (${event.filename || ''}:${event.lineno || 0})`
+  });
+});
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event && event.reason;
+  sendCommand({
+    action: 'chrome_error',
+    message: reason && reason.message ? reason.message : String(reason || 'Unhandled rejection')
+  });
+});
+
+let toastSequence = 0;
+window.showToast = function(message) {
+  const container = document.getElementById('toast-container');
+  if (!container || !message) return;
+  const node = document.createElement('div');
+  node.className = 'toast';
+  node.textContent = String(message);
+  node.dataset.toastId = String(++toastSequence);
+  container.appendChild(node);
+  while (container.children.length > 3) {
+    container.firstElementChild.remove();
+  }
+  setTimeout(() => {
+    node.classList.add('leaving');
+    setTimeout(() => node.remove(), 220);
+  }, 2600);
+};
 
 function navigateTo(url) {
   sendCommand({ action: 'navigate', url: url });
 }
 
+// Vertical Traffic Lights & Window Dragging
+document.getElementById('tl-close').addEventListener('click', () => sendCommand({ action: 'window_close' }));
+document.getElementById('tl-minimize').addEventListener('click', () => sendCommand({ action: 'window_minimize' }));
+document.getElementById('tl-zoom').addEventListener('click', () => sendCommand({ action: 'window_zoom' }));
+
+document.getElementById('window-drag-handle').addEventListener('mousedown', (e) => {
+  if (e.button === 0) {
+    sendCommand({ action: 'drag_window' });
+  }
+});
+
+// Omnibar & Navigation
 const omnibar = document.getElementById('omnibar');
 omnibar.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
@@ -914,7 +2011,13 @@ omnibar.addEventListener('keydown', (e) => {
       sendCommand({ action: 'navigate', url: val });
       omnibar.blur();
     }
+  } else if (e.key === 'Escape') {
+    omnibar.blur();
   }
+});
+
+omnibar.addEventListener('focus', () => {
+  omnibar.select();
 });
 
 document.getElementById('omnibar-go').addEventListener('click', () => {
@@ -924,181 +2027,987 @@ document.getElementById('omnibar-go').addEventListener('click', () => {
 
 document.getElementById('btn-back').addEventListener('click', () => sendCommand({ action: 'go_back' }));
 document.getElementById('btn-forward').addEventListener('click', () => sendCommand({ action: 'go_forward' }));
-document.getElementById('btn-reload').addEventListener('click', () => sendCommand({ action: 'reload' }));
-document.getElementById('btn-new-tab').addEventListener('click', () => sendCommand({ action: 'new_tab' }));
-document.getElementById('btn-collapse').addEventListener('click', () => sendCommand({ action: 'toggle_sidebar' }));
-
-const drawer = document.getElementById('settings-drawer');
-document.getElementById('btn-settings').addEventListener('click', () => {
-  drawer.style.display = 'flex';
+document.getElementById('btn-reload').addEventListener('click', () => {
+  if (lastState && lastState.is_loading) {
+    sendCommand({ action: 'stop_loading' });
+  } else {
+    sendCommand({ action: 'reload' });
+  }
 });
-document.getElementById('btn-close-drawer').addEventListener('click', () => {
+
+// All New Tab triggers -> Open a new tab
+const btnNewTab = document.getElementById('btn-new-tab');
+if (btnNewTab) btnNewTab.addEventListener('click', () => sendCommand({ action: 'new_tab', url: 'eclipse://newtab' }));
+const btnTopNewTab = document.getElementById('btn-top-newtab');
+if (btnTopNewTab) btnTopNewTab.addEventListener('click', () => sendCommand({ action: 'new_tab', url: 'eclipse://newtab' }));
+const btnHeaderNewTab = document.getElementById('btn-header-newtab');
+if (btnHeaderNewTab) btnHeaderNewTab.addEventListener('click', () => sendCommand({ action: 'new_tab', url: 'eclipse://newtab' }));
+
+const btnCollapse = document.getElementById('btn-collapse');
+if (btnCollapse) btnCollapse.addEventListener('click', () => sendCommand({ action: 'toggle_sidebar' }));
+
+const btnOmnibarTune = document.getElementById('btn-omnibar-tune');
+if (btnOmnibarTune) {
+  btnOmnibarTune.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openSettingsDrawer();
+  });
+}
+
+const btnArchive = document.getElementById('btn-archive');
+if (btnArchive) btnArchive.addEventListener('click', () => sendCommand({ action: 'reopen_closed_tab' }));
+
+const spaceSelector = document.getElementById('space-selector-btn');
+if (spaceSelector) {
+  const wsKeys = ['Default', 'Work', 'Media', 'Dev'];
+  spaceSelector.addEventListener('click', () => {
+    const nextIdx = (wsKeys.indexOf(currentWorkspace) + 1) % wsKeys.length;
+    sendCommand({ action: 'switch_workspace', workspace: wsKeys[nextIdx] });
+  });
+}
+
+const btnShield = document.getElementById('btn-shield');
+if (btnShield) {
+  btnShield.addEventListener('click', () => {
+    currentConfig.adblock_enabled = !currentConfig.adblock_enabled;
+    syncSettingsControls();
+    saveConfigChanges();
+  });
+}
+
+// Preferences Drawer
+const drawer = document.getElementById('settings-drawer');
+let wasCollapsedWhenOpened = false;
+
+window.openPreferencesDrawer = function() {
+  if (document.body.classList.contains('collapsed')) {
+    wasCollapsedWhenOpened = true;
+    sendCommand({ action: 'open_settings' });
+    return;
+  }
+  drawerOpen = true;
+  lastFavManagerSignature = '';
+  syncSettingsControls();
+  renderDrawerFavorites(true);
+  drawer.style.display = 'flex';
+};
+
+window.focusOmnibar = function() {
+  omnibar.focus();
+  omnibar.select();
+};
+
+function closePreferencesDrawer() {
+  drawerOpen = false;
   drawer.style.display = 'none';
+  if (wasCollapsedWhenOpened) {
+    wasCollapsedWhenOpened = false;
+    sendCommand({ action: 'toggle_sidebar' });
+  } else {
+    saveConfigChanges();
+  }
+}
+
+document.getElementById('btn-settings').addEventListener('click', () => window.openPreferencesDrawer());
+document.getElementById('btn-top-settings').addEventListener('click', () => window.openPreferencesDrawer());
+
+document.getElementById('btn-open-full-settings').addEventListener('click', () => {
+  drawerOpen = false;
+  drawer.style.display = 'none';
+  if (wasCollapsedWhenOpened) {
+    wasCollapsedWhenOpened = false;
+    sendCommand({ action: 'toggle_sidebar' });
+  }
+  sendCommand({ action: 'open_settings_tab' });
+});
+
+document.getElementById('btn-close-drawer').addEventListener('click', closePreferencesDrawer);
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && drawerOpen) {
+    closePreferencesDrawer();
+  }
+});
+
+// Shortcut / Favorite Modal Logic
+const favModal = document.getElementById('fav-modal');
+const favNameInput = document.getElementById('fav-name-input');
+const favUrlInput = document.getElementById('fav-url-input');
+const favModalDelete = document.getElementById('fav-modal-delete');
+
+function openFavoriteModal(index = null) {
+  editingFavoriteIndex = index;
+  const favs = currentConfig.favorites || [];
+  if (index !== null && favs[index]) {
+    document.getElementById('fav-modal-title').textContent = 'Edit Shortcut';
+    favNameInput.value = favs[index].title || '';
+    favUrlInput.value = favs[index].url || '';
+    favModalDelete.style.display = 'inline-flex';
+  } else {
+    document.getElementById('fav-modal-title').textContent = 'Add Shortcut';
+    if (activeUrl && !activeUrl.startsWith('eclipse://')) {
+      favNameInput.value = activeTitle || cleanUrl(activeUrl);
+      favUrlInput.value = activeUrl;
+    } else {
+      favNameInput.value = '';
+      favUrlInput.value = '';
+    }
+    favModalDelete.style.display = 'none';
+  }
+  favModal.style.display = 'flex';
+  favNameInput.focus();
+}
+
+function closeFavoriteModal() {
+  favModal.style.display = 'none';
+  editingFavoriteIndex = null;
+}
+
+document.getElementById('btn-add-favorite').addEventListener('click', () => openFavoriteModal(null));
+document.getElementById('btn-drawer-add-fav').addEventListener('click', () => openFavoriteModal(null));
+document.getElementById('fav-modal-cancel').addEventListener('click', closeFavoriteModal);
+
+document.getElementById('fav-modal-save').addEventListener('click', () => {
+  const title = favNameInput.value.trim();
+  const url = favUrlInput.value.trim();
+  if (!url) return;
+  sendCommand({
+    action: 'save_favorite',
+    index: editingFavoriteIndex,
+    title: title || url,
+    url: url
+  });
+  closeFavoriteModal();
+});
+
+favModalDelete.addEventListener('click', () => {
+  if (editingFavoriteIndex !== null) {
+    sendCommand({ action: 'delete_favorite', index: editingFavoriteIndex });
+  }
+  closeFavoriteModal();
+});
+
+favUrlInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    document.getElementById('fav-modal-save').click();
+  } else if (e.key === 'Escape') {
+    closeFavoriteModal();
+  }
+});
+
+function renderDrawerFavorites(force = false) {
+  if (!drawerOpen && !force) return;
+  const list = document.getElementById('drawer-fav-list');
+  if (!list) return;
+  const favs = currentConfig.favorites || [];
+  const signature = JSON.stringify(favs);
+  if (signature === lastFavManagerSignature) return;
+  lastFavManagerSignature = signature;
+  list.innerHTML = '';
+  favs.forEach((fav, idx) => {
+    const row = document.createElement('div');
+    row.className = 'fav-manager-item';
+    row.innerHTML = `
+      <div class="fav-manager-info">
+        <div class="fav-manager-title">${escapeHtml(fav.title)}</div>
+        <div class="fav-manager-url">${escapeHtml(fav.url)}</div>
+      </div>
+      <div class="fav-manager-actions">
+        <button class="btn-small edit-btn">Edit</button>
+        <button class="btn-small danger del-btn">&times;</button>
+      </div>
+    `;
+    row.querySelector('.edit-btn').addEventListener('click', () => openFavoriteModal(idx));
+    row.querySelector('.del-btn').addEventListener('click', () => {
+      sendCommand({ action: 'delete_favorite', index: idx });
+    });
+    list.appendChild(row);
+  });
+}
+
+// Settings toggles & inputs
+function setupToggle(id, key) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('click', () => {
+    currentConfig[key] = !currentConfig[key];
+    syncSettingsControls();
+    saveConfigChanges();
+  });
+}
+
+setupToggle('toggle-drm', 'drm_fairplay_enabled');
+setupToggle('toggle-autoplay', 'autoplay_enabled');
+setupToggle('toggle-adblock', 'adblock_enabled');
+
+document.getElementById('select-hibernate').addEventListener('change', (e) => {
+  currentConfig.tab_hibernation_mins = parseInt(e.target.value, 10) || 0;
   saveConfigChanges();
 });
 
+document.getElementById('select-engine').addEventListener('change', (e) => {
+  currentConfig.search_engine = e.target.value;
+  saveConfigChanges();
+});
+
+
+
+// Workspaces / Spaces switching
 document.querySelectorAll('.workspace-pill').forEach(pill => {
   pill.addEventListener('click', () => {
-    document.querySelectorAll('.workspace-pill').forEach(p => p.classList.remove('active'));
-    pill.classList.add('active');
-    currentWorkspace = pill.dataset.ws;
+    const targetWs = pill.dataset.ws;
+    if (targetWs === currentWorkspace) return;
+    currentWorkspace = targetWs;
+    updateWorkspacePills();
     sendCommand({ action: 'set_workspace', workspace: currentWorkspace });
-    renderTabs();
   });
 });
+
+function updateWorkspacePills() {
+  document.querySelectorAll('.workspace-pill').forEach(p => {
+    p.classList.toggle('active', p.dataset.ws === currentWorkspace);
+  });
+  const label = WORKSPACE_NAMES[currentWorkspace] || currentWorkspace;
+  document.getElementById('workspace-label').textContent = label;
+}
 
 function applyTheme(name) {
   document.body.setAttribute('data-theme', name);
   currentConfig.theme = name;
+  syncSettingsControls();
   saveConfigChanges();
 }
 
 function applyAccent(color) {
   document.documentElement.style.setProperty('--accent', color);
-  document.documentElement.style.setProperty('--accent-glow', color + '59');
+  document.documentElement.style.setProperty('--accent-subtle', color + '29');
   currentConfig.accent_color = color;
-  document.querySelectorAll('.accent-dot').forEach(dot => {
-    dot.classList.toggle('active', dot.style.background.toLowerCase() === color.toLowerCase());
-  });
+  syncSettingsControls();
   saveConfigChanges();
 }
 
+function applySidebarCustomCss(css) {
+  const styleEl = document.getElementById('sidebar-custom-css');
+  if (styleEl && styleEl.textContent !== (css || '')) {
+    styleEl.textContent = css || '';
+  }
+}
+
+function syncSettingsControls() {
+  const setSwitch = (id, on) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.classList.toggle('on', !!on);
+      el.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+  };
+  setSwitch('toggle-drm', currentConfig.drm_fairplay_enabled !== false);
+  setSwitch('toggle-autoplay', currentConfig.autoplay_enabled !== false);
+  setSwitch('toggle-adblock', currentConfig.adblock_enabled !== false);
+
+  const shieldBtn = document.getElementById('btn-shield');
+  if (shieldBtn) {
+    const active = currentConfig.adblock_enabled !== false;
+    shieldBtn.classList.toggle('shield-active', active);
+    shieldBtn.title = active
+      ? 'Cosmetic Ad & Tracker Shields: Active (Click to disable)'
+      : 'Cosmetic Ad & Tracker Shields: Off (Click to enable)';
+  }
+
+  const hibSelect = document.getElementById('select-hibernate');
+  if (hibSelect && document.activeElement !== hibSelect) {
+    hibSelect.value = String(currentConfig.tab_hibernation_mins ?? 15);
+  }
+
+  const engSelect = document.getElementById('select-engine');
+  if (engSelect && document.activeElement !== engSelect && currentConfig.search_engine) {
+    engSelect.value = currentConfig.search_engine;
+  }
+
+
+
+  document.querySelectorAll('.theme-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.themeVal === (currentConfig.theme || 'eclipse'));
+  });
+
+  document.querySelectorAll('.accent-dot').forEach(dot => {
+    const c = (dot.dataset.color || '').toLowerCase();
+    dot.classList.toggle('active', c === (currentConfig.accent_color || '').toLowerCase());
+  });
+}
+
 function saveConfigChanges() {
-  currentConfig.search_engine = document.getElementById('select-engine').value;
-  currentConfig.tab_hibernation_mins = parseInt(document.getElementById('select-hibernate').value, 10);
-  currentConfig.custom_css = document.getElementById('custom-css-input').value;
   sendCommand({ action: 'update_config', config: currentConfig });
 }
 
+window.updateMemoryUsage = function(mb) {
+  const ramEl = document.getElementById('ram-text');
+  if (ramEl && typeof mb === 'number') {
+    ramEl.textContent = mb.toFixed(0) + ' MB';
+  }
+};
+
 window.updateBrowserState = function(state) {
+  lastState = state;
   currentTabs = state.tabs || [];
   activeTabId = state.active_tab_id || 0;
-  currentConfig = state.config || {};
-
-  if (state.active_url && document.activeElement !== omnibar) {
-    omnibar.value = state.active_url.replace(/^https?:\/\//, '').replace(/^eclipse:\/\//, '');
+  activeUrl = state.active_url || '';
+  activeTitle = state.active_title || '';
+  if (state.current_workspace) {
+    currentWorkspace = state.current_workspace;
   }
-
-  if (state.memory_mb) {
-    document.getElementById('ram-text').textContent = state.memory_mb.toFixed(0) + ' MB';
-  }
-
   if (state.config) {
-    if (state.config.theme) document.body.setAttribute('data-theme', state.config.theme);
-    if (state.config.accent_color) {
-      document.documentElement.style.setProperty('--accent', state.config.accent_color);
-      document.documentElement.style.setProperty('--accent-glow', state.config.accent_color + '59');
+    currentConfig = Object.assign({}, currentConfig, state.config);
+  }
+  if (state.favorites) {
+    currentConfig.favorites = state.favorites;
+  }
+
+  if (!document.body.classList.contains('sliding-out')) {
+    const isPopout = !!state.sidebar_collapsed && !!state.sidebar_hover_expanded;
+    document.body.classList.toggle('floating-popout', isPopout);
+  }
+  document.body.classList.toggle('is-collapsed-state', !!state.sidebar_collapsed);
+
+  const btnCollapse = document.getElementById('btn-collapse');
+  if (btnCollapse) {
+    if (state.sidebar_collapsed) {
+      btnCollapse.title = 'Pin Sidebar (Dock)';
+      btnCollapse.classList.add('is-collapsed');
+    } else {
+      btnCollapse.title = 'Collapse Sidebar (Hide)';
+      btnCollapse.classList.remove('is-collapsed');
     }
   }
 
+  document.getElementById('btn-back').classList.toggle('disabled', !state.can_go_back);
+  document.getElementById('btn-forward').classList.toggle('disabled', !state.can_go_forward);
+
+  const isCurrentlyLoading = !!state.is_loading;
+  const omnibarLoader = document.getElementById('omnibar-loader');
+  const omnibarGo = document.getElementById('omnibar-go');
+  const btnReload = document.getElementById('btn-reload');
+  if (omnibarLoader) omnibarLoader.style.display = isCurrentlyLoading ? 'flex' : 'none';
+  if (omnibarGo) omnibarGo.style.display = isCurrentlyLoading ? 'none' : 'flex';
+  if (btnReload) {
+    btnReload.classList.toggle('is-loading', isCurrentlyLoading);
+    btnReload.title = isCurrentlyLoading ? 'Stop Loading (⌘.)' : 'Reload (⌘R)';
+  }
+
+  if (document.activeElement !== omnibar) {
+    let nextValue = '';
+    if (!state.active_url || state.active_url.startsWith('eclipse://newtab')) {
+      nextValue = '';
+    } else if (state.active_url.startsWith('eclipse://settings')) {
+      nextValue = 'eclipse://settings';
+    } else {
+      nextValue = state.active_url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    }
+    if (omnibar.value !== nextValue) omnibar.value = nextValue;
+  }
+
+  if (typeof state.memory_mb === 'number') {
+    window.updateMemoryUsage(state.memory_mb);
+  }
+
+  // Config applies to many controls; only touch the DOM when it really
+  // changed. Memory and loading ticks no longer re-render the whole drawer.
+  const configKey = JSON.stringify(currentConfig);
+  if (configKey !== lastConfigKey) {
+    lastConfigKey = configKey;
+    if (currentConfig.theme) {
+      document.body.setAttribute('data-theme', currentConfig.theme);
+      document.documentElement.style.colorScheme = currentConfig.theme === 'sol' ? 'light' : 'dark';
+    }
+    if (currentConfig.accent_color) {
+      document.documentElement.style.setProperty('--accent', currentConfig.accent_color);
+      document.documentElement.style.setProperty('--accent-subtle', currentConfig.accent_color + '29');
+    }
+    applySidebarCustomCss(currentConfig.custom_css);
+    syncSettingsControls();
+    if (drawerOpen) renderDrawerFavorites(true);
+  }
+
+  const workspaceKey = currentWorkspace + '|' + (state.sidebar_collapsed ? '1' : '0');
+  if (workspaceKey !== lastWorkspaceKey) {
+    lastWorkspaceKey = workspaceKey;
+    updateWorkspacePills();
+  }
+
+  renderPinned();
   renderTabs();
 };
 
-function renderTabs() {
-  const container = document.getElementById('tab-container');
+function matchesHost(urlA, urlB) {
+  if (!urlA || !urlB) return false;
+  try {
+    const a = new URL(urlA.startsWith('http') ? urlA : 'https://' + urlA).hostname.replace(/^www\./, '').toLowerCase();
+    const b = new URL(urlB.startsWith('http') ? urlB : 'https://' + urlB).hostname.replace(/^www\./, '').toLowerCase();
+    return a === b || a.endsWith('.' + b) || b.endsWith('.' + a);
+  } catch (_) {
+    return false;
+  }
+}
+
+function renderPinned() {
+  const container = document.getElementById('pinned-container');
+  if (!container) return;
+  const favs = (currentConfig && Array.isArray(currentConfig.favorites) && currentConfig.favorites.length > 0)
+    ? currentConfig.favorites
+    : [];
+
+  const pinnedTabs = currentTabs.filter(t => t.is_pinned);
+  const signature = 'favs:' + JSON.stringify(favs) + '|tabs:' + pinnedTabs.map(t => `${t.id}:${t.url}:${t.favorite_index}:${t.id === activeTabId}`).join(',') + '|act:' + activeTabId;
+
+  if (signature === lastPinnedSignature) return;
+  lastPinnedSignature = signature;
   container.innerHTML = '';
+  container.style.display = 'grid';
 
-  const filtered = currentTabs.filter(t => !t.workspace || t.workspace === currentWorkspace || t.workspace === 'Default');
-  document.getElementById('tab-count-badge').textContent = filtered.length;
+  // 1. Render all favorite squircle tiles
+  favs.forEach((fav, idx) => {
+    const tile = document.createElement('div');
+    tile.className = 'pinned-item';
 
-  filtered.forEach(tab => {
-    const card = document.createElement('div');
-    card.className = 'tab-card' + (tab.id === activeTabId ? ' active' : '');
+    // Check if this favorite has an open tab or is currently active
+    const tabForFav = currentTabs.find(t => {
+      if (t.favorite_index === idx) return true;
+      if (t.is_pinned && matchesHost(t.url, fav.url)) return true;
+      return false;
+    });
 
-    let iconSvg = getFaviconSvg(tab.favicon);
+    const isTileActive = (tabForFav && tabForFav.id === activeTabId) || (!tabForFav && activeUrl && matchesHost(activeUrl, fav.url));
+    if (isTileActive) {
+      tile.classList.add('active');
+    }
+    if (tabForFav && tabForFav.is_loading) {
+      tile.classList.add('loading');
+    }
 
-    card.innerHTML = `
-      <div class="tab-favicon">${iconSvg}</div>
-      <div class="tab-title-wrap">
-        <div class="tab-title">${escapeHtml(tab.title || 'New Tab')}</div>
-        <div class="tab-meta">${escapeHtml(cleanUrl(tab.url))}</div>
-      </div>
-      <div class="tab-actions">
-        ${tab.is_loading ? '<div class="tab-spinner"></div>' : ''}
-        ${tab.is_hibernated ? '<span class="tab-badge-hibernated" title="Memory freed: 0 MB active">💤 0 MB</span>' : ''}
-        <button class="tab-close" title="Close Tab">&times;</button>
-      </div>
+    tile.title = `${fav.title} (${cleanUrl(fav.url)})`;
+    const favType = fav.icon || fav.title.toLowerCase();
+    tile.innerHTML = `
+      ${getFaviconSvg(favType)}
+      <button class="pinned-badge-btn" title="Remove Shortcut">&times;</button>
     `;
-
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.tab-close')) {
+    tile.addEventListener('click', (e) => {
+      if (e.target.closest('.pinned-badge-btn')) {
         e.stopPropagation();
-        sendCommand({ action: 'close_tab', id: tab.id });
+        favs.splice(idx, 1);
+        renderPinned();
+        saveConfigChanges();
+        return;
+      }
+      sendCommand({ action: 'open_favorite', index: idx });
+    });
+    tile.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openShortcutModal(idx);
+    });
+    container.appendChild(tile);
+  });
+
+  // 2. Render any additionally pinned tabs that are not part of favorites
+  pinnedTabs.forEach(tab => {
+    if (tab.favorite_index !== null && tab.favorite_index !== undefined) return;
+    if (favs.some(f => matchesHost(f.url, tab.url))) return;
+    const item = document.createElement('div');
+    item.className = 'pinned-item' + (tab.id === activeTabId ? ' active' : '') + (tab.is_loading ? ' loading' : '');
+    item.title = `${tab.title || cleanUrl(tab.url)} (Pinned Tab)`;
+    item.innerHTML = `
+      ${getFaviconHtml(tab)}
+      <button class="pinned-badge-btn" title="Unpin Tab">&times;</button>
+    `;
+    item.addEventListener('click', (e) => {
+      if (e.target.closest('.pinned-badge-btn')) {
+        e.stopPropagation();
+        sendCommand({ action: 'toggle_pin', id: tab.id });
       } else {
         sendCommand({ action: 'select_tab', id: tab.id });
       }
     });
+    container.appendChild(item);
+  });
+}
 
-    container.appendChild(card);
+function getFaviconUrlFromHref(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname && u.hostname !== 'localhost') {
+      return `https://${u.hostname}/favicon.ico`;
+    }
+  } catch (_) {}
+  return null;
+}
+
+// Keyed, incremental DOM reconciliation for Vertical Tabs
+function renderTabs() {
+  const container = document.getElementById('tab-container');
+  const filtered = currentTabs.filter(t => !t.is_pinned && t.favorite_index == null && (t.workspace || 'Default') === currentWorkspace);
+  const badge = document.getElementById('tab-count-badge');
+  if (badge) badge.textContent = filtered.length;
+
+  const existingById = new Map();
+  Array.from(container.children).forEach(el => {
+    const id = parseInt(el.dataset.tabId, 10);
+    if (!isNaN(id)) existingById.set(id, el);
+  });
+
+  const nextIds = new Set(filtered.map(t => t.id));
+
+  for (const [id, el] of existingById.entries()) {
+    if (!nextIds.has(id)) {
+      el.remove();
+      existingById.delete(id);
+    }
+  }
+
+  filtered.forEach((tab, index) => {
+    const isActive = tab.id === activeTabId;
+    const sig = `${tab.title}|${tab.url}|${tab.favicon}|${tab.favicon_url || ''}|${tab.is_loading}|${tab.is_hibernated}|${tab.is_pinned}|${tab.is_audible}`;
+    let card = existingById.get(tab.id);
+
+    if (!card) {
+      card = document.createElement('div');
+      card.dataset.tabId = String(tab.id);
+      card.className = 'tab-card' + (isActive ? ' active' : '') + (tab.is_loading ? ' loading' : '');
+      card.addEventListener('click', (e) => {
+        const id = parseInt(card.dataset.tabId, 10);
+        if (e.target.closest('.close')) {
+          e.stopPropagation();
+          card.classList.add('tab-closing');
+          setTimeout(() => {
+            sendCommand({ action: 'close_tab', id });
+          }, 140);
+        } else if (e.target.closest('.pin')) {
+          e.stopPropagation();
+          sendCommand({ action: 'toggle_pin', id });
+        } else {
+          sendCommand({ action: 'select_tab', id });
+        }
+      });
+    } else {
+      card.classList.toggle('active', isActive);
+      card.classList.toggle('loading', !!tab.is_loading);
+    }
+
+    if (card.dataset.sig !== sig) {
+      card.dataset.sig = sig;
+      card.title = `${tab.title || 'New Tab'} — ${cleanUrl(tab.url)}`;
+      card.innerHTML = `
+        <div class="tab-favicon">${getFaviconHtml(tab)}</div>
+        <div class="tab-title-wrap">
+          <div class="tab-title">${escapeHtml(tab.title || 'New Tab')}</div>
+          <div class="tab-meta">${escapeHtml(cleanUrl(tab.url))}</div>
+        </div>
+        <div class="tab-actions">
+          ${tab.is_loading ? `
+            <div class="eclipse-loader" title="Loading...">
+              <div class="eclipse-corona"></div>
+              <div class="eclipse-star"></div>
+              <div class="eclipse-moon"></div>
+              <div class="eclipse-diamond"></div>
+            </div>` : ''}
+          ${tab.is_audible ? '<span class="tab-badge-audible" title="Playing audio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg></span>' : ''}
+          ${tab.is_hibernated ? '<span class="tab-badge-hibernated" title="Suspended to save memory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span>' : ''}
+          <button class="tab-action-btn pin" title="Pin Tab">
+            <svg viewBox="0 0 24 24"><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z"/></svg>
+          </button>
+          <button class="tab-action-btn close" title="Close Tab (⌘W)">
+            <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      `;
+    }
+
+    const currentChildAtIndex = container.children[index];
+    if (currentChildAtIndex !== card) {
+      container.insertBefore(card, currentChildAtIndex || null);
+    }
   });
 }
 
 function cleanUrl(url) {
-  if (!url || url.startsWith('eclipse://')) return 'New Tab';
+  if (!url || url.startsWith('eclipse://newtab')) return 'New Tab';
+  if (url.startsWith('eclipse://settings')) return 'Preferences';
   try {
     const u = new URL(url);
-    return u.hostname;
+    return u.hostname.replace(/^www\./, '');
   } catch (e) {
     return url;
   }
 }
 
 function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function getFaviconHtml(tab) {
+  if (tab.favicon === 'eclipse') {
+    return '<img class="favicon-img" src="eclipse://localhost/icon" alt="" draggable="false" onerror="this.style.display=\'none\'" />';
+  }
+  if (tab.favicon && tab.favicon !== 'globe') {
+    return getFaviconSvg(tab.favicon);
+  }
+  if (tab.favicon_url) {
+    const safeUrl = escapeHtml(tab.favicon_url);
+    return `<img class="favicon-img" loading="lazy" decoding="async" src="${safeUrl}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><span style="display:none;align-items:center;justify-content:center;">${getFaviconSvg('globe')}</span>`;
+  }
+  return getFaviconSvg('globe');
 }
 
 function getFaviconSvg(type) {
-  switch (type) {
+  switch ((type || '').toLowerCase()) {
+    case 'gmail':
+      return '<svg viewBox="0 0 24 24"><path fill="#EA4335" d="M12 13.5L2.5 6.4V19c0 .8.7 1.5 1.5 1.5h16c.8 0 1.5-.7 1.5-1.5V6.4L12 13.5z"/><path fill="#4285F4" d="M22 6c0-.8-.7-1.5-1.5-1.5H3.5C2.7 4.5 2 5.2 2 6l10 7.5L22 6z"/></svg>';
     case 'netflix':
       return '<svg viewBox="0 0 24 24" fill="#E50914"><path d="M5.398 0v24L9.89 12.38V0H5.398zm13.204 0L14.11 12.38V24h4.492V0zm-4.492 12.38L9.89 0h4.22z"/></svg>';
     case 'youtube':
       return '<svg viewBox="0 0 24 24" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>';
+    case 'remotasks':
+      return '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#059669"/><path d="M7 6h6a4 4 0 0 1 4 4c0 2-1.5 3.5-3.5 3.8L18 18h-3l-4-4.5H9.5V18H7V6zm2.5 2v4H13c1.1 0 2-.9 2-2s-.9-2-2-2H9.5z" fill="#FFFFFF"/></svg>';
+    case 'outlook':
+      return '<svg viewBox="0 0 24 24"><path fill="#0078D4" d="M1 5h14v14H1z"/><circle cx="8" cy="12" r="3.5" fill="#FFFFFF"/><path fill="#28A8EA" d="M15 7.5L23 4v16l-8-3.5V7.5z"/></svg>';
+    case 'instagram':
+      return '<svg viewBox="0 0 24 24"><defs><linearGradient id="ig" x1="0%" y1="100%" x2="100%" y2="0%"><stop offset="0%" stop-color="#fdf497"/><stop offset="5%" stop-color="#fdf497"/><stop offset="45%" stop-color="#fd5949"/><stop offset="60%" stop-color="#d6249f"/><stop offset="90%" stop-color="#285AEB"/></linearGradient></defs><rect width="24" height="24" rx="6" fill="url(#ig)"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="#FFFFFF" stroke-width="2"/><circle cx="17.5" cy="6.5" r="1.2" fill="#FFFFFF"/></svg>';
     case 'github':
       return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>';
+    case 'apple':
+      return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.96 6.33c.67-.81 1.12-1.94 1-3.08-.96.04-2.13.64-2.82 1.45-.61.7-.11 1.86-.98 2.97 1.08.08 2.13-.53 2.8-1.34z"/></svg>';
+    case 'chat':
+    case 'discord':
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+    case 'reddit':
+      return '<svg viewBox="0 0 24 24" fill="#FF4500"><circle cx="12" cy="12" r="10"/></svg>';
     case 'spotify':
       return '<svg viewBox="0 0 24 24" fill="#1DB954"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>';
     case 'eclipse':
-      return '<svg viewBox="0 0 24 24" fill="var(--accent)"><circle cx="12" cy="12" r="8"/></svg>';
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="7"/><path d="M12 5a7 7 0 0 0 0 14 5.5 5.5 0 0 1 0-14z" fill="currentColor"/></svg>';
     default:
-      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>';
   }
 }
 
 window.addEventListener('keydown', (e) => {
-  if (e.metaKey || e.ctrlKey) {
-    if (e.key === 't') {
-      e.preventDefault();
-      sendCommand({ action: 'new_tab' });
-    } else if (e.key === 'w') {
-      e.preventDefault();
-      sendCommand({ action: 'close_tab', id: activeTabId });
-    } else if (e.key === 'r') {
-      e.preventDefault();
-      sendCommand({ action: 'reload' });
-    } else if (e.key === '[') {
-      e.preventDefault();
-      sendCommand({ action: 'go_back' });
-    } else if (e.key === ']') {
-      e.preventDefault();
-      sendCommand({ action: 'go_forward' });
-    } else if (e.key === 'b') {
-      e.preventDefault();
-      sendCommand({ action: 'toggle_sidebar' });
-    } else if (e.key === ',') {
-      e.preventDefault();
-      drawer.style.display = drawer.style.display === 'flex' ? 'none' : 'flex';
-    } else if (e.key === 'l' || e.key === 'k') {
-      e.preventDefault();
-      omnibar.focus();
-      omnibar.select();
-    }
+  if (!e.isTrusted) return;
+  const key = (e.key || '').toLowerCase();
+  // Only Command-based shortcuts are browser shortcuts. Ctrl+W must remain a
+  // text-editing shortcut in macOS inputs, not close the tab.
+  const meta = e.metaKey && !e.ctrlKey;
+  const shift = e.shiftKey;
+
+  if (e.ctrlKey && !e.metaKey && key === 'tab') {
+    e.preventDefault();
+    sendCommand({ action: shift ? 'select_prev_tab' : 'select_next_tab' });
+    return;
+  }
+  if (!meta || e.altKey) return;
+  if (e.repeat && (key === 'w' || key === 'q' || key === 't')) {
+    e.preventDefault();
+    return;
+  }
+
+  let handled = true;
+  if (key === 't' && shift) {
+    sendCommand({ action: 'reopen_closed_tab' });
+  } else if (key === 't') {
+    window.openCommandBar();
+  } else if (key === 'w' && shift) {
+    sendCommand({ action: 'window_close' });
+  } else if (key === 'w') {
+    sendCommand({ action: 'close_tab', id: activeTabId });
+  } else if (key === 'r') {
+    sendCommand({ action: 'reload' });
+  } else if (key === 'l') {
+    sendCommand({ action: 'focus_omnibar' });
+  } else if (key === 's' || (key === 'b' && shift)) {
+    sendCommand({ action: 'toggle_sidebar' });
+  } else if (key === 'p') {
+    sendCommand({ action: 'print' });
+  } else if (key === 'd') {
+    sendCommand({ action: 'favorite_tab' });
+  } else if (e.key === 'ArrowLeft' || e.code === 'BracketLeft' || key === '[' || key === '{') {
+    sendCommand({ action: shift ? 'select_prev_tab' : 'go_back' });
+  } else if (e.key === 'ArrowRight' || e.code === 'BracketRight' || key === ']' || key === '}') {
+    sendCommand({ action: shift ? 'select_next_tab' : 'go_forward' });
+  } else if (key === ',') {
+    window.openPreferencesDrawer();
+  } else if (key === 'q') {
+    sendCommand({ action: 'window_close' });
+  } else if (key === 'm') {
+    sendCommand({ action: 'window_minimize' });
+  } else if (key === '.') {
+    sendCommand({ action: 'stop_loading' });
+  } else if (key === '+' || key === '=') {
+    sendCommand({ action: 'zoom_in' });
+  } else if (key === '-' || key === '_') {
+    sendCommand({ action: 'zoom_out' });
+  } else if (key === '0') {
+    sendCommand({ action: 'zoom_reset' });
+  } else if (key >= '1' && key <= '9' && !shift) {
+    sendCommand({ action: 'select_tab_index', index: parseInt(key, 10) - 1 });
+  } else {
+    handled = false;
+  }
+
+  if (handled) {
+    e.preventDefault();
+    e.stopPropagation();
   }
 });
 
-// Request initial state from Rust
+// Auto-expand and popout sidebar when cursor moves near/over it (Arc-style fluid hover expansion and collapse)
+let hoverDebounceTimer = null;
+
+window.popoutSidebar = function (show) {
+  cancelHoverCollapse();
+  if (show) {
+    document.body.classList.remove('sliding-out');
+    document.body.classList.add('floating-popout');
+  } else {
+    document.body.classList.add('floating-popout');
+    document.body.classList.add('sliding-out');
+  }
+};
+
+document.body.addEventListener('animationend', (e) => {
+  if (e.animationName === 'sidebarPopoutOut') {
+    document.body.classList.remove('floating-popout', 'sliding-out');
+  }
+});
+
+function cancelHoverCollapse() {
+  if (hoverDebounceTimer) {
+    clearTimeout(hoverDebounceTimer);
+    hoverDebounceTimer = null;
+  }
+  document.body.classList.remove('sliding-out');
+}
+
+document.addEventListener('mouseleave', () => {
+  if (lastState && lastState.sidebar_collapsed && lastState.sidebar_hover_expanded) {
+    if (hoverDebounceTimer) clearTimeout(hoverDebounceTimer);
+    hoverDebounceTimer = setTimeout(() => {
+      sendCommand({ action: 'hover_collapse_sidebar' });
+    }, 150);
+  }
+});
+
+document.addEventListener('mouseenter', () => {
+  cancelHoverCollapse();
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && drawerOpen) {
+    closeSettingsDrawer();
+  }
+});
+
+// ==================== Arc-Style Command Bar Logic ====================
+let cmdActiveIndex = 0;
+let cmdItemsList = [];
+
+window.openCommandBar = function() {
+  sendCommand({ action: 'open_command_bar' });
+};
+
+window.closeCommandBar = function() {
+  const overlay = document.getElementById('arc-command-bar');
+  if (overlay) overlay.style.display = 'none';
+};
+
+function renderCommandSuggestions(query) {
+  const container = document.getElementById('arc-cmd-results');
+  if (!container) return;
+  container.innerHTML = '';
+  cmdItemsList = [];
+  const q = (query || '').trim();
+
+  if (q) {
+    // 1. Search Google query
+    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+    cmdItemsList.push({
+      title: `Search Google for "${q}"`,
+      sub: 'Search in new tab',
+      url: searchUrl,
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="#5E9EFF" stroke-width="2.2" width="14" height="14"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
+    });
+
+    // 2. Direct URL option if domain-like or protocol
+    if (q.includes('.') || q.startsWith('http://') || q.startsWith('https://') || q.startsWith('localhost')) {
+      let url = q;
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      cmdItemsList.push({
+        title: `Open ${q}`,
+        sub: url,
+        url: url,
+        icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>'
+      });
+    }
+
+    // 3. Filtered favorites
+    const favs = (currentConfig && currentConfig.favorites) || [];
+    favs.forEach((f, idx) => {
+      if (f.title.toLowerCase().includes(q.toLowerCase()) || f.url.toLowerCase().includes(q.toLowerCase())) {
+        cmdItemsList.push({
+          title: f.title,
+          sub: f.url,
+          favIndex: idx,
+          url: f.url,
+          icon: '<svg viewBox="0 0 24 24" fill="#E5A93C" width="14" height="14"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
+        });
+      }
+    });
+
+    // 4. Filtered open tabs
+    const tabs = (lastState && lastState.tabs) || [];
+    tabs.forEach(t => {
+      if ((t.title && t.title.toLowerCase().includes(q.toLowerCase())) || (t.url && t.url.toLowerCase().includes(q.toLowerCase()))) {
+        cmdItemsList.push({
+          title: t.title || 'Untitled',
+          sub: 'Switch to Open Tab',
+          tabId: t.id,
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18"/></svg>'
+        });
+      }
+    });
+  } else {
+    // Empty state: show Favorites & quick actions
+    const favs = (currentConfig && currentConfig.favorites) || [];
+    if (favs.length > 0) {
+      const header = document.createElement('div');
+      header.className = 'arc-cmd-section-title';
+      header.textContent = 'Favorites';
+      container.appendChild(header);
+
+      favs.forEach((f, idx) => {
+        cmdItemsList.push({
+          title: f.title,
+          sub: f.url,
+          favIndex: idx,
+          url: f.url,
+          icon: '<svg viewBox="0 0 24 24" fill="#E5A93C" width="14" height="14"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
+        });
+      });
+    }
+
+    cmdItemsList.push({
+      title: 'Preferences',
+      sub: 'Open Settings (⌘,)',
+      action: 'open_settings',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'
+    });
+    cmdItemsList.push({
+      title: 'Clean Memory Cache',
+      sub: 'Free inactive tab memory',
+      action: 'clean_memory',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>'
+    });
+  }
+
+  cmdItemsList.forEach((item, idx) => {
+    const el = document.createElement('div');
+    el.className = 'arc-cmd-item' + (idx === cmdActiveIndex ? ' active' : '');
+    el.innerHTML = `
+      <div class="arc-cmd-item-icon">${item.icon}</div>
+      <div class="arc-cmd-item-info">
+        <div class="arc-cmd-item-title">${escapeHtml(item.title)}</div>
+        <div class="arc-cmd-item-sub">${escapeHtml(item.sub || '')}</div>
+      </div>
+    `;
+    el.addEventListener('click', () => executeCommandItem(item));
+    container.appendChild(el);
+  });
+}
+
+function updateCmdActiveClass() {
+  const container = document.getElementById('arc-cmd-results');
+  if (!container) return;
+  const items = container.querySelectorAll('.arc-cmd-item');
+  items.forEach((el, idx) => {
+    el.classList.toggle('active', idx === cmdActiveIndex);
+    if (idx === cmdActiveIndex) {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  });
+}
+
+function executeCommandItem(item) {
+  closeCommandBar();
+  if (!item) return;
+  if (item.favIndex !== undefined) {
+    sendCommand({ action: 'open_favorite', index: item.favIndex });
+  } else if (item.tabId != null) {
+    sendCommand({ action: 'select_tab', id: item.tabId });
+  } else if (item.action === 'open_settings') {
+    window.openPreferencesDrawer();
+  } else if (item.action === 'clean_memory') {
+    if (typeof cleanMemoryNow === 'function') cleanMemoryNow();
+  } else if (item.url) {
+    sendCommand({ action: 'new_tab', url: item.url });
+  }
+}
+
+const cmdInput = document.getElementById('arc-cmd-input');
+if (cmdInput) {
+  cmdInput.addEventListener('input', (e) => {
+    cmdActiveIndex = 0;
+    renderCommandSuggestions(e.target.value);
+  });
+
+  cmdInput.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (cmdItemsList.length > 0) {
+        cmdActiveIndex = (cmdActiveIndex + 1) % cmdItemsList.length;
+        updateCmdActiveClass();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (cmdItemsList.length > 0) {
+        cmdActiveIndex = (cmdActiveIndex - 1 + cmdItemsList.length) % cmdItemsList.length;
+        updateCmdActiveClass();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const val = cmdInput.value.trim();
+      if (cmdItemsList.length > 0 && cmdItemsList[cmdActiveIndex]) {
+        executeCommandItem(cmdItemsList[cmdActiveIndex]);
+      } else if (val) {
+        let target = val;
+        if (!val.includes('.') && !val.startsWith('http://') && !val.startsWith('https://')) {
+          target = `https://www.google.com/search?q=${encodeURIComponent(val)}`;
+        } else if (!/^https?:\/\//i.test(val)) {
+          target = 'https://' + val;
+        }
+        closeCommandBar();
+        sendCommand({ action: 'new_tab', url: target });
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeCommandBar();
+    }
+  });
+}
+
+const cmdOverlay = document.getElementById('arc-command-bar');
+if (cmdOverlay) {
+  cmdOverlay.addEventListener('click', (e) => {
+    if (e.target.id === 'arc-command-bar') {
+      closeCommandBar();
+    }
+  });
+}
+const cmdCloseBtn = document.getElementById('arc-cmd-close');
+if (cmdCloseBtn) cmdCloseBtn.addEventListener('click', closeCommandBar);
+
+// Render initial defaults immediately, then request live state from Rust
+renderPinned();
 sendCommand({ action: 'ready' });
-window.addEventListener('DOMContentLoaded', () => sendCommand({ action: 'ready' }));
-setTimeout(() => sendCommand({ action: 'ready' }), 100);
 </script>
 </body>
 </html>

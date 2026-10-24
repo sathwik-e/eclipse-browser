@@ -3,76 +3,621 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Eclipse Settings</title>
+<meta name="color-scheme" content="dark">
+<title>Eclipse Preferences</title>
 <style>
+:root {
+  --bg: #0E1017;
+  --card: rgba(255, 255, 255, 0.045);
+  --card-hover: rgba(255, 255, 255, 0.075);
+  --border: rgba(255, 255, 255, 0.085);
+  --border-active: rgba(255, 255, 255, 0.18);
+  --text-main: rgba(255, 255, 255, 0.94);
+  --text-muted: rgba(255, 255, 255, 0.62);
+  --text-dim: rgba(255, 255, 255, 0.40);
+  --accent: #5E9EFF;
+  --accent-glow: rgba(94, 158, 255, 0.28);
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-theme="void"] { --bg: #07080B; --card: rgba(255, 255, 255, 0.035); }
+[data-theme="lunar"] { --bg: #111723; }
+[data-theme="nebula"] { --bg: #15101F; }
+[data-theme="aurora"] { --bg: #0D1717; }
+[data-theme="sol"] {
+  --bg: #F4F5F8;
+  --card: rgba(0, 0, 0, 0.045);
+  --card-hover: rgba(0, 0, 0, 0.075);
+  --border: rgba(0, 0, 0, 0.09);
+  --border-active: rgba(0, 0, 0, 0.18);
+  --text-main: rgba(17, 24, 39, 0.92);
+  --text-muted: rgba(55, 65, 81, 0.76);
+  --text-dim: rgba(107, 114, 128, 0.76);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-  background: #07070B;
-  color: #ECEFF4;
-  padding: 40px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", sans-serif;
+  background: var(--bg);
+  color: var(--text-main);
+  padding: 44px 32px 64px 32px;
   max-width: 720px;
   margin: 0 auto;
+  -webkit-font-smoothing: antialiased;
+  animation: pageFadeIn 0.35s var(--ease-spring);
 }
+
+@keyframes pageFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: 14px;
+  margin-bottom: 6px;
+  cursor: default;
 }
-.corona-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #050508 55%, #181926 75%, #F59E0B 100%);
-  border: 1px solid rgba(245, 158, 11, 0.6);
-  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+
+.eclipse-icon {
+  width: 36px;
+  height: 36px;
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 10px rgba(94, 158, 255, 0.65));
+  animation: blueEclipseBreathe 4s ease-in-out infinite;
+  transition: transform 0.3s var(--ease-spring), filter 0.3s ease;
 }
-h1 { font-size: 26px; font-weight: 700; }
-p.sub { color: #9CA3AF; font-size: 14px; margin-bottom: 30px; }
-.card {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 22px;
-  margin-bottom: 20px;
-  backdrop-filter: blur(20px);
+
+.header:hover .eclipse-icon {
+  transform: scale(1.12) rotate(8deg);
+  filter: drop-shadow(0 0 18px rgba(94, 158, 255, 0.95));
 }
-.card h2 { font-size: 16px; margin-bottom: 10px; color: #F59E0B; }
-.card p { font-size: 13px; color: #9CA3AF; line-height: 1.6; }
-.pill {
-  display: inline-block;
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 5px;
-  background: rgba(16, 185, 129, 0.15);
-  color: #10B981;
+
+@keyframes blueEclipseBreathe {
+  0%, 100% {
+    filter: drop-shadow(0 0 8px rgba(94, 158, 255, 0.5));
+    transform: scale(1);
+  }
+  50% {
+    filter: drop-shadow(0 0 18px rgba(94, 158, 255, 0.85));
+    transform: scale(1.04);
+  }
+}
+
+h1 {
+  font-size: 24px;
   font-weight: 600;
+  letter-spacing: -0.4px;
+}
+
+p.sub {
+  color: var(--text-muted);
+  font-size: 13.5px;
+  margin-bottom: 28px;
+}
+
+p.hint {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
   margin-top: 8px;
+}
+
+.card {
+  background: var(--card);
+  border: 0.5px solid var(--border);
+  border-radius: 14px;
+  padding: 22px;
+  margin-bottom: 18px;
+  transition: transform 0.22s var(--ease-spring), border-color 0.22s ease, box-shadow 0.22s ease;
+}
+
+.card:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  transform: translateY(-1px);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.card h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 0;
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.06);
+  font-size: 13px;
+  transition: background 0.15s ease;
+}
+
+.row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.theme-btn {
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 0.5px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s var(--ease-spring);
+}
+
+.theme-btn:hover {
+  background: var(--card-hover);
+  color: var(--text-main);
+  transform: translateY(-1.5px);
+  border-color: var(--border-active);
+}
+
+.theme-btn.active {
+  border-color: var(--accent);
+  color: var(--text-main);
+  background: rgba(94, 158, 255, 0.14);
+  box-shadow: 0 0 12px var(--accent-glow);
+  font-weight: 500;
+  transform: translateY(-1px);
+}
+
+.accent-row {
+  display: flex;
+  gap: 12px;
+}
+
+.accent-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: transform 0.2s var(--ease-spring), box-shadow 0.2s ease;
+}
+
+.accent-dot:hover {
+  transform: scale(1.22);
+}
+
+.accent-dot.active {
+  border-color: #FFFFFF;
+  transform: scale(1.15);
+  box-shadow: 0 0 12px var(--accent);
+}
+
+select, input[type="text"] {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-main);
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+select:focus, input[type="text"]:focus {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+input[type="checkbox"]:hover {
+  transform: scale(1.1);
+}
+
+.shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.shortcut-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 0.5px solid var(--border);
+  transition: all 0.2s var(--ease-spring);
+}
+
+.shortcut-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-active);
+  transform: translateX(2px);
+}
+
+.shortcut-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.shortcut-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.shortcut-url {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.add-shortcut-form {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 0.5px solid var(--border);
+  background: var(--card-hover);
+  color: var(--text-main);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s var(--ease-spring);
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: translateY(-1.5px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.btn:active {
+  transform: scale(0.96);
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: #090A0F;
+  font-weight: 600;
+  border-color: transparent;
+  box-shadow: 0 2px 10px var(--accent-glow);
+}
+
+.btn.primary:hover {
+  background: #7DB2FF;
+  box-shadow: 0 4px 16px var(--accent-glow);
+}
+
+.btn.danger {
+  color: #F87171;
+}
+
+.btn.danger:hover {
+  background: rgba(239, 68, 68, 0.18);
+  color: #FCA5A5;
 }
 </style>
 </head>
 <body>
+
 <div class="header">
-  <div class="corona-icon"></div>
-  <h1>Eclipse Engine Settings</h1>
+  <img class="eclipse-icon" src="eclipse://localhost/icon" alt="" draggable="false" onerror="this.style.display='none'" />
+  <h1>Eclipse Preferences</h1>
 </div>
-<p class="sub">Ultra-minimalist WebKit browser engineered with Rust.</p>
+<p class="sub">Configure appearance, shortcuts, search engine, and privacy settings.</p>
 
 <div class="card">
-  <h2>Real-Time Customization</h2>
-  <p>Press <strong>⌘,</strong> or click the <strong>⚙ Settings</strong> icon on the bottom sidebar to adjust themes, accent corona colors, tab width, ad blocking shields, and memory hibernation in real time.</p>
+  <div class="card-header">
+    <h2>Shortcuts & Favorites</h2>
+  </div>
+  <div class="shortcuts-list" id="shortcuts-list"></div>
+  <div class="add-shortcut-form">
+    <input type="text" id="new-fav-title" placeholder="Shortcut Name (e.g. NASA)" style="flex:1;" />
+    <input type="text" id="new-fav-url" placeholder="https://www.nasa.gov" style="flex:1.5;" />
+    <button class="btn primary" id="btn-add-fav">Add Shortcut</button>
+  </div>
 </div>
 
 <div class="card">
-  <h2>Apple FairPlay Streaming (4K HDR DRM)</h2>
-  <p>Eclipse directly utilizes Apple's native AVFoundation and Secure Enclave hardware pipeline for encrypted media. Netflix, Apple TV+, and Amazon Prime Video stream up to 4K HDR and Dolby Vision natively with zero CPU overhead.</p>
-  <div class="pill">Hardware DRM Ready</div>
+  <div class="card-header">
+    <h2>Theme & Accent</h2>
+  </div>
+  <div class="theme-grid" style="margin-bottom:16px;">
+    <button class="theme-btn" data-theme="eclipse" onclick="setTheme('eclipse')">Eclipse Dark</button>
+    <button class="theme-btn" data-theme="void" onclick="setTheme('void')">Deep Space</button>
+    <button class="theme-btn" data-theme="lunar" onclick="setTheme('lunar')">Lunar Slate</button>
+    <button class="theme-btn" data-theme="nebula" onclick="setTheme('nebula')">Nebula Dusk</button>
+    <button class="theme-btn" data-theme="aurora" onclick="setTheme('aurora')">Aurora Boreal</button>
+    <button class="theme-btn" data-theme="sol" onclick="setTheme('sol')">Daylight Sol</button>
+  </div>
+  <div class="row">
+    <span>Accent Color</span>
+    <div class="accent-row">
+      <div class="accent-dot" style="background:#5E9EFF" onclick="setAccent('#5E9EFF')"></div>
+      <div class="accent-dot" style="background:#E5A93C" onclick="setAccent('#E5A93C')"></div>
+      <div class="accent-dot" style="background:#A78BFA" onclick="setAccent('#A78BFA')"></div>
+      <div class="accent-dot" style="background:#34D399" onclick="setAccent('#34D399')"></div>
+      <div class="accent-dot" style="background:#F472B6" onclick="setAccent('#F472B6')"></div>
+      <div class="accent-dot" style="background:#E5E7EB" onclick="setAccent('#E5E7EB')"></div>
+    </div>
+  </div>
 </div>
 
 <div class="card">
-  <h2>RAM Optimization & Tab Sleeping</h2>
-  <p>Unlike Chromium or standard Safari, Eclipse drops the underlying NSView and memory buffers for background tabs that stay inactive, maintaining a lean process footprint under 50 MB.</p>
-  <div class="pill">Zero-Leak Hibernation</div>
+  <div class="card-header">
+    <h2>Search, Privacy & Hibernation</h2>
+  </div>
+  <div class="row">
+    <span>Default Search Engine</span>
+    <select id="engine-select">
+      <option value="duckduckgo">DuckDuckGo</option>
+      <option value="google">Google</option>
+      <option value="brave">Brave Search</option>
+      <option value="ecosia">Ecosia</option>
+      <option value="kagi">Kagi</option>
+    </select>
+  </div>
+  <div class="row">
+    <span>Suspend Inactive Tabs</span>
+    <select id="hibernate-select">
+      <option value="5">After 5 minutes</option>
+      <option value="15">After 15 minutes</option>
+      <option value="30">After 30 minutes</option>
+      <option value="0">Never</option>
+    </select>
+  </div>
+  <div class="row">
+    <span>Cosmetic Ad &amp; Tracker Shields</span>
+    <input type="checkbox" id="chk-adblock" checked />
+  </div>
+  <p class="hint">Hides common ad containers and skips YouTube ads in the page. Network-level blocking is not available through the embedded WebKit API in this build.</p>
+  <div class="row">
+    <span>Apple FairPlay Hardware DRM</span>
+    <input type="checkbox" id="chk-drm" checked />
+  </div>
+  <div class="row">
+    <span>Media Autoplay</span>
+    <input type="checkbox" id="chk-autoplay" checked />
+  </div>
+  <p class="hint">DRM and autoplay preferences apply to tabs opened after the change. Content shields and search engine changes apply immediately.</p>
 </div>
+
+<div class="card">
+  <div class="card-header">
+    <h2>Chrome Extensions &amp; User Scripts</h2>
+  </div>
+  <div class="row">
+    <span>Chrome Extension Runtime (WebExtensions API)</span>
+    <input type="checkbox" id="chk-extensions" checked />
+  </div>
+  <p class="hint">Emulates <code>chrome.runtime</code>, <code>chrome.storage</code>, and <code>chrome.tabs</code> APIs for WebKit, enabling extension content scripts and cross-browser plugins to run in Eclipse.</p>
+  <div style="margin-top: 14px;">
+    <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Custom User Script (Tampermonkey / Userscript JS)</div>
+    <textarea id="txt-custom-js" rows="4" placeholder="// Paste custom scripts or extension code here...&#10;console.log('Eclipse user script loaded');" style="width:100%; box-sizing:border-box; background:rgba(255,255,255,0.05); color:var(--text-main); border:0.5px solid var(--border); border-radius:8px; padding:8px 12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; outline:none; resize:vertical;"></textarea>
+  </div>
+  <div style="margin-top: 14px;">
+    <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Custom CSS Stylesheet</div>
+    <textarea id="txt-custom-css" rows="3" placeholder="/* Custom CSS applied to all web pages */" style="width:100%; box-sizing:border-box; background:rgba(255,255,255,0.05); color:var(--text-main); border:0.5px solid var(--border); border-radius:8px; padding:8px 12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; outline:none; resize:vertical;"></textarea>
+  </div>
+</div>
+
+<script>
+let cfg = window.__ECLIPSE_CONFIG__ || {
+  theme: 'eclipse',
+  accent_color: '#5E9EFF',
+  sidebar_width: 232,
+  sidebar_collapsed: false,
+  search_engine: 'duckduckgo',
+  user_agent: navigator.userAgent,
+  drm_fairplay_enabled: true,
+  autoplay_enabled: true,
+  tab_hibernation_mins: 15,
+  adblock_enabled: true,
+  custom_css: '',
+  custom_user_agent: '',
+  favorites: [
+    { title: 'Apple', url: 'https://www.apple.com', icon: 'apple' },
+    { title: 'GitHub', url: 'https://github.com', icon: 'github' },
+    { title: 'YouTube', url: 'https://www.youtube.com', icon: 'youtube' },
+    { title: 'Netflix', url: 'https://www.netflix.com', icon: 'netflix' }
+  ]
+};
+
+function postIpc(cmd) {
+  if (window.__eclipseIpc) {
+    window.__eclipseIpc(cmd);
+    return;
+  }
+  if (window.ipc && typeof window.ipc.postMessage === 'function') {
+    window.ipc.postMessage(JSON.stringify(cmd));
+  }
+}
+
+let saveTimer = null;
+
+function saveConfig() {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  postIpc({ action: 'update_config', config: cfg });
+}
+
+window.addEventListener('pagehide', () => {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  postIpc({ action: 'update_config', config: cfg });
+});
+
+function setTheme(t) {
+  cfg.theme = t;
+  renderUI();
+  saveConfig();
+}
+
+function setAccent(c) {
+  cfg.accent_color = c;
+  document.documentElement.style.setProperty('--accent', c);
+  renderUI();
+  saveConfig();
+}
+
+function renderUI() {
+  document.documentElement.style.setProperty('--accent', cfg.accent_color || '#5E9EFF');
+  document.querySelectorAll('.theme-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.theme === cfg.theme);
+  });
+  document.getElementById('engine-select').value = cfg.search_engine || 'duckduckgo';
+  document.getElementById('hibernate-select').value = String(cfg.tab_hibernation_mins ?? 15);
+  document.getElementById('chk-adblock').checked = cfg.adblock_enabled !== false;
+  document.getElementById('chk-drm').checked = cfg.drm_fairplay_enabled !== false;
+  document.getElementById('chk-autoplay').checked = cfg.autoplay_enabled !== false;
+  document.getElementById('chk-extensions').checked = cfg.webextensions_enabled !== false;
+  if (document.activeElement !== document.getElementById('txt-custom-js')) {
+    document.getElementById('txt-custom-js').value = cfg.custom_js || '';
+  }
+  if (document.activeElement !== document.getElementById('txt-custom-css')) {
+    document.getElementById('txt-custom-css').value = cfg.custom_css || '';
+  }
+
+  const favorites = cfg.favorites || [];
+  const signature = JSON.stringify(favorites);
+  if (signature !== lastShortcutsSignature) {
+    lastShortcutsSignature = signature;
+    const list = document.getElementById('shortcuts-list');
+    list.innerHTML = '';
+    favorites.forEach((fav, idx) => {
+      const item = document.createElement('div');
+      item.className = 'shortcut-item';
+      item.innerHTML = `
+        <div class="shortcut-meta">
+          <div class="shortcut-title">${escapeHtml(fav.title)}</div>
+          <div class="shortcut-url">${escapeHtml(fav.url)}</div>
+        </div>
+        <button class="btn danger" onclick="removeFavorite(${idx})">Remove</button>
+      `;
+      list.appendChild(item);
+    });
+  }
+}
+
+let lastShortcutsSignature = '';
+
+function removeFavorite(idx) {
+  if (cfg.favorites && cfg.favorites[idx]) {
+    cfg.favorites.splice(idx, 1);
+    lastShortcutsSignature = '';
+    renderUI();
+    saveConfig();
+  }
+}
+
+document.getElementById('btn-add-fav').addEventListener('click', () => {
+  const title = document.getElementById('new-fav-title').value.trim();
+  const url = document.getElementById('new-fav-url').value.trim();
+  if (!title || !url) return;
+  if (!cfg.favorites) cfg.favorites = [];
+  cfg.favorites.push({ title, url, icon: 'globe' });
+  document.getElementById('new-fav-title').value = '';
+  document.getElementById('new-fav-url').value = '';
+  lastShortcutsSignature = '';
+  renderUI();
+  saveConfig();
+});
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+document.getElementById('engine-select').addEventListener('change', (e) => {
+  cfg.search_engine = e.target.value;
+  saveConfig();
+});
+
+document.getElementById('hibernate-select').addEventListener('change', (e) => {
+  cfg.tab_hibernation_mins = parseInt(e.target.value, 10) || 0;
+  saveConfig();
+});
+
+document.getElementById('chk-adblock').addEventListener('change', (e) => {
+  cfg.adblock_enabled = e.target.checked;
+  saveConfig();
+});
+
+document.getElementById('chk-drm').addEventListener('change', (e) => {
+  cfg.drm_fairplay_enabled = e.target.checked;
+  saveConfig();
+});
+
+document.getElementById('chk-autoplay').addEventListener('change', (e) => {
+  cfg.autoplay_enabled = e.target.checked;
+  saveConfig();
+});
+
+document.getElementById('chk-extensions').addEventListener('change', (e) => {
+  cfg.webextensions_enabled = e.target.checked;
+  saveConfig();
+});
+
+let customJsDebounce = null;
+document.getElementById('txt-custom-js').addEventListener('input', (e) => {
+  cfg.custom_js = e.target.value;
+  if (customJsDebounce) clearTimeout(customJsDebounce);
+  customJsDebounce = setTimeout(saveConfig, 500);
+});
+
+let customCssDebounce = null;
+document.getElementById('txt-custom-css').addEventListener('input', (e) => {
+  cfg.custom_css = e.target.value;
+  if (customCssDebounce) clearTimeout(customCssDebounce);
+  customCssDebounce = setTimeout(saveConfig, 500);
+});
+
+window.onEclipseConfigUpdated = function(newCfg) {
+  if (!newCfg) return;
+  cfg = newCfg;
+  renderUI();
+};
+
+renderUI();
+</script>
 </body>
 </html>

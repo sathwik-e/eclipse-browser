@@ -1,5 +1,9 @@
 /target
+.DS_Store
 Eclipse.app
 *.dmg
+*.zip
 scripts/icon_512.png
 scripts/AppIcon.iconset
+Deepseek/
+upstream-helium/

@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-echo "=== Building Eclipse Release Binary ==="
-cargo build --release
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+# Make a normal Finder-launched terminal find rustup/cargo without hardcoding
+# one developer's home directory.
+if [ -f "$HOME/.cargo/env" ]; then
+    # shellcheck disable=SC1091
+    source "$HOME/.cargo/env"
+fi
+export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 APP_NAME="Eclipse"
 BUNDLE_DIR="$APP_NAME.app"
@@ -10,38 +18,38 @@ CONTENTS_DIR="$BUNDLE_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
+echo "=== Building Eclipse Release Binary ==="
+if command -v cargo >/dev/null 2>&1; then
+    cargo build --release
+else
+    echo "cargo not found; falling back to the standalone Objective-C WebKit build"
+    echo "note: the standalone build does not include the native menu/token bridge from src/"
+    python3 - <<'PY'
+import json
+for name in ["sidebar", "newtab", "settings"]:
+    content = open(f"assets/{name}.html", "r", encoding="utf-8").read()
+    with open(f"assets/generated_{name}_cstr.h", "w", encoding="utf-8") as f:
+        f.write(json.dumps(content))
+PY
+    mkdir -p target/release
+    clang -fobjc-arc -O3 -flto \
+          -framework Cocoa -framework WebKit \
+          scripts/standalone_macos.m \
+          -o target/release/eclipse
+    strip -x target/release/eclipse
+    rm -f assets/generated_*_cstr.h
+fi
+
 echo "=== Creating macOS App Bundle ($BUNDLE_DIR) ==="
 rm -rf "$BUNDLE_DIR"
-mkdir -p "$MACOS_DIR"
-mkdir -p "$RESOURCES_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
-# Copy binary
 cp target/release/eclipse "$MACOS_DIR/eclipse"
 chmod +x "$MACOS_DIR/eclipse"
 
-# Generate Iconset and .icns
 echo "=== Generating macOS AppIcon.icns ==="
 python3 scripts/generate_icon.py
 
-ICONSET="scripts/AppIcon.iconset"
-rm -rf "$ICONSET"
-mkdir -p "$ICONSET"
-
-BASE_ICON="scripts/icon_512.png"
-sips -z 16 16     "$BASE_ICON" --out "$ICONSET/icon_16x16.png" >/dev/null
-sips -z 32 32     "$BASE_ICON" --out "$ICONSET/icon_16x16@2x.png" >/dev/null
-sips -z 32 32     "$BASE_ICON" --out "$ICONSET/icon_32x32.png" >/dev/null
-sips -z 64 64     "$BASE_ICON" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
-sips -z 128 128   "$BASE_ICON" --out "$ICONSET/icon_128x128.png" >/dev/null
-sips -z 256 256   "$BASE_ICON" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
-sips -z 256 256   "$BASE_ICON" --out "$ICONSET/icon_256x256.png" >/dev/null
-sips -z 512 512   "$BASE_ICON" --out "$ICONSET/icon_256x256@2x.png" >/dev/null
-sips -z 512 512   "$BASE_ICON" --out "$ICONSET/icon_512x512.png" >/dev/null
-
-iconutil -c icns "$ICONSET" -o "$RESOURCES_DIR/AppIcon.icns"
-rm -rf "$ICONSET"
-
-# Write Info.plist
 cat << 'EOF' > "$CONTENTS_DIR/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -62,11 +70,13 @@ cat << 'EOF' > "$CONTENTS_DIR/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.2.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>3</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>CFBundleIconFile</key>
@@ -77,38 +87,79 @@ cat << 'EOF' > "$CONTENTS_DIR/Info.plist"
     <dict>
         <key>NSAllowsArbitraryLoads</key>
         <true/>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
     </dict>
+    <key>NSCameraUsageDescription</key>
+    <string>Eclipse gives camera access to a website only after you allow it.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Eclipse gives microphone access to a website only after you allow it.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Eclipse may access your local network when a website asks for it (for example, video calls or local development servers).</string>
 </dict>
 </plist>
 EOF
 
-# Ad-hoc sign the app so macOS runs it natively without Gatekeeper prompt
-echo "=== Ad-hoc Signing Eclipse.app ==="
-codesign --force --deep -s - "$BUNDLE_DIR"
+plutil -lint "$CONTENTS_DIR/Info.plist"
 
-echo "=== Packaging DMG Installer (Eclipse-Installer.dmg) ==="
-DMG_STAGE="dmg_stage"
-rm -rf "$DMG_STAGE" Eclipse-Installer.dmg
-mkdir -p "$DMG_STAGE"
+echo "=== Ad-hoc Signing Eclipse.app with Runtime Entitlements ==="
+xattr -cr "$BUNDLE_DIR"
+codesign --force --deep --options runtime --entitlements scripts/entitlements.plist -s - "$BUNDLE_DIR"
+xattr -cr "$BUNDLE_DIR"
+codesign --verify --deep --strict --verbose=1 "$BUNDLE_DIR" 2>&1 | tail -2
 
-# Copy App into staging
-cp -R "$BUNDLE_DIR" "$DMG_STAGE/"
+if command -v hdiutil >/dev/null 2>&1 || command -v diskutil >/dev/null 2>&1; then
+    echo "=== Creating Eclipse-Installer.dmg (Drag-to-Applications Installer) ==="
+    rm -f "Eclipse-Installer.dmg"
+    DMG_STAGING="target/dmg_staging"
+    rm -rf "$DMG_STAGING"
+    mkdir -p "$DMG_STAGING"
+    cp -R "$BUNDLE_DIR" "$DMG_STAGING/"
+    ln -s /Applications "$DMG_STAGING/Applications"
+    xattr -cr "$DMG_STAGING"
 
-# Create symlink to /Applications for standard drag-and-drop installation
-ln -s /Applications "$DMG_STAGE/Applications"
+    dmg_ok=0
+    if command -v hdiutil >/dev/null 2>&1; then
+        if hdiutil create -volname "Eclipse" -srcfolder "$DMG_STAGING" -ov -format UDZO -fs HFS+ \
+            "Eclipse-Installer.dmg" >/dev/null 2>&1 \
+            && [ -f "Eclipse-Installer.dmg" ]; then
+            dmg_ok=1
+        fi
+    fi
+    if [ "$dmg_ok" -eq 0 ] && command -v diskutil >/dev/null 2>&1; then
+        if diskutil image create from "$DMG_STAGING" --volumeName "Eclipse" \
+            --format UDZO "Eclipse-Installer.dmg" >/dev/null 2>&1 \
+            && [ -f "Eclipse-Installer.dmg" ]; then
+            dmg_ok=1
+        fi
+    fi
+    rm -rf "$DMG_STAGING"
+    if [ "$dmg_ok" -eq 1 ]; then
+        xattr -cr "Eclipse-Installer.dmg"
+    else
+        echo "disk image creation is unavailable in this environment; using a zip instead"
+    fi
+fi
 
-# Create DMG
-hdiutil create -volname "Eclipse Browser" \
-               -srcfolder "$DMG_STAGE" \
-               -ov \
-               -format UDZO \
-               "Eclipse-Installer.dmg"
+echo "=== Installing directly to /Applications/Eclipse.app ==="
+if [ -d "/Applications" ]; then
+    rm -rf /Applications/Eclipse.app
+    cp -R "$BUNDLE_DIR" /Applications/
+    xattr -cr /Applications/Eclipse.app
+    if [ -x "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" ]; then
+        /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Eclipse.app
+    fi
+fi
 
-rm -rf "$DMG_STAGE"
+# A zip is always produced so the app can be moved to /Applications even when
+# the surrounding sandbox does not allow disk-image creation.
+rm -f "Eclipse.zip"
+ditto -c -k --norsrc --noextattr --keepParent "$BUNDLE_DIR" "Eclipse.zip"
 
 echo ""
 echo "===================================================="
-echo "✅ Eclipse.app and Eclipse-Installer.dmg created successfully!"
-echo "📍 Application Bundle: $(pwd)/$BUNDLE_DIR"
-echo "📍 DMG Installer:     $(pwd)/Eclipse-Installer.dmg"
+echo "✅ Eclipse.app built and ad-hoc signed"
+echo "📍 $(pwd)/$BUNDLE_DIR"
+[ -f "Eclipse-Installer.dmg" ] && echo "📦 $(pwd)/Eclipse-Installer.dmg"
+[ -f "Eclipse.zip" ] && echo "📦 $(pwd)/Eclipse.zip"
 echo "===================================================="

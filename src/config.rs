@@ -2,36 +2,144 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+fn default_true() -> bool {
+    true
+}
+
+fn default_theme() -> String {
+    "eclipse".into()
+}
+
+fn default_accent() -> String {
+    "#5E9EFF".into()
+}
+
+fn default_sidebar_width() -> f64 {
+    232.0
+}
+
+fn default_search_engine() -> String {
+    "duckduckgo".into()
+}
+
+fn default_user_agent() -> String {
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15".into()
+}
+
+fn default_hibernation_mins() -> u32 {
+    15
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FavoriteShortcut {
+    pub title: String,
+    pub url: String,
+    #[serde(default)]
+    pub icon: String,
+}
+
+fn default_favorites() -> Vec<FavoriteShortcut> {
+    vec![
+        FavoriteShortcut {
+            title: "Gmail".into(),
+            url: "https://mail.google.com".into(),
+            icon: "gmail".into(),
+        },
+        FavoriteShortcut {
+            title: "Netflix".into(),
+            url: "https://www.netflix.com".into(),
+            icon: "netflix".into(),
+        },
+        FavoriteShortcut {
+            title: "YouTube".into(),
+            url: "https://www.youtube.com".into(),
+            icon: "youtube".into(),
+        },
+        FavoriteShortcut {
+            title: "Remotasks".into(),
+            url: "https://www.remotasks.com".into(),
+            icon: "remotasks".into(),
+        },
+        FavoriteShortcut {
+            title: "Outlook".into(),
+            url: "https://outlook.live.com".into(),
+            icon: "outlook".into(),
+        },
+        FavoriteShortcut {
+            title: "Instagram".into(),
+            url: "https://www.instagram.com".into(),
+            icon: "instagram".into(),
+        },
+        FavoriteShortcut {
+            title: "GitHub".into(),
+            url: "https://github.com".into(),
+            icon: "github".into(),
+        },
+        FavoriteShortcut {
+            title: "Apple".into(),
+            url: "https://www.apple.com".into(),
+            icon: "apple".into(),
+        },
+        FavoriteShortcut {
+            title: "Discord".into(),
+            url: "https://discord.com".into(),
+            icon: "chat".into(),
+        },
+    ]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BrowserConfig {
+    #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default = "default_accent")]
     pub accent_color: String,
+    #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f64,
+    #[serde(default = "default_true")]
     pub sidebar_collapsed: bool,
+    #[serde(default = "default_search_engine")]
     pub search_engine: String,
+    #[serde(default = "default_user_agent")]
     pub user_agent: String,
+    #[serde(default = "default_true")]
     pub drm_fairplay_enabled: bool,
+    #[serde(default = "default_true")]
+    pub autoplay_enabled: bool,
+    #[serde(default = "default_hibernation_mins")]
     pub tab_hibernation_mins: u32,
+    #[serde(default = "default_true")]
     pub adblock_enabled: bool,
+    #[serde(default = "default_true")]
+    pub webextensions_enabled: bool,
+    #[serde(default)]
+    pub custom_js: String,
+    #[serde(default)]
     pub custom_css: String,
+    #[serde(default)]
     pub custom_user_agent: String,
+    #[serde(default = "default_favorites")]
+    pub favorites: Vec<FavoriteShortcut>,
 }
 
 impl Default for BrowserConfig {
     fn default() -> Self {
         Self {
-            theme: "eclipse".into(),
-            accent_color: "#F59E0B".into(), // Eclipse Corona Amber / Gold
-            sidebar_width: 275.0,
-            sidebar_collapsed: false,
-            search_engine: "duckduckgo".into(),
-            // Modern macOS Safari User Agent - enables native Apple FairPlay DRM streaming for Netflix, Apple TV, Prime
-            user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15".into(),
+            theme: default_theme(),
+            accent_color: default_accent(),
+            sidebar_width: default_sidebar_width(),
+            sidebar_collapsed: true,
+            search_engine: default_search_engine(),
+            user_agent: default_user_agent(),
             drm_fairplay_enabled: true,
-            tab_hibernation_mins: 15,
+            autoplay_enabled: true,
+            tab_hibernation_mins: default_hibernation_mins(),
             adblock_enabled: true,
-            custom_css: "".into(),
-            custom_user_agent: "".into(),
+            webextensions_enabled: true,
+            custom_js: String::new(),
+            custom_css: String::new(),
+            custom_user_agent: String::new(),
+            favorites: default_favorites(),
         }
     }
 }
@@ -50,41 +158,73 @@ impl BrowserConfig {
     pub fn load() -> Self {
         let path = Self::config_path();
         if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(config) = serde_json::from_str::<Self>(&content) {
-                return config;
+            match serde_json::from_str::<Self>(&content) {
+                Ok(mut config) => {
+                    // The old default was 264 px, which reads as a thick rail
+                    // on modern displays. There is no width editor, so migrate
+                    // anything in the old wide range to the compact default.
+                    if config.sidebar_width < 200.0 || config.sidebar_width > 248.0 {
+                        config.sidebar_width = default_sidebar_width();
+                    }
+                    if config.user_agent.trim().is_empty() {
+                        config.user_agent = default_user_agent();
+                    }
+                    if config.favorites.len() < 3 {
+                        for d in default_favorites() {
+                            if !config.favorites.iter().any(|f| f.url == d.url) {
+                                config.favorites.push(d);
+                                if config.favorites.len() >= 6 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    return config;
+                }
+                Err(err) => {
+                    eprintln!("[eclipse] ignoring unreadable config at {path:?}: {err}");
+                }
             }
         }
         Self::default()
     }
 
+    /// Persist config atomically so a crash during save can never truncate the
+    /// user's settings file.
     pub fn save(&self) {
         let path = Self::config_path();
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(path, json);
+        let Ok(json) = serde_json::to_string_pretty(self) else {
+            return;
+        };
+        let tmp = path.with_extension("json.tmp");
+        if fs::write(&tmp, json).is_ok() && fs::rename(&tmp, &path).is_err() {
+            let _ = fs::remove_file(&tmp);
         }
     }
 
     pub fn get_search_url(&self, query: &str) -> String {
-        let encoded = urlencoding(query);
+        let encoded = urlencode(query);
         match self.search_engine.as_str() {
-            "google" => format!("https://www.google.com/search?q={}", encoded),
-            "brave" => format!("https://search.brave.com/search?q={}", encoded),
-            "ecosia" => format!("https://www.ecosia.org/search?q={}", encoded),
-            "kagi" => format!("https://kagi.com/search?q={}", encoded),
-            _ => format!("https://duckduckgo.com/?q={}", encoded),
+            "google" => format!("https://www.google.com/search?q={encoded}"),
+            "brave" => format!("https://search.brave.com/search?q={encoded}"),
+            "ecosia" => format!("https://www.ecosia.org/search?q={encoded}"),
+            "kagi" => format!("https://kagi.com/search?q={encoded}"),
+            _ => format!("https://duckduckgo.com/?q={encoded}"),
         }
     }
 
     pub fn active_user_agent(&self) -> &str {
-        if !self.custom_user_agent.trim().is_empty() {
-            &self.custom_user_agent
-        } else {
+        let custom = self.custom_user_agent.trim();
+        if custom.is_empty() {
             &self.user_agent
+        } else {
+            custom
         }
     }
 }
 
-fn urlencoding(input: &str) -> String {
+fn urlencode(input: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut encoded = String::with_capacity(input.len());
     for byte in input.bytes() {
         match byte {
@@ -93,9 +233,47 @@ fn urlencoding(input: &str) -> String {
             }
             b' ' => encoded.push('+'),
             _ => {
-                encoded.push_str(&format!("%{:02X}", byte));
+                encoded.push('%');
+                encoded.push(HEX[(byte >> 4) as usize] as char);
+                encoded.push(HEX[(byte & 0x0F) as usize] as char);
             }
         }
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodes_search_queries() {
+        assert_eq!(urlencode("hello world"), "hello+world");
+        assert_eq!(urlencode("a&b=c/d"), "a%26b%3Dc%2Fd");
+        assert_eq!(urlencode("ümlaut"), "%C3%BCmlaut");
+    }
+
+    #[test]
+    fn default_config_is_sane() {
+        let config = BrowserConfig::default();
+        assert_eq!(config.search_engine, "duckduckgo");
+        assert!(config.adblock_enabled);
+        assert_eq!(config.favorites.len(), 9);
+        assert_eq!(config.sidebar_width, 232.0);
+        assert!(config.active_user_agent().contains("Safari"));
+    }
+
+    #[test]
+    fn missing_fields_are_filled_in() {
+        let config: BrowserConfig = serde_json::from_str(r#"{"custom_css":"body{}"}"#).unwrap();
+        assert_eq!(config.theme, "eclipse");
+        assert_eq!(config.tab_hibernation_mins, 15);
+        assert!(!config.favorites.is_empty());
+    }
+
+    #[test]
+    fn an_explicitly_empty_favorites_list_is_kept() {
+        let config: BrowserConfig = serde_json::from_str(r#"{"favorites":[]}"#).unwrap();
+        assert!(config.favorites.is_empty());
+    }
 }

@@ -373,23 +373,11 @@ body {
 }
 
 .pinned-item.active {
-  background: rgba(94, 158, 255, 0.18);
+  background: rgba(94, 158, 255, 0.16);
   border-color: #5E9EFF;
   color: #FFFFFF;
-  transform: scale(1.02);
-  box-shadow: 0 0 0 1.5px rgba(94, 158, 255, 0.5), 0 8px 24px rgba(94, 158, 255, 0.35);
-}
-
-.pinned-item.active::after {
-  content: "";
-  position: absolute;
-  bottom: 3px;
-  width: 14px;
-  height: 3px;
-  border-radius: 2px;
-  background: #5E9EFF;
-  box-shadow: 0 0 8px #5E9EFF;
-  animation: pillGlow 2.5s ease-in-out infinite alternate;
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px rgba(94, 158, 255, 0.45), 0 4px 16px rgba(94, 158, 255, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
 .pinned-item.loading svg,
@@ -400,11 +388,6 @@ body {
 @keyframes favoriteLoadingPulse {
   0% { transform: scale(0.92); opacity: 0.6; filter: drop-shadow(0 0 4px var(--accent)); }
   100% { transform: scale(1.08); opacity: 1; filter: drop-shadow(0 0 12px var(--accent)); }
-}
-
-@keyframes pillGlow {
-  from { opacity: 0.7; transform: scaleX(0.85); }
-  to { opacity: 1; transform: scaleX(1.15); filter: drop-shadow(0 0 6px #5E9EFF); }
 }
 
 .pinned-item svg {
@@ -1063,8 +1046,8 @@ body.floating-popout {
 }
 
 body.floating-popout.sliding-out {
-  animation: sidebarPopoutOut 0.24s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
-  will-change: transform, opacity;
+  animation: sidebarPopoutOut 0.20s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+  will-change: transform;
 }
 
 @keyframes sidebarPopoutIn {
@@ -1079,11 +1062,9 @@ body.floating-popout.sliding-out {
 @keyframes sidebarPopoutOut {
   from {
     transform: translateX(0);
-    opacity: 1;
   }
   to {
     transform: translateX(-100%);
-    opacity: 0.92;
   }
 }
 
@@ -2665,17 +2646,17 @@ function getFaviconHtml(tab) {
 function getFaviconSvg(type) {
   switch ((type || '').toLowerCase()) {
     case 'gmail':
-      return '<svg viewBox="0 0 24 24"><path fill="#EA4335" d="M12 13.5L2.5 6.4V19c0 .8.7 1.5 1.5 1.5h16c.8 0 1.5-.7 1.5-1.5V6.4L12 13.5z"/><path fill="#4285F4" d="M22 6c0-.8-.7-1.5-1.5-1.5H3.5C2.7 4.5 2 5.2 2 6l10 7.5L22 6z"/></svg>';
+      return '<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M1.5 20.5h4V9.8L1.5 6.5v14z"/><path fill="#34A853" d="M18.5 20.5h4v-14L18.5 9.8v10.7z"/><path fill="#EA4335" d="M18.5 4.5l-6.5 5-6.5-5H1.5L12 12.5l10.5-8h-4z"/><path fill="#FBBC05" d="M5.5 9.8L12 14.8l6.5-5V4.5H5.5v5.3z"/></svg>';
     case 'netflix':
-      return '<svg viewBox="0 0 24 24" fill="#E50914"><path d="M5.398 0v24L9.89 12.38V0H5.398zm13.204 0L14.11 12.38V24h4.492V0zm-4.492 12.38L9.89 0h4.22z"/></svg>';
+      return '<svg viewBox="0 0 24 24"><path fill="#B81D24" d="M4 0h4.8v24H4z"/><path fill="#B81D24" d="M15.2 0H20v24h-4.8z"/><path fill="#E50914" d="M4.3 0h4.6l10.8 24h-4.6z"/></svg>';
     case 'youtube':
-      return '<svg viewBox="0 0 24 24" fill="#FF0000"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>';
+      return '<svg viewBox="0 0 24 24"><path fill="#FF0000" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.4 31.4 0 0 0 0 12c0 2 .2 3.9.5 5.8a3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1c.3-1.9.5-3.8.5-5.8 0-2-.2-3.9-.5-5.8z"/><polygon fill="#FFFFFF" points="9.6,15.6 15.6,12 9.6,8.4"/></svg>';
     case 'remotasks':
-      return '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#059669"/><path d="M7 6h6a4 4 0 0 1 4 4c0 2-1.5 3.5-3.5 3.8L18 18h-3l-4-4.5H9.5V18H7V6zm2.5 2v4H13c1.1 0 2-.9 2-2s-.9-2-2-2H9.5z" fill="#FFFFFF"/></svg>';
+      return '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#059669"/><path d="M7.5 6h5.2a3.8 3.8 0 0 1 2.8 1.1 3.5 3.5 0 0 1 1 2.6c0 1.2-.5 2.1-1.4 2.8l2.9 5.5h-3l-2.5-4.8H10.2v4.8H7.5V6zm2.7 2.4v3.2h2.5c.6 0 1.1-.2 1.5-.5.4-.3.6-.8.6-1.3 0-.5-.2-1-.6-1.2a2.3 2.3 0 0 0-1.5-.2h-2.5z" fill="#FFFFFF"/></svg>';
     case 'outlook':
-      return '<svg viewBox="0 0 24 24"><path fill="#0078D4" d="M1 5h14v14H1z"/><circle cx="8" cy="12" r="3.5" fill="#FFFFFF"/><path fill="#28A8EA" d="M15 7.5L23 4v16l-8-3.5V7.5z"/></svg>';
+      return '<svg viewBox="0 0 24 24"><path fill="#0078D4" d="M22 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-9V5h9A1.5 1.5 0 0 1 22 6.5z"/><path fill="#28A8EA" d="M11.5 5h-10A1.5 1.5 0 0 0 0 6.5v11A1.5 1.5 0 0 0 1.5 19h10V5z"/><rect x="2.5" y="7" width="9" height="10" rx="1.5" fill="#004C87"/><circle cx="7" cy="12" r="2.8" fill="none" stroke="#FFFFFF" stroke-width="1.8"/></svg>';
     case 'instagram':
-      return '<svg viewBox="0 0 24 24"><defs><linearGradient id="ig" x1="0%" y1="100%" x2="100%" y2="0%"><stop offset="0%" stop-color="#fdf497"/><stop offset="5%" stop-color="#fdf497"/><stop offset="45%" stop-color="#fd5949"/><stop offset="60%" stop-color="#d6249f"/><stop offset="90%" stop-color="#285AEB"/></linearGradient></defs><rect width="24" height="24" rx="6" fill="url(#ig)"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="#FFFFFF" stroke-width="2"/><circle cx="17.5" cy="6.5" r="1.2" fill="#FFFFFF"/></svg>';
+      return '<svg viewBox="0 0 24 24"><defs><radialGradient id="ig_grad" cx="20%" cy="100%" r="130%"><stop offset="0%" stop-color="#FFDD55"/><stop offset="25%" stop-color="#FF543E"/><stop offset="50%" stop-color="#C837AB"/><stop offset="100%" stop-color="#3771C8"/></radialGradient></defs><rect width="24" height="24" rx="6.5" fill="url(#ig_grad)"/><rect x="5.5" y="5.5" width="13" height="13" rx="4" fill="none" stroke="#FFFFFF" stroke-width="1.8"/><circle cx="12" cy="12" r="3.2" fill="none" stroke="#FFFFFF" stroke-width="1.8"/><circle cx="15.8" cy="8.2" r="0.9" fill="#FFFFFF"/></svg>';
     case 'github':
       return '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>';
     case 'apple':
@@ -2684,7 +2665,7 @@ function getFaviconSvg(type) {
     case 'discord':
       return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
     case 'reddit':
-      return '<svg viewBox="0 0 24 24" fill="#FF4500"><circle cx="12" cy="12" r="10"/></svg>';
+      return '<svg viewBox="0 0 24 24" fill="#FF4500"><circle cx="12" cy="12" r="10"/><path fill="#FFFFFF" d="M16.5 12a1.5 1.5 0 0 0-1.4 1 5.3 5.3 0 0 0-3.1-.9l.5-2.5 1.8.4a1.2 1.2 0 1 0 .2-.8l-2.2-.5a.4.4 0 0 0-.5.3l-.7 3.1a5.3 5.3 0 0 0-3.1.9 1.5 1.5 0 1 0-1.6 2.5c0 .2 0 .4 0 .6 0 2 2.4 3.7 5.4 3.7s5.4-1.7 5.4-3.7c0-.2 0-.4 0-.6a1.5 1.5 0 0 0-.8-2.5zm-6.7 1.5c.4 0 .8.3.8.8s-.4.8-.8.8-.8-.4-.8-.8.4-.8.8-.8zm4.4 3.2a3.3 3.3 0 0 1-4.4 0 .3.3 0 1 1 .4-.4 2.8 2.8 0 0 0 3.6 0 .3.3 0 0 1 .4.4zm-.2-2.4a.8.8 0 1 1 .8-.8c0 .5-.4.8-.8.8z"/></svg>';
     case 'spotify':
       return '<svg viewBox="0 0 24 24" fill="#1DB954"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>';
     case 'eclipse':
@@ -2693,6 +2674,7 @@ function getFaviconSvg(type) {
       return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>';
   }
 }
+
 
 window.addEventListener('keydown', (e) => {
   if (!e.isTrusted) return;
@@ -2789,7 +2771,7 @@ document.addEventListener('mouseleave', () => {
     if (hoverDebounceTimer) clearTimeout(hoverDebounceTimer);
     hoverDebounceTimer = setTimeout(() => {
       sendCommand({ action: 'hover_collapse_sidebar' });
-    }, 150);
+    }, 40);
   }
 });
 

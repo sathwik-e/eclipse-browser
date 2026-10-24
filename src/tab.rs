@@ -450,8 +450,10 @@ pub fn canonicalize_eclipse_url(url: &str) -> String {
         return "eclipse://newtab".to_string();
     }
     url.to_string()
-}pub fn build_extension_support_script(enabled: bool, custom_js: &str) -> String {
-    if !enabled && custom_js.trim().is_empty() {
+}
+
+pub fn build_extension_support_script(enabled: bool, custom_js: &str) -> String {
+    if !enabled || custom_js.trim().is_empty() {
         return String::new();
     }
     let encoded_custom_js = serde_json::to_string(custom_js).unwrap_or_else(|_| "\"\"".into());

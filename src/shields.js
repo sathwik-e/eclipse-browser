@@ -22,7 +22,11 @@
     '.adsbygoogle, [id^="google_ads_"], .ad-banner, .ad-unit,',
     '.advertisement, .ad-container, [data-ad-slot],',
     '.ytp-ad-overlay-container, .ytp-ad-message-container,',
-    '.trc_related_container, .outbrain, .taboola {',
+    'ytd-ad-slot-renderer, #player-ads, .sparkles-light-cta,',
+    'ytd-promoted-sparkles-web-renderer, ytd-display-ad-renderer,',
+    'ytd-banner-promo-renderer, ytd-statement-banner-renderer,',
+    '.trc_related_container, .outbrain, .taboola,',
+    '[aria-label*="Sponsored" i], [aria-label*="advertisement" i] {',
     'display: none !important; visibility: hidden !important;',
     'height: 0 !important; max-height: 0 !important; overflow: hidden !important;',
     'opacity: 0 !important; pointer-events: none !important;',
@@ -58,11 +62,11 @@
 
   function skipYouTubeAd() {
     rafPending = false;
-    var player = document.getElementById('movie_player');
+    var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
     if (!player) return;
 
     var skipButton = player.querySelector(
-      '.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button-slot'
+      '.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button-slot, button.ytp-ad-skip-button-text'
     );
     if (skipButton) {
       skipButton.click();
@@ -74,14 +78,10 @@
 
     var ad = player.querySelector('.ad-showing, .ad-interrupting');
     if (ad) {
-      var video = player.querySelector('video');
+      var video = player.querySelector('video') || document.querySelector('video');
       if (video && isFinite(video.duration) && video.duration > 0 && !video.paused) {
         try {
-          video.playbackRate = 16.0;
-          video.muted = true;
-          if (video.duration - video.currentTime > 0.5) {
-            video.currentTime = video.duration - 0.1;
-          }
+          video.currentTime = video.duration;
         } catch (_) {}
       }
     }
@@ -89,10 +89,10 @@
 
   function startYouTubeWatcher() {
     if (observer || !isYouTube()) return;
-    var player = document.getElementById('movie_player');
+    var player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
     if (!player) {
-      if (watcherRetries++ < 15) {
-        setTimeout(startYouTubeWatcher, 600);
+      if (watcherRetries++ < 25) {
+        setTimeout(startYouTubeWatcher, 350);
       }
       return;
     }

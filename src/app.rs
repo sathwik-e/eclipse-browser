@@ -586,7 +586,7 @@ impl BrowserApp {
 
             let proxy = self.proxy.clone();
             std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(260));
+                std::thread::sleep(Duration::from_millis(215));
                 let _ = proxy.send_event(UserEvent::FinishSidebarCollapse);
             });
         }

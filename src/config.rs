@@ -23,7 +23,7 @@ fn default_search_engine() -> String {
 }
 
 fn default_user_agent() -> String {
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15".into()
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15".into()
 }
 
 fn default_hibernation_mins() -> u32 {

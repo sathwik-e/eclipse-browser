@@ -20,11 +20,8 @@
 
   var COSMETIC_CSS = [
     '.adsbygoogle, [id^="google_ads_"], .ad-banner, .ad-unit,',
-    '.advertisement, .ad-container, [data-ad-slot], .ytp-ad-overlay-container,',
-    '.ytp-ad-message-container, ytd-promoted-sparkles-web-renderer,',
-    'ytd-display-ad-renderer, ytd-banner-promo-renderer,',
-    'ytd-ad-slot-renderer, #player-ads, .sparkles-light-cta,',
-    'div[id*="ad-slot"], div[class*="ad_unit"], div[class*="Sponsored"],',
+    '.advertisement, .ad-container, [data-ad-slot],',
+    '.ytp-ad-overlay-container, .ytp-ad-message-container,',
     '.trc_related_container, .outbrain, .taboola {',
     'display: none !important; visibility: hidden !important;',
     'height: 0 !important; max-height: 0 !important; overflow: hidden !important;',
@@ -61,34 +58,40 @@
 
   function skipYouTubeAd() {
     rafPending = false;
-    var skipButton = document.querySelector(
-      '.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern'
-    );
-    if (skipButton) skipButton.click();
+    var player = document.getElementById('movie_player');
+    if (!player) return;
 
-    var closeButton = document.querySelector('.ytp-ad-overlay-close-button');
+    var skipButton = player.querySelector(
+      '.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button-slot'
+    );
+    if (skipButton) {
+      skipButton.click();
+      return;
+    }
+
+    var closeButton = player.querySelector('.ytp-ad-overlay-close-button');
     if (closeButton) closeButton.click();
 
-    if (!document.querySelector('.ad-showing, .ad-interrupting')) return;
-    var video = document.querySelector('video');
-    if (video && isFinite(video.duration) && video.duration > 0) {
-      try {
-        video.currentTime = video.duration;
-      } catch (_) {}
+    var ad = player.querySelector('.ad-showing, .ad-interrupting');
+    if (ad) {
+      var video = player.querySelector('video');
+      if (video && isFinite(video.duration) && video.duration > 0 && !video.paused) {
+        try {
+          video.playbackRate = 16.0;
+          video.muted = true;
+          if (video.duration - video.currentTime > 0.5) {
+            video.currentTime = video.duration - 0.1;
+          }
+        } catch (_) {}
+      }
     }
   }
 
   function startYouTubeWatcher() {
     if (observer || !isYouTube()) return;
-    if (!document.documentElement) {
-      if (watcherRetries++ < 20) {
-        setTimeout(startYouTubeWatcher, 300);
-      }
-      return;
-    }
-    var target = document.getElementById('movie_player') || document.body;
-    if (!target) {
-      if (watcherRetries++ < 20) {
+    var player = document.getElementById('movie_player');
+    if (!player) {
+      if (watcherRetries++ < 15) {
         setTimeout(startYouTubeWatcher, 600);
       }
       return;
@@ -99,7 +102,7 @@
       rafPending = true;
       requestAnimationFrame(skipYouTubeAd);
     });
-    observer.observe(target, {
+    observer.observe(player, {
       childList: true,
       subtree: true,
       attributes: true,

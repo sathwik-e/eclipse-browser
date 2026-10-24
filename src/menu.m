@@ -305,6 +305,21 @@ void eclipse_style_webview_card(void *viewPtr) {
         view.layer.masksToBounds = YES;
         view.layer.borderWidth = 1.0;
         view.layer.borderColor = [NSColor colorWithCalibratedWhite:1.0 alpha:0.12].CGColor;
+        view.layer.drawsAsynchronously = YES;
+
+        if ([view isKindOfClass:[WKWebView class]]) {
+            WKWebView *wv = (WKWebView *)view;
+            WKWebViewConfiguration *config = [wv configuration];
+            [config setAllowsAirPlayForMediaPlayback:YES];
+            [config setMediaTypesRequiringUserActionForPlayback:WKAudiovisualMediaTypeNone];
+
+            WKPreferences *prefs = [config preferences];
+            @try {
+                [prefs setValue:@YES forKey:@"acceleratedDrawingEnabled"];
+                [prefs setValue:@YES forKey:@"mediaDataLoadsAutomatically"];
+            } @catch (id _) {}
+        }
+
         eclipse_enable_swipe_gestures(viewPtr);
     }
 }

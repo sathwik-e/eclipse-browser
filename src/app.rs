@@ -470,17 +470,18 @@ impl BrowserApp {
                 .map(|t| !t.is_pinned && (t.url == "eclipse://newtab" || t.url.is_empty()))
                 .unwrap_or(false);
 
+            let target_url = normalize_url(&fav.url, &self.config);
             if active_is_empty_newtab {
                 let active_id = self.active_tab_id;
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == active_id) {
                     tab.is_pinned = true;
                     tab.favorite_index = Some(index);
                     tab.title = fav.title.clone();
-                    tab.load_url(&fav.url);
+                    tab.load_url(&target_url);
                 }
                 self.select_tab(active_id);
             } else {
-                let new_id = self.create_tab(&fav.url, true);
+                let new_id = self.create_tab(&target_url, true);
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == new_id) {
                     tab.is_pinned = true;
                     tab.favorite_index = Some(index);
@@ -1413,6 +1414,15 @@ pub fn normalize_url(input: &str, config: &BrowserConfig) -> String {
     }
 
     let lower = trimmed.to_ascii_lowercase();
+    if lower == "https://youtube.com" || lower == "http://youtube.com" {
+        return "https://www.youtube.com".to_string();
+    }
+    if lower.starts_with("https://youtube.com/") {
+        return format!("https://www.youtube.com{}", &trimmed["https://youtube.com".len()..]);
+    }
+    if lower.starts_with("http://youtube.com/") {
+        return format!("https://www.youtube.com{}", &trimmed["http://youtube.com".len()..]);
+    }
     if lower.starts_with("http://") || lower.starts_with("https://") {
         return trimmed.to_string();
     }
@@ -1426,6 +1436,12 @@ pub fn normalize_url(input: &str, config: &BrowserConfig) -> String {
         }
         if lower.starts_with("127.0.0.1:") || lower.starts_with("127.0.0.1/") {
             return format!("http://{trimmed}");
+        }
+        if lower == "youtube.com" {
+            return "https://www.youtube.com".to_string();
+        }
+        if lower.starts_with("youtube.com/") {
+            return format!("https://www.youtube.com{}", &trimmed["youtube.com".len()..]);
         }
         if trimmed.contains('.') && !lower.starts_with("file:") && !lower.starts_with("javascript:")
         {

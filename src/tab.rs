@@ -450,9 +450,7 @@ pub fn canonicalize_eclipse_url(url: &str) -> String {
         return "eclipse://newtab".to_string();
     }
     url.to_string()
-}
-
-pub fn build_extension_support_script(enabled: bool, custom_js: &str) -> String {
+}pub fn build_extension_support_script(enabled: bool, custom_js: &str) -> String {
     if !enabled && custom_js.trim().is_empty() {
         return String::new();
     }
@@ -460,7 +458,14 @@ pub fn build_extension_support_script(enabled: bool, custom_js: &str) -> String 
     format!(
         r##"(function () {{
             'use strict';
-            if ({enabled}) {{
+            var host = (location.hostname || '').toLowerCase();
+            var isGoogleMedia = host === 'youtube.com' || host.endsWith('.youtube.com') ||
+                                host === 'youtu.be' || host.endsWith('.youtu.be') ||
+                                host === 'google.com' || host.endsWith('.google.com');
+
+            // Do not inject fake Chrome runtime onto Google/YouTube sites without user scripts,
+            // as YouTube attempts to connect to a Google Cast channel and stalls on timeouts.
+            if ({enabled} && (!isGoogleMedia || {encoded_custom_js}.trim().length > 0)) {{
                 try {{
                     if (!window.chrome) window.chrome = {{}};
                     if (!window.chrome.runtime) {{
@@ -483,9 +488,9 @@ pub fn build_extension_support_script(enabled: bool, custom_js: &str) -> String 
                             }},
                             sendMessage: function(msg, cb) {{
                                 if (typeof cb === 'function') {{
-                                    setTimeout(function() {{ cb({{ success: true }}); }}, 0);
+                                    setTimeout(function() {{ cb(undefined); }}, 0);
                                 }}
-                                return Promise.resolve({{ success: true }});
+                                return Promise.resolve(undefined);
                             }},
                             onMessage: {{
                                 addListener: function() {{}},
@@ -493,11 +498,20 @@ pub fn build_extension_support_script(enabled: bool, custom_js: &str) -> String 
                                 hasListener: function() {{ return false; }}
                             }},
                             connect: function() {{
-                                return {{
+                                var port = {{
+                                    name: '',
                                     postMessage: function() {{}},
-                                    onMessage: {{ addListener: function() {{}} }},
-                                    onDisconnect: {{ addListener: function() {{}} }}
+                                    onMessage: {{ addListener: function() {{}}, removeListener: function() {{}} }},
+                                    onDisconnect: {{
+                                        addListener: function(fn) {{
+                                            if (typeof fn === 'function') {{
+                                                setTimeout(function() {{ fn(port); }}, 0);
+                                            }}
+                                        }},
+                                        removeListener: function() {{}}
+                                    }}
                                 }};
+                                return port;
                             }}
                         }};
 
@@ -563,8 +577,8 @@ pub fn build_extension_support_script(enabled: bool, custom_js: &str) -> String 
                                 return Promise.resolve(activeTab);
                             }},
                             sendMessage: function(tabId, msg, cb) {{
-                                if (typeof cb === 'function') cb({{ success: true }});
-                                return Promise.resolve({{ success: true }});
+                                if (typeof cb === 'function') cb(undefined);
+                                return Promise.resolve(undefined);
                             }}
                         }};
 
@@ -580,7 +594,7 @@ pub fn build_extension_support_script(enabled: bool, custom_js: &str) -> String 
                         }}
                     }}
                 }} catch (_) {{}}
-            }}
+            }}}}
 
             var customScript = {encoded_custom_js};
             if (customScript && customScript.trim()) {{

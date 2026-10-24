@@ -105,14 +105,15 @@ impl Tab {
         let proxy_download_started = proxy.clone();
         let proxy_download_finished = proxy.clone();
 
+        let is_adblock_active = is_adblock_active_for_url(&self.url, config);
         let init_script = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            build_config_seed_script(config),
+            build_config_seed_script(config, Some(&self.url)),
             build_bridge_script(&self.token),
             build_drm_script(config.drm_fairplay_enabled),
-            build_shields_script(&self.token, config.adblock_enabled),
+            build_shields_script(&self.token, is_adblock_active),
             build_custom_css_script(&config.custom_css),
-            build_extension_support_script(config.webextensions_enabled, &config.custom_js),
+            build_extension_support_script(&self.url, config),
         );
 
         let target_url = tab_webview_url(&self.url);
@@ -204,6 +205,7 @@ impl Tab {
             let ptr = (&*ns_view) as *const _ as *mut std::ffi::c_void;
             crate::macos_menu::style_webview_card(ptr);
             crate::macos_menu::enable_swipe_gestures(ptr);
+            crate::macos_menu::install_native_adblocker(ptr, is_adblock_active);
         }
 
         webview
@@ -347,30 +349,44 @@ impl Tab {
 
     /// Push the current configuration into this page without leaking the
     /// browser config to ordinary websites.
-    pub fn sync_config(&self, config: &BrowserConfig) {
+    pub fn sync_config(&self, config: &BrowserConfig, active_url: Option<&str>) {
         let Ok(json) = serde_json::to_string(config) else {
             return;
         };
+        let is_adblock_active = is_adblock_active_for_url(&self.url, config);
+        let act_url = active_url.unwrap_or(&self.url);
         let script = format!(
             r##"(function () {{
                 var cfg = {json};
+                var actUrl = {act_url_js};
                 try {{
                     if (location.protocol === 'eclipse:') {{
                         window.__ECLIPSE_CONFIG__ = cfg;
+                        window.__ECLIPSE_ACTIVE_URL__ = actUrl;
                         if (typeof window.onEclipseConfigUpdated === 'function') {{
-                            window.onEclipseConfigUpdated(cfg);
+                            window.onEclipseConfigUpdated(cfg, actUrl);
                         }}
                     }}
                 }} catch (_) {{}}
                 try {{
                     if (typeof window.__eclipseShields === 'function') {{
-                        window.__eclipseShields({secret}, cfg.adblock_enabled !== false);
+                        window.__eclipseShields({secret}, {is_adblock_active});
                     }}
                 }} catch (_) {{}}
             }})();"##,
-            secret = js_string(&self.token)
+            secret = js_string(&self.token),
+            act_url_js = js_string(act_url),
+            is_adblock_active = if is_adblock_active { "true" } else { "false" }
         );
         self.evaluate_script(&script);
+
+        #[cfg(target_os = "macos")]
+        if let Some(ref wv) = self.webview {
+            use wry::WebViewExtMacOS;
+            let ns_view = wv.webview();
+            let ptr = (&*ns_view) as *const _ as *mut std::ffi::c_void;
+            crate::macos_menu::set_native_adblocker_enabled(ptr, is_adblock_active);
+        }
     }
 
     pub fn hibernate(&mut self) {
@@ -452,151 +468,248 @@ pub fn canonicalize_eclipse_url(url: &str) -> String {
     url.to_string()
 }
 
-pub fn build_extension_support_script(enabled: bool, custom_js: &str) -> String {
-    if !enabled || custom_js.trim().is_empty() {
+pub fn is_adblock_active_for_url(url: &str, config: &BrowserConfig) -> bool {
+    if !config.adblock_enabled {
+        return false;
+    }
+    if let Ok(parsed) = url::Url::parse(url) {
+        if let Some(host) = parsed.host_str() {
+            let host_clean = host.to_lowercase();
+            for domain in &config.adblock_disabled_domains {
+                let d_clean = domain.trim().to_lowercase();
+                if !d_clean.is_empty() && (host_clean == d_clean || host_clean.ends_with(&format!(".{d_clean}"))) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn extension_matches_url(pattern: &str, url: &str) -> bool {
+    let p = pattern.trim();
+    if p.is_empty() {
+        return false;
+    }
+    if p == "<all_urls>" || p == "*" || p == "*/*" {
+        return url.starts_with("http://") || url.starts_with("https://");
+    }
+    if let Some(host_part) = p.strip_prefix("*://*.").and_then(|s| s.strip_suffix("/*")) {
+        return url.contains(host_part);
+    }
+    if let Some(host_part) = p.strip_prefix("*://").and_then(|s| s.strip_suffix("/*")) {
+        return url.contains(host_part);
+    }
+    url.contains(p)
+}
+
+pub fn build_extension_support_script(url: &str, config: &BrowserConfig) -> String {
+    if !config.webextensions_enabled {
         return String::new();
     }
-    let encoded_custom_js = serde_json::to_string(custom_js).unwrap_or_else(|_| "\"\"".into());
+
+    let mut ext_scripts = Vec::new();
+    let mut ext_styles = Vec::new();
+
+    for ext in &config.installed_extensions {
+        if !ext.enabled {
+            continue;
+        }
+        let matches = ext.matches.iter().any(|pattern| extension_matches_url(pattern, url));
+        if matches {
+            for script in &ext.content_scripts {
+                if !script.trim().is_empty() {
+                    ext_scripts.push(script.clone());
+                }
+            }
+            for css in &ext.content_css {
+                if !css.trim().is_empty() {
+                    ext_styles.push(css.clone());
+                }
+            }
+        }
+    }
+
+    let has_custom_js = !config.custom_js.trim().is_empty();
+    if ext_scripts.is_empty() && ext_styles.is_empty() && !has_custom_js {
+        return String::new();
+    }
+
+    let encoded_custom_js = serde_json::to_string(&config.custom_js).unwrap_or_else(|_| "\"\"".into());
+    let encoded_ext_scripts = serde_json::to_string(&ext_scripts).unwrap_or_else(|_| "[]".into());
+    let encoded_ext_styles = serde_json::to_string(&ext_styles).unwrap_or_else(|_| "[]".into());
+
     format!(
         r##"(function () {{
             'use strict';
-            var host = (location.hostname || '').toLowerCase();
-            var isGoogleMedia = host === 'youtube.com' || host.endsWith('.youtube.com') ||
-                                host === 'youtu.be' || host.endsWith('.youtu.be') ||
-                                host === 'google.com' || host.endsWith('.google.com');
+            try {{
+                if (!window.chrome) window.chrome = {{}};
+                if (!window.chrome.runtime) {{
+                    var storageMap = {{}};
+                    try {{
+                        storageMap = JSON.parse(localStorage.getItem('__eclipse_ext_storage') || '{{}}');
+                    }} catch (_) {{}}
 
-            // Do not inject fake Chrome runtime onto Google/YouTube sites without user scripts,
-            // as YouTube attempts to connect to a Google Cast channel and stalls on timeouts.
-            if ({enabled} && (!isGoogleMedia || {encoded_custom_js}.trim().length > 0)) {{
-                try {{
-                    if (!window.chrome) window.chrome = {{}};
-                    if (!window.chrome.runtime) {{
-                        var storageMap = {{}};
-                        try {{
-                            storageMap = JSON.parse(localStorage.getItem('__eclipse_ext_storage') || '{{}}');
-                        }} catch (_) {{}}
-
-                        var runtime = {{
-                            id: 'eclipse-webextension-engine',
-                            getURL: function(path) {{
-                                return 'eclipse://extensions/' + String(path || '').replace(/^\//, '');
-                            }},
-                            getManifest: function() {{
-                                return {{
-                                    name: 'Eclipse WebExtension Engine',
-                                    version: '1.2.0',
-                                    manifest_version: 3
-                                }};
-                            }},
-                            sendMessage: function(msg, cb) {{
-                                if (typeof cb === 'function') {{
-                                    setTimeout(function() {{ cb(undefined); }}, 0);
-                                }}
-                                return Promise.resolve(undefined);
-                            }},
-                            onMessage: {{
-                                addListener: function() {{}},
-                                removeListener: function() {{}},
-                                hasListener: function() {{ return false; }}
-                            }},
-                            connect: function() {{
-                                var port = {{
-                                    name: '',
-                                    postMessage: function() {{}},
-                                    onMessage: {{ addListener: function() {{}}, removeListener: function() {{}} }},
-                                    onDisconnect: {{
-                                        addListener: function(fn) {{
-                                            if (typeof fn === 'function') {{
-                                                setTimeout(function() {{ fn(port); }}, 0);
-                                            }}
-                                        }},
-                                        removeListener: function() {{}}
-                                    }}
-                                }};
-                                return port;
+                    var runtime = {{
+                        id: 'eclipse-webextension-engine',
+                        getURL: function(path) {{
+                            return 'eclipse://extensions/' + String(path || '').replace(/^\//, '');
+                        }},
+                        getManifest: function() {{
+                            return {{
+                                name: 'Eclipse WebExtension Engine',
+                                version: '2.0.0',
+                                manifest_version: 3
+                            }};
+                        }},
+                        sendMessage: function(msg, cb) {{
+                            if (typeof cb === 'function') {{
+                                setTimeout(function() {{ cb(undefined); }}, 0);
                             }}
-                        }};
+                            return Promise.resolve(undefined);
+                        }},
+                        onMessage: {{
+                            addListener: function() {{}},
+                            removeListener: function() {{}},
+                            hasListener: function() {{ return false; }}
+                        }},
+                        connect: function() {{
+                            var port = {{
+                                name: '',
+                                postMessage: function() {{}},
+                                onMessage: {{ addListener: function() {{}}, removeListener: function() {{}} }},
+                                onDisconnect: {{
+                                    addListener: function(fn) {{
+                                        if (typeof fn === 'function') {{
+                                            setTimeout(function() {{ fn(port); }}, 0);
+                                        }}
+                                    }},
+                                    removeListener: function() {{}}
+                                }}
+                            }};
+                            return port;
+                        }}
+                    }};
 
-                        var storage = {{
-                            local: {{
-                                get: function(keys, cb) {{
-                                    var result = {{}};
-                                    if (typeof keys === 'string') {{
-                                        result[keys] = storageMap[keys];
-                                    }} else if (Array.isArray(keys)) {{
-                                        keys.forEach(function(k) {{ result[k] = storageMap[k]; }});
-                                    }} else if (keys && typeof keys === 'object') {{
-                                        Object.keys(keys).forEach(function(k) {{
-                                            result[k] = (storageMap[k] !== undefined) ? storageMap[k] : keys[k];
-                                        }});
-                                    }} else {{
-                                        result = Object.assign({{}}, storageMap);
-                                    }}
-                                    if (typeof cb === 'function') cb(result);
-                                    return Promise.resolve(result);
-                                }},
-                                set: function(items, cb) {{
-                                    if (items && typeof items === 'object') {{
-                                        Object.assign(storageMap, items);
-                                        try {{
-                                            localStorage.setItem('__eclipse_ext_storage', JSON.stringify(storageMap));
-                                        }} catch (_) {{}}
-                                    }}
-                                    if (typeof cb === 'function') cb();
-                                    return Promise.resolve();
-                                }},
-                                remove: function(keys, cb) {{
-                                    var arr = Array.isArray(keys) ? keys : [keys];
-                                    arr.forEach(function(k) {{ delete storageMap[k]; }});
+                    var storage = {{
+                        local: {{
+                            get: function(keys, cb) {{
+                                var result = {{}};
+                                if (typeof keys === 'string') {{
+                                    result[keys] = storageMap[keys];
+                                }} else if (Array.isArray(keys)) {{
+                                    keys.forEach(function(k) {{ result[k] = storageMap[k]; }});
+                                }} else if (keys && typeof keys === 'object') {{
+                                    Object.keys(keys).forEach(function(k) {{
+                                        result[k] = (storageMap[k] !== undefined) ? storageMap[k] : keys[k];
+                                    }});
+                                }} else {{
+                                    result = Object.assign({{}}, storageMap);
+                                }}
+                                if (typeof cb === 'function') cb(result);
+                                return Promise.resolve(result);
+                            }},
+                            set: function(items, cb) {{
+                                if (items && typeof items === 'object') {{
+                                    Object.assign(storageMap, items);
                                     try {{
                                         localStorage.setItem('__eclipse_ext_storage', JSON.stringify(storageMap));
                                     }} catch (_) {{}}
-                                    if (typeof cb === 'function') cb();
-                                    return Promise.resolve();
-                                }},
-                                clear: function(cb) {{
-                                    storageMap = {{}};
-                                    try {{
-                                        localStorage.removeItem('__eclipse_ext_storage');
-                                    }} catch (_) {{}}
-                                    if (typeof cb === 'function') cb();
-                                    return Promise.resolve();
                                 }}
+                                if (typeof cb === 'function') cb();
+                                return Promise.resolve();
                             }},
-                            sync: null
-                        }};
-                        storage.sync = storage.local;
-
-                        var tabs = {{
-                            query: function(info, cb) {{
-                                var activeTab = [{{
-                                    id: 1,
-                                    active: true,
-                                    url: location.href,
-                                    title: document.title
-                                }}];
-                                if (typeof cb === 'function') cb(activeTab);
-                                return Promise.resolve(activeTab);
+                            remove: function(keys, cb) {{
+                                var arr = Array.isArray(keys) ? keys : [keys];
+                                arr.forEach(function(k) {{ delete storageMap[k]; }});
+                                try {{
+                                    localStorage.setItem('__eclipse_ext_storage', JSON.stringify(storageMap));
+                                }} catch (_) {{}}
+                                if (typeof cb === 'function') cb();
+                                return Promise.resolve();
                             }},
-                            sendMessage: function(tabId, msg, cb) {{
-                                if (typeof cb === 'function') cb(undefined);
-                                return Promise.resolve(undefined);
+                            clear: function(cb) {{
+                                storageMap = {{}};
+                                try {{
+                                    localStorage.removeItem('__eclipse_ext_storage');
+                                }} catch (_) {{}}
+                                if (typeof cb === 'function') cb();
+                                return Promise.resolve();
                             }}
-                        }};
+                        }},
+                        sync: null
+                    }};
+                    storage.sync = storage.local;
 
-                        window.chrome.runtime = runtime;
-                        window.chrome.storage = storage;
-                        window.chrome.tabs = tabs;
-                        window.chrome.extension = {{
-                            getURL: runtime.getURL,
-                            inIncognitoContext: false
-                        }};
-                        if (!window.browser) {{
-                            window.browser = window.chrome;
+                    var tabs = {{
+                        query: function(info, cb) {{
+                            var activeTab = [{{
+                                id: 1,
+                                active: true,
+                                url: location.href,
+                                title: document.title
+                            }}];
+                            if (typeof cb === 'function') cb(activeTab);
+                            return Promise.resolve(activeTab);
+                        }},
+                        sendMessage: function(tabId, msg, cb) {{
+                            if (typeof cb === 'function') cb(undefined);
+                            return Promise.resolve(undefined);
+                        }},
+                        create: function(props, cb) {{
+                            if (props && props.url) window.open(props.url, '_blank');
+                            if (typeof cb === 'function') cb({{ id: 2, url: props ? props.url : '' }});
+                            return Promise.resolve({{ id: 2, url: props ? props.url : '' }});
                         }}
+                    }};
+
+                    var action = {{
+                        setTitle: function() {{}},
+                        setIcon: function() {{}},
+                        setBadgeText: function() {{}},
+                        setBadgeBackgroundColor: function() {{}},
+                        onClicked: {{ addListener: function() {{}}, removeListener: function() {{}} }}
+                    }};
+
+                    window.chrome.runtime = runtime;
+                    window.chrome.storage = storage;
+                    window.chrome.tabs = tabs;
+                    window.chrome.action = action;
+                    window.chrome.browserAction = action;
+                    window.chrome.extension = {{
+                        getURL: runtime.getURL,
+                        inIncognitoContext: false
+                    }};
+                    if (!window.browser) {{
+                        window.browser = window.chrome;
                     }}
-                }} catch (_) {{}}
-            }}}}
+                }}
+            }} catch (_) {{}}
+
+            var extStyles = {encoded_ext_styles};
+            if (Array.isArray(extStyles) && extStyles.length > 0) {{
+                function injectExtStyles() {{
+                    extStyles.forEach(function(css) {{
+                        var styleEl = document.createElement('style');
+                        styleEl.className = '__eclipse_extension_style';
+                        styleEl.textContent = css;
+                        (document.head || document.documentElement).appendChild(styleEl);
+                    }});
+                }}
+                if (document.head || document.documentElement) injectExtStyles();
+                else document.addEventListener('DOMContentLoaded', injectExtStyles, {{ once: true }});
+            }}
+
+            var extScripts = {encoded_ext_scripts};
+            if (Array.isArray(extScripts) && extScripts.length > 0) {{
+                extScripts.forEach(function(code) {{
+                    try {{
+                        (new Function(code))();
+                    }} catch (err) {{
+                        console.warn('[Eclipse Extension Script Error]', err);
+                    }}
+                }});
+            }}
 
             var customScript = {encoded_custom_js};
             if (customScript && customScript.trim()) {{
@@ -642,13 +755,15 @@ pub fn build_custom_css_script(css: &str) -> String {
     )
 }
 
-fn build_config_seed_script(config: &BrowserConfig) -> String {
+fn build_config_seed_script(config: &BrowserConfig, active_url: Option<&str>) -> String {
     let json = serde_json::to_string(config).unwrap_or_else(|_| "{}".into());
+    let act_url = js_string(active_url.unwrap_or(""));
     format!(
         r##"(function () {{
             try {{
                 if (location.protocol === 'eclipse:') {{
                     window.__ECLIPSE_CONFIG__ = {json};
+                    window.__ECLIPSE_ACTIVE_URL__ = {act_url};
                 }}
             }} catch (_) {{}}
         }})();"##
@@ -1068,5 +1183,30 @@ mod tests {
         );
         assert_eq!(resolve_download_name("", "https://example.com/"), None);
         assert!(!sanitize_file_name("../../etc/passwd").contains('/'));
+    }
+
+    #[test]
+    fn test_adblock_site_toggling_and_extension_matching() {
+        let mut cfg = BrowserConfig::default();
+        cfg.adblock_enabled = true;
+        cfg.adblock_disabled_domains = vec!["net77.cc".into(), "youtube.com".into()];
+
+        // Site in allowlist is not adblocked
+        assert!(!is_adblock_active_for_url("https://net77.cc/home", &cfg));
+        assert!(!is_adblock_active_for_url("https://sub.net77.cc/video", &cfg));
+        assert!(!is_adblock_active_for_url("https://www.youtube.com/watch?v=123", &cfg));
+
+        // Other sites are adblocked
+        assert!(is_adblock_active_for_url("https://github.com", &cfg));
+        assert!(is_adblock_active_for_url("https://apple.com", &cfg));
+
+        // When adblock is globally disabled, all sites return false
+        cfg.adblock_enabled = false;
+        assert!(!is_adblock_active_for_url("https://github.com", &cfg));
+
+        // Extension URL matching
+        assert!(extension_matches_url("*://*.youtube.com/*", "https://www.youtube.com/watch?v=abc"));
+        assert!(extension_matches_url("<all_urls>", "https://example.org"));
+        assert!(!extension_matches_url("*://*.youtube.com/*", "https://vimeo.com/123"));
     }
 }

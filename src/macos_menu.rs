@@ -25,6 +25,8 @@ unsafe extern "C" {
     );
     fn eclipse_install_edge_monitor(expand_cb: extern "C" fn(), collapse_cb: extern "C" fn());
     fn eclipse_set_hover_expanded(is_expanded: i32, sidebar_width: f64);
+    fn eclipse_install_native_adblocker(view_ptr: *mut std::ffi::c_void, enabled: i32);
+    fn eclipse_set_native_adblocker_enabled(view_ptr: *mut std::ffi::c_void, enabled: i32);
 }
 
 static MENU_PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
@@ -146,3 +148,20 @@ pub fn enable_swipe_gestures(view_ptr: *mut std::ffi::c_void) {
         }
     }
 }
+
+pub fn install_native_adblocker(view_ptr: *mut std::ffi::c_void, enabled: bool) {
+    if !view_ptr.is_null() {
+        unsafe {
+            eclipse_install_native_adblocker(view_ptr, if enabled { 1 } else { 0 });
+        }
+    }
+}
+
+pub fn set_native_adblocker_enabled(view_ptr: *mut std::ffi::c_void, enabled: bool) {
+    if !view_ptr.is_null() {
+        unsafe {
+            eclipse_set_native_adblocker_enabled(view_ptr, if enabled { 1 } else { 0 });
+        }
+    }
+}
+

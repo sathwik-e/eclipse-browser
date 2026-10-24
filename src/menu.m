@@ -50,11 +50,14 @@ static NSMenu *EclipseMenu(NSString *title) {
     return [[NSMenu alloc] initWithTitle:title];
 }
 
+void eclipse_compile_content_rule_list_if_needed(void);
+
 void eclipse_install_menu(EclipseMenuCallback callback) {
     @autoreleasepool {
         [NSApplication sharedApplication];
         gCallback = callback;
         gMenuTarget = [[EclipseMenuTarget alloc] init];
+        eclipse_compile_content_rule_list_if_needed();
 
         NSMenu *mainMenu = EclipseMenu(@"Main Menu");
 
@@ -294,6 +297,208 @@ void eclipse_enable_swipe_gestures(void *viewPtr) {
             [queue addObjectsFromArray:v.subviews];
         }
     }
+}
+
+/* ------------------------------------------------------------- Real Native Ad & Tracker Blocker */
+static WKContentRuleList *gEclipseContentRuleList = nil;
+static BOOL gIsCompilingRuleList = NO;
+static NSHashTable *gRegisteredWebViews = nil;
+
+static WKWebView *eclipse_find_wkwebview(NSView *root) {
+    if (root == nil) return nil;
+    if ([root isKindOfClass:[WKWebView class]]) {
+        return (WKWebView *)root;
+    }
+    NSMutableArray *queue = [NSMutableArray arrayWithObject:root];
+    while (queue.count > 0) {
+        NSView *v = [queue firstObject];
+        [queue removeObjectAtIndex:0];
+        if ([v isKindOfClass:[WKWebView class]]) {
+            return (WKWebView *)v;
+        }
+        [queue addObjectsFromArray:v.subviews];
+    }
+    return nil;
+}
+
+static void eclipse_attach_rule_list(WKWebView *wv) {
+    if (wv == nil || gEclipseContentRuleList == nil) return;
+    @try {
+        [wv.configuration.userContentController removeContentRuleList:gEclipseContentRuleList];
+    } @catch (id ex) {}
+    @try {
+        [wv.configuration.userContentController addContentRuleList:gEclipseContentRuleList];
+    } @catch (id ex) {}
+}
+
+static void eclipse_detach_rule_list(WKWebView *wv) {
+    if (wv == nil || gEclipseContentRuleList == nil) return;
+    @try {
+        [wv.configuration.userContentController removeContentRuleList:gEclipseContentRuleList];
+    } @catch (id ex) {}
+}
+
+void eclipse_compile_content_rule_list_if_needed(void) {
+    if (gEclipseContentRuleList != nil || gIsCompilingRuleList) return;
+    gIsCompilingRuleList = YES;
+
+    WKContentRuleListStore *store = [WKContentRuleListStore defaultStore];
+    NSString *json = @"["
+        "  {"
+        "    \"trigger\": {"
+        "      \"url-filter\": \".*\","
+        "      \"if-domain\": ["
+        "        \"*doubleclick.net\","
+        "        \"*googlesyndication.com\","
+        "        \"*googleadservices.com\","
+        "        \"*pagead2.googlesyndication.com\","
+        "        \"*adservice.google.com\","
+        "        \"*googleads.g.doubleclick.net\","
+        "        \"*securepubads.g.doubleclick.net\","
+        "        \"*ad.doubleclick.net\","
+        "        \"*stats.g.doubleclick.net\","
+        "        \"*adnxs.com\","
+        "        \"*criteo.com\","
+        "        \"*criteo.net\","
+        "        \"*rubiconproject.com\","
+        "        \"*pubmatic.com\","
+        "        \"*openx.net\","
+        "        \"*casalemedia.com\","
+        "        \"*smartadserver.com\","
+        "        \"*advertising.com\","
+        "        \"*bidswitch.net\","
+        "        \"*contextweb.com\","
+        "        \"*serving-sys.com\","
+        "        \"*flashtalking.com\","
+        "        \"*sovrn.com\","
+        "        \"*lijit.com\","
+        "        \"*spotxchange.com\","
+        "        \"*springserve.com\","
+        "        \"*triplelift.com\","
+        "        \"*teads.tv\","
+        "        \"*inmobi.com\","
+        "        \"*adtech.de\","
+        "        \"*media.net\","
+        "        \"*amazon-adsystem.com\","
+        "        \"*a-ad.adroll.com\","
+        "        \"*adroll.com\","
+        "        \"*quantserve.com\","
+        "        \"*scorecardresearch.com\","
+        "        \"*outbrain.com\","
+        "        \"*taboola.com\","
+        "        \"*revcontent.com\","
+        "        \"*mgid.com\","
+        "        \"*zemanta.com\","
+        "        \"*zergnet.com\","
+        "        \"*moatads.com\","
+        "        \"*iasds01.com\","
+        "        \"*popads.net\","
+        "        \"*popcash.net\","
+        "        \"*propellerads.com\","
+        "        \"*exoclick.com\","
+        "        \"*trafficjunky.com\","
+        "        \"*juicyads.com\","
+        "        \"*ad-delivery.net\","
+        "        \"*adsafeprotected.com\","
+        "        \"*yieldmo.com\","
+        "        \"*sharethrough.com\","
+        "        \"*exponential.com\","
+        "        \"*undertone.com\","
+        "        \"*conversantmedia.com\","
+        "        \"*unrulymedia.com\","
+        "        \"*adsystem.com\","
+        "        \"*adtarget.me\","
+        "        \"*adblade.com\","
+        "        \"*nativeads.com\","
+        "        \"*adsterra.com\","
+        "        \"*buysellads.com\","
+        "        \"*mediavine.com\","
+        "        \"*adthrive.com\","
+        "        \"*shemedia.com\","
+        "        \"*carbonads.net\","
+        "        \"*google-analytics.com\","
+        "        \"*googletagmanager.com\","
+        "        \"*hotjar.com\","
+        "        \"*clarity.ms\","
+        "        \"*mouseflow.com\","
+        "        \"*fullstory.com\","
+        "        \"*segment.io\","
+        "        \"*segment.com\","
+        "        \"*mixpanel.com\","
+        "        \"*amplitude.com\","
+        "        \"*optimizely.com\","
+        "        \"*statcounter.com\","
+        "        \"*newrelic.com\","
+        "        \"*crazyegg.com\""
+        "      ]"
+        "    },"
+        "    \"action\": { \"type\": \"block\" }"
+        "  },"
+        "  {"
+        "    \"trigger\": { \"url-filter\": \".*youtube\\\\.com/youtubei/v1/player/ad_break.*\" },"
+        "    \"action\": { \"type\": \"block\" }"
+        "  },"
+        "  {"
+        "    \"trigger\": { \"url-filter\": \".*youtube\\\\.com/pagead/.*\" },"
+        "    \"action\": { \"type\": \"block\" }"
+        "  },"
+        "  {"
+        "    \"trigger\": { \"url-filter\": \".*youtube\\\\.com/api/stats/ads.*\" },"
+        "    \"action\": { \"type\": \"block\" }"
+        "  },"
+        "  {"
+        "    \"trigger\": { \"url-filter\": \".*\" },"
+        "    \"action\": {"
+        "      \"type\": \"css-display-none\","
+        "      \"selector\": \".adsbygoogle, [id^=google_ads_], .ad-banner, .ad-unit, .advertisement, .ad-container, [data-ad-slot], .ytp-ad-overlay-container, .ytp-ad-message-container, ytd-ad-slot-renderer, #player-ads, .sparkles-light-cta, ytd-promoted-sparkles-web-renderer, ytd-display-ad-renderer, ytd-banner-promo-renderer, ytd-statement-banner-renderer, .trc_related_container, .outbrain, .taboola, [aria-label*=Sponsored i], [aria-label*=advertisement i]\""
+        "    }"
+        "  }"
+        "]";
+
+    [store compileContentRuleListForIdentifier:@"eclipse-native-shields-v1"
+                       encodedContentRuleList:json
+                            completionHandler:^(WKContentRuleList *list, NSError *error) {
+        gIsCompilingRuleList = NO;
+        if (error != nil || list == nil) {
+            return;
+        }
+        gEclipseContentRuleList = list;
+        if (gRegisteredWebViews != nil) {
+            for (WKWebView *wv in [gRegisteredWebViews allObjects]) {
+                eclipse_attach_rule_list(wv);
+            }
+        }
+    }];
+}
+
+void eclipse_install_native_adblocker(void *viewPtr, int enabled) {
+    if (viewPtr == NULL) return;
+    @autoreleasepool {
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            gRegisteredWebViews = [NSHashTable weakObjectsHashTable];
+        });
+
+        NSView *view = (__bridge NSView *)viewPtr;
+        WKWebView *wv = eclipse_find_wkwebview(view);
+        if (wv == nil) return;
+
+        if (enabled) {
+            [gRegisteredWebViews addObject:wv];
+            if (gEclipseContentRuleList != nil) {
+                eclipse_attach_rule_list(wv);
+            } else {
+                eclipse_compile_content_rule_list_if_needed();
+            }
+        } else {
+            [gRegisteredWebViews removeObject:wv];
+            eclipse_detach_rule_list(wv);
+        }
+    }
+}
+
+void eclipse_set_native_adblocker_enabled(void *viewPtr, int enabled) {
+    eclipse_install_native_adblocker(viewPtr, enabled);
 }
 
 void eclipse_style_webview_card(void *viewPtr) {

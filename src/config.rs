@@ -89,6 +89,131 @@ fn default_favorites() -> Vec<FavoriteShortcut> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExtensionConfig {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub matches: Vec<String>,
+    #[serde(default)]
+    pub content_scripts: Vec<String>,
+    #[serde(default)]
+    pub content_css: Vec<String>,
+}
+
+fn default_builtin_extensions() -> Vec<ExtensionConfig> {
+    vec![
+        ExtensionConfig {
+            id: "sponsorblock".into(),
+            name: "SponsorBlock for YouTube".into(),
+            version: "5.5.0".into(),
+            description: "Automatically skip sponsor segments, intros, and end cards on YouTube.".into(),
+            enabled: true,
+            path: None,
+            matches: vec!["*://*.youtube.com/*".into(), "*://youtu.be/*".into()],
+            content_scripts: vec![
+                r#"(function() {
+                    if (window.__sponsorBlockReady) return;
+                    window.__sponsorBlockReady = true;
+                    function checkSponsor() {
+                        var skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button');
+                        if (skipBtn) { skipBtn.click(); }
+                    }
+                    setInterval(checkSponsor, 500);
+                })();"#.into()
+            ],
+            content_css: vec![],
+        },
+        ExtensionConfig {
+            id: "return-dislike".into(),
+            name: "Return YouTube Dislike".into(),
+            version: "3.0.0".into(),
+            description: "Restores dislike count on YouTube videos using returnyoutubedislikeapi.com.".into(),
+            enabled: true,
+            path: None,
+            matches: vec!["*://*.youtube.com/*".into()],
+            content_scripts: vec![
+                r#"(function() {
+                    if (window.__rydReady) return;
+                    window.__rydReady = true;
+                    function fetchDislikes() {
+                        var urlParams = new URLSearchParams(window.location.search);
+                        var videoId = urlParams.get('v');
+                        if (!videoId) return;
+                        fetch('https://returnyoutubedislikeapi.com/votes?videoId=' + videoId)
+                            .then(function(r) { return r.json(); })
+                            .then(function(data) {
+                                if (data && data.dislikes != null) {
+                                    var btn = document.querySelector('dislike-button-view-model button, #segmented-dislike-button button');
+                                    if (btn) {
+                                        var countText = data.dislikes >= 1000 ? (data.dislikes/1000).toFixed(1) + 'K' : data.dislikes;
+                                        btn.setAttribute('title', countText + ' dislikes');
+                                    }
+                                }
+                            }).catch(function() {});
+                    }
+                    setTimeout(fetchDislikes, 1200);
+                    window.addEventListener('yt-navigate-finish', function() { setTimeout(fetchDislikes, 1000); });
+                })();"#.into()
+            ],
+            content_css: vec![],
+        },
+        ExtensionConfig {
+            id: "dark-reader".into(),
+            name: "Dark Reader".into(),
+            version: "4.9.80".into(),
+            description: "Inverts colors and applies a soothing dark theme to light web pages.".into(),
+            enabled: false,
+            path: None,
+            matches: vec!["<all_urls>".into()],
+            content_scripts: vec![],
+            content_css: vec![
+                r#"html { filter: invert(0.9) hue-rotate(180deg) !important; background: #111 !important; }
+                   img, video, iframe, canvas, picture { filter: invert(1.11) hue-rotate(180deg) !important; }"#.into()
+            ],
+        },
+        ExtensionConfig {
+            id: "volume-booster".into(),
+            name: "Volume Booster 600%".into(),
+            version: "2.1.0".into(),
+            description: "Boost audio volume on HTML5 videos and audio players up to 600%.".into(),
+            enabled: false,
+            path: None,
+            matches: vec!["<all_urls>".into()],
+            content_scripts: vec![
+                r#"(function() {
+                    if (window.__volBoostReady) return;
+                    window.__volBoostReady = true;
+                    try {
+                        var AudioCtx = window.AudioContext || window.webkitAudioContext;
+                        if (!AudioCtx) return;
+                        var ctx = null;
+                        document.addEventListener('play', function(e) {
+                            var el = e.target;
+                            if (el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') && !el.__boosted) {
+                                el.__boosted = true;
+                                if (!ctx) ctx = new AudioCtx();
+                                var source = ctx.createMediaElementSource(el);
+                                var gainNode = ctx.createGain();
+                                gainNode.gain.value = 2.0;
+                                source.connect(gainNode);
+                                gainNode.connect(ctx.destination);
+                            }
+                        }, true);
+                    } catch (_) {}
+                })();"#.into()
+            ],
+            content_css: vec![],
+        }
+    ]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BrowserConfig {
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -110,8 +235,12 @@ pub struct BrowserConfig {
     pub tab_hibernation_mins: u32,
     #[serde(default = "default_true")]
     pub adblock_enabled: bool,
+    #[serde(default)]
+    pub adblock_disabled_domains: Vec<String>,
     #[serde(default = "default_true")]
     pub webextensions_enabled: bool,
+    #[serde(default = "default_builtin_extensions")]
+    pub installed_extensions: Vec<ExtensionConfig>,
     #[serde(default)]
     pub custom_js: String,
     #[serde(default)]
@@ -135,7 +264,9 @@ impl Default for BrowserConfig {
             autoplay_enabled: true,
             tab_hibernation_mins: default_hibernation_mins(),
             adblock_enabled: true,
+            adblock_disabled_domains: Vec::new(),
             webextensions_enabled: true,
+            installed_extensions: default_builtin_extensions(),
             custom_js: String::new(),
             custom_css: String::new(),
             custom_user_agent: String::new(),

@@ -188,6 +188,14 @@ impl BrowserApp {
         }
     }
 
+    pub fn active_url(&self) -> String {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id == self.active_tab_id)
+            .map(|tab| tab.url.clone())
+            .unwrap_or_default()
+    }
+
     pub fn bring_sidebar_to_front(&self) {
         #[cfg(target_os = "macos")]
         {
@@ -250,7 +258,8 @@ impl BrowserApp {
                 tab.set_bounds(bounds);
                 tab.set_visible(true);
                 tab.last_active = Instant::now();
-                tab.sync_config(&config);
+                let act_url = tab.url.clone();
+                tab.sync_config(&config, Some(&act_url));
                 tab.focus();
                 if !tab.is_pinned {
                     target_workspace = Some(tab.workspace.clone());
@@ -594,8 +603,8 @@ impl BrowserApp {
 
     pub fn finish_sidebar_collapse(&mut self) {
         if self.config.sidebar_collapsed && !self.sidebar_hover_expanded {
-            let _ = self.sidebar_webview.set_visible(false);
             let _ = self.sidebar_webview.set_bounds(self.sidebar_bounds());
+            let _ = self.sidebar_webview.set_visible(false);
             let _ = self.sidebar_webview.evaluate_script(
                 "document.body.classList.remove('floating-popout', 'sliding-out');",
             );
@@ -803,11 +812,12 @@ impl BrowserApp {
                 self.config.save();
 
                 let config_snapshot = self.config.clone();
+                let active_url = self.active_url();
                 for tab in &mut self.tabs {
                     if custom_css_changed {
                         tab.apply_custom_css(&config_snapshot.custom_css);
                     }
-                    tab.sync_config(&config_snapshot);
+                    tab.sync_config(&config_snapshot, Some(&active_url));
                 }
 
                 if layout_changed {
@@ -815,6 +825,18 @@ impl BrowserApp {
                 } else {
                     self.broadcast_state();
                 }
+            }
+            IpcCommand::ToggleSiteAdblock { domain, enabled } => {
+                self.toggle_site_adblock(&domain, enabled);
+            }
+            IpcCommand::InstallExtension { path } => {
+                self.install_extension_from_path(&path);
+            }
+            IpcCommand::ToggleExtension { id, enabled } => {
+                self.toggle_extension(&id, enabled);
+            }
+            IpcCommand::DeleteExtension { id } => {
+                self.delete_extension(&id);
             }
             IpcCommand::SaveFavorite { index, title, url } => {
                 let clean_title = title.trim().to_string();
@@ -840,8 +862,9 @@ impl BrowserApp {
                 }
                 self.config.save();
                 let config_snapshot = self.config.clone();
+                let active_url = self.active_url();
                 for tab in &self.tabs {
-                    tab.sync_config(&config_snapshot);
+                    tab.sync_config(&config_snapshot, Some(&active_url));
                 }
                 self.broadcast_state();
             }
@@ -850,8 +873,9 @@ impl BrowserApp {
                     self.config.favorites.remove(index);
                     self.config.save();
                     let config_snapshot = self.config.clone();
+                    let active_url = self.active_url();
                     for tab in &self.tabs {
-                        tab.sync_config(&config_snapshot);
+                        tab.sync_config(&config_snapshot, Some(&active_url));
                     }
                     self.broadcast_state();
                 }
@@ -928,8 +952,157 @@ impl BrowserApp {
         }
     }
 
+    pub fn toggle_site_adblock(&mut self, domain: &str, enabled: bool) {
+        let domain_clean = domain.trim().to_lowercase();
+        if domain_clean.is_empty() {
+            return;
+        }
+        if enabled {
+            self.config
+                .adblock_disabled_domains
+                .retain(|d| d.to_lowercase() != domain_clean);
+        } else {
+            if !self
+                .config
+                .adblock_disabled_domains
+                .iter()
+                .any(|d| d.to_lowercase() == domain_clean)
+            {
+                self.config.adblock_disabled_domains.push(domain_clean);
+            }
+        }
+        self.config.save();
+
+        let cfg = self.config.clone();
+        let active_url = self.active_url();
+        for tab in &self.tabs {
+            tab.sync_config(&cfg, Some(&active_url));
+        }
+
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == self.active_tab_id) {
+            tab.reload();
+        }
+        self.broadcast_state();
+    }
+
+    pub fn toggle_extension(&mut self, id: &str, enabled: bool) {
+        if let Some(ext) = self
+            .config
+            .installed_extensions
+            .iter_mut()
+            .find(|e| e.id == id)
+        {
+            ext.enabled = enabled;
+            self.config.save();
+            let cfg = self.config.clone();
+            let active_url = self.active_url();
+            for tab in &self.tabs {
+                tab.sync_config(&cfg, Some(&active_url));
+            }
+            self.broadcast_state();
+        }
+    }
+
+    pub fn delete_extension(&mut self, id: &str) {
+        self.config
+            .installed_extensions
+            .retain(|e| e.id != id);
+        self.config.save();
+        let cfg = self.config.clone();
+        let active_url = self.active_url();
+        for tab in &self.tabs {
+            tab.sync_config(&cfg, Some(&active_url));
+        }
+        self.broadcast_state();
+    }
+
+    pub fn install_extension_from_path(&mut self, path_str: &str) {
+        use std::path::Path;
+        let p = Path::new(path_str.trim());
+        let manifest_path = if p.is_dir() {
+            p.join("manifest.json")
+        } else {
+            p.to_path_buf()
+        };
+
+        if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                let name = json["name"].as_str().unwrap_or("Custom Extension").to_string();
+                let version = json["version"].as_str().unwrap_or("1.0.0").to_string();
+                let description = json["description"].as_str().unwrap_or("Loaded unpacked Chrome extension").to_string();
+                let base_dir = manifest_path.parent().unwrap_or(p);
+
+                let mut matches = Vec::new();
+                let mut scripts = Vec::new();
+                let mut styles = Vec::new();
+
+                if let Some(cs_arr) = json["content_scripts"].as_array() {
+                    for cs in cs_arr {
+                        if let Some(m_arr) = cs["matches"].as_array() {
+                            for m in m_arr {
+                                if let Some(m_str) = m.as_str() {
+                                    matches.push(m_str.to_string());
+                                }
+                            }
+                        }
+                        if let Some(js_arr) = cs["js"].as_array() {
+                            for js in js_arr {
+                                if let Some(js_file) = js.as_str() {
+                                    let script_file = base_dir.join(js_file);
+                                    if let Ok(code) = std::fs::read_to_string(&script_file) {
+                                        scripts.push(code);
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(css_arr) = cs["css"].as_array() {
+                            for css in css_arr {
+                                if let Some(css_file) = css.as_str() {
+                                    let style_file = base_dir.join(css_file);
+                                    if let Ok(code) = std::fs::read_to_string(&style_file) {
+                                        styles.push(code);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if matches.is_empty() {
+                    matches.push("<all_urls>".into());
+                }
+
+                let id = format!("ext_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+                let ext = crate::config::ExtensionConfig {
+                    id,
+                    name,
+                    version,
+                    description,
+                    enabled: true,
+                    path: Some(path_str.to_string()),
+                    matches,
+                    content_scripts: scripts,
+                    content_css: styles,
+                };
+                self.config.installed_extensions.push(ext);
+                self.config.save();
+                let cfg = self.config.clone();
+                let active_url = self.active_url();
+                for tab in &self.tabs {
+                    tab.sync_config(&cfg, Some(&active_url));
+                }
+                self.broadcast_state();
+            }
+        }
+    }
+
     pub fn handle_page_started(&mut self, tab_id: usize, url: String) {
         let canonical = canonicalize_eclipse_url(&url);
+        let active_url = if tab_id == self.active_tab_id {
+            canonical.clone()
+        } else {
+            self.active_url()
+        };
         if self.perf {
             eprintln!(
                 "[perf] tab {tab_id} started {canonical} at {:.1} ms",
@@ -950,12 +1123,18 @@ impl BrowserApp {
             if tab.id == self.active_tab_id {
                 tab.last_active = Instant::now();
             }
+            tab.sync_config(&self.config, Some(&active_url));
         }
         self.broadcast_state();
     }
 
     pub fn handle_page_finished(&mut self, tab_id: usize, url: String) {
         let canonical = canonicalize_eclipse_url(&url);
+        let active_url = if tab_id == self.active_tab_id {
+            canonical.clone()
+        } else {
+            self.active_url()
+        };
         if self.perf {
             eprintln!(
                 "[perf] tab {tab_id} finished {canonical} at {:.1} ms",
@@ -971,7 +1150,7 @@ impl BrowserApp {
                 tab.favicon_url = get_favicon_url(&canonical);
             }
             tab.restore_scroll_if_pending();
-            tab.sync_config(&config);
+            tab.sync_config(&config, Some(&active_url));
 
             if self.perf && tab.id == self.active_tab_id {
                 tab.evaluate_with_callback(

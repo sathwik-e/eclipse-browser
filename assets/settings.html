@@ -331,6 +331,134 @@ input[type="checkbox"]:hover {
   background: rgba(239, 68, 68, 0.18);
   color: #FCA5A5;
 }
+
+.site-badge-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  margin-bottom: 12px;
+}
+
+.site-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 0.5px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-main);
+  transition: all 0.2s var(--ease-spring);
+}
+
+.site-badge:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-active);
+}
+
+.site-badge .badge-remove {
+  background: transparent;
+  border: none;
+  color: #F87171;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.site-badge .badge-remove:hover {
+  color: #FCA5A5;
+  transform: scale(1.2);
+}
+
+.ext-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  margin-bottom: 16px;
+}
+
+.ext-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 0.5px solid var(--border);
+  transition: all 0.2s var(--ease-spring);
+}
+
+.ext-item:hover {
+  background: rgba(255, 255, 255, 0.065);
+  border-color: var(--border-active);
+  transform: translateY(-1px);
+}
+
+.ext-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(94, 158, 255, 0.15);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ext-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.ext-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.ext-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.ext-ver {
+  font-size: 10.5px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.ext-desc {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+
+.ext-matches {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.ext-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
 </style>
 </head>
 <body>
@@ -401,12 +529,32 @@ input[type="checkbox"]:hover {
       <option value="0">Never</option>
     </select>
   </div>
+
+  <!-- Toggle to turn off adblocker on this current page only -->
+  <div class="row" id="row-current-site-adblock">
+    <div>
+      <div style="font-weight: 500;">Block Ads &amp; Trackers on Current Page</div>
+      <div class="hint" id="txt-current-site-adblock-domain" style="margin-top:2px;">Target: current website</div>
+    </div>
+    <input type="checkbox" id="chk-site-adblock" checked />
+  </div>
+
   <div class="row">
-    <span>Cosmetic Ad &amp; Tracker Shields</span>
+    <span>Block Ads &amp; Trackers (Global Shields)</span>
     <input type="checkbox" id="chk-adblock" checked />
   </div>
-  <p class="hint">Hides common ad containers and skips YouTube ads in the page. Network-level blocking is not available through the embedded WebKit API in this build.</p>
-  <div class="row">
+  <p class="hint">Global content blocking engine skips YouTube video ads and blocks tracking banners across all pages.</p>
+
+  <div style="margin-top: 14px;">
+    <div style="font-size: 13px; font-weight: 500; margin-bottom: 4px;">Websites With Ad Blocker Turned Off (Allowlist)</div>
+    <div class="site-badge-list" id="site-allowlist-container"></div>
+    <div class="add-shortcut-form">
+      <input type="text" id="new-allowlist-domain" placeholder="Domain to allow ads (e.g. news.ycombinator.com)" style="flex:1;" />
+      <button class="btn" id="btn-add-allowlist-domain">Turn Off Adblock For Site</button>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:14px;">
     <span>Apple FairPlay Hardware DRM</span>
     <input type="checkbox" id="chk-drm" checked />
   </div>
@@ -422,10 +570,27 @@ input[type="checkbox"]:hover {
     <h2>Chrome Extensions &amp; User Scripts</h2>
   </div>
   <div class="row">
-    <span>Chrome Extension Runtime (WebExtensions API)</span>
+    <div>
+      <div style="font-weight:500;">Chrome Extensions Runtime (WebExtensions API)</div>
+      <div class="hint" style="margin-top:2px;">Enables <code>chrome.runtime</code>, <code>chrome.storage</code>, <code>chrome.tabs</code>, and MV2/MV3 content scripts in Eclipse.</div>
+    </div>
     <input type="checkbox" id="chk-extensions" checked />
   </div>
-  <p class="hint">Emulates <code>chrome.runtime</code>, <code>chrome.storage</code>, and <code>chrome.tabs</code> APIs for WebKit, enabling extension content scripts and cross-browser plugins to run in Eclipse.</p>
+
+  <div style="margin-top: 16px;">
+    <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Load Unpacked Chrome Extension</div>
+    <div class="add-shortcut-form">
+      <input type="text" id="txt-unpacked-path" placeholder="/path/to/unpacked-chrome-extension (folder containing manifest.json)" style="flex:1;" />
+      <button class="btn primary" id="btn-load-unpacked">Load Extension</button>
+    </div>
+    <p class="hint">Point to any unpacked Chrome MV2/MV3 extension folder. Eclipse executes extension content scripts and injects extension CSS into matching URLs.</p>
+  </div>
+
+  <div style="margin-top: 18px;">
+    <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Installed Chrome Extensions</div>
+    <div class="ext-grid" id="installed-ext-list"></div>
+  </div>
+
   <div style="margin-top: 14px;">
     <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Custom User Script (Tampermonkey / Userscript JS)</div>
     <textarea id="txt-custom-js" rows="4" placeholder="// Paste custom scripts or extension code here...&#10;console.log('Eclipse user script loaded');" style="width:100%; box-sizing:border-box; background:rgba(255,255,255,0.05); color:var(--text-main); border:0.5px solid var(--border); border-radius:8px; padding:8px 12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; outline:none; resize:vertical;"></textarea>
@@ -437,6 +602,8 @@ input[type="checkbox"]:hover {
 </div>
 
 <script>
+let currentActiveUrl = window.__ECLIPSE_ACTIVE_URL__ || '';
+
 let cfg = window.__ECLIPSE_CONFIG__ || {
   theme: 'eclipse',
   accent_color: '#5E9EFF',
@@ -448,6 +615,8 @@ let cfg = window.__ECLIPSE_CONFIG__ || {
   autoplay_enabled: true,
   tab_hibernation_mins: 15,
   adblock_enabled: true,
+  adblock_disabled_domains: [],
+  installed_extensions: [],
   custom_css: '',
   custom_user_agent: '',
   favorites: [
@@ -457,6 +626,16 @@ let cfg = window.__ECLIPSE_CONFIG__ || {
     { title: 'Netflix', url: 'https://www.netflix.com', icon: 'netflix' }
   ]
 };
+
+function getActiveDomain() {
+  try {
+    if (!currentActiveUrl) return '';
+    const u = new URL(currentActiveUrl);
+    return u.hostname || '';
+  } catch (_) {
+    return '';
+  }
+}
 
 function postIpc(cmd) {
   if (window.__eclipseIpc) {
@@ -498,6 +677,18 @@ function setAccent(c) {
   saveConfig();
 }
 
+function removeDomainFromAllowlist(domain) {
+  postIpc({ action: 'toggle_site_adblock', domain: domain, enabled: true });
+}
+
+function toggleExtension(id, enabled) {
+  postIpc({ action: 'toggle_extension', id: id, enabled: enabled });
+}
+
+function deleteExtension(id) {
+  postIpc({ action: 'delete_extension', id: id });
+}
+
 function renderUI() {
   document.documentElement.style.setProperty('--accent', cfg.accent_color || '#5E9EFF');
   document.querySelectorAll('.theme-btn').forEach(btn => {
@@ -514,6 +705,71 @@ function renderUI() {
   }
   if (document.activeElement !== document.getElementById('txt-custom-css')) {
     document.getElementById('txt-custom-css').value = cfg.custom_css || '';
+  }
+
+  // Active page adblock toggle
+  const activeDomain = getActiveDomain();
+  const siteRow = document.getElementById('row-current-site-adblock');
+  const siteDomainText = document.getElementById('txt-current-site-adblock-domain');
+  const chkSiteAdblock = document.getElementById('chk-site-adblock');
+  const disabledDomains = cfg.adblock_disabled_domains || [];
+
+  if (activeDomain && !activeDomain.startsWith('eclipse')) {
+    siteRow.style.display = 'flex';
+    chkSiteAdblock.disabled = false;
+    const isSiteDisabled = disabledDomains.some(d => d.toLowerCase() === activeDomain.toLowerCase());
+    const isSiteActive = (cfg.adblock_enabled !== false) && !isSiteDisabled;
+    chkSiteAdblock.checked = isSiteActive;
+    siteDomainText.textContent = isSiteActive 
+      ? `Active on ${activeDomain} (turn off to allow ads on this page only)`
+      : `Ad blocker turned OFF on ${activeDomain} (ads & trackers allowed)`;
+  } else {
+    siteRow.style.display = 'flex';
+    chkSiteAdblock.disabled = true;
+    chkSiteAdblock.checked = true;
+    siteDomainText.textContent = 'Internal System Pages are always ad-free';
+  }
+
+  // Site allowlist tags
+  const allowlistContainer = document.getElementById('site-allowlist-container');
+  if (allowlistContainer) {
+    if (disabledDomains.length === 0) {
+      allowlistContainer.innerHTML = '<span style="font-size:11.5px;color:var(--text-dim);">No sites allowlisted. Ad blocker is running on all websites.</span>';
+    } else {
+      allowlistContainer.innerHTML = disabledDomains.map(d => `
+        <span class="site-badge">
+          ${escapeHtml(d)}
+          <button type="button" class="badge-remove" onclick="removeDomainFromAllowlist('${escapeHtml(d)}')" title="Turn ad blocker back on for ${escapeHtml(d)}">&times;</button>
+        </span>
+      `).join('');
+    }
+  }
+
+  // Installed Chrome extensions
+  const extList = document.getElementById('installed-ext-list');
+  if (extList) {
+    const extensions = cfg.installed_extensions || [];
+    if (extensions.length === 0) {
+      extList.innerHTML = '<span style="font-size:11.5px;color:var(--text-dim);">No Chrome extensions installed.</span>';
+    } else {
+      extList.innerHTML = extensions.map(ext => `
+        <div class="ext-item">
+          <div class="ext-icon">${(ext.name || 'E').charAt(0).toUpperCase()}</div>
+          <div class="ext-body">
+            <div class="ext-title-row">
+              <span class="ext-title">${escapeHtml(ext.name)}</span>
+              <span class="ext-ver">v${escapeHtml(ext.version)}</span>
+            </div>
+            <div class="ext-desc">${escapeHtml(ext.description || 'WebExtension content script')}</div>
+            <div class="ext-matches">Matches: ${(ext.matches || ['<all_urls>']).map(escapeHtml).join(', ')}</div>
+          </div>
+          <div class="ext-controls">
+            <input type="checkbox" ${ext.enabled ? 'checked' : ''} onchange="toggleExtension('${escapeHtml(ext.id)}', this.checked)" title="Enable / Disable extension" />
+            ${ext.path ? `<button type="button" class="btn danger" style="padding:4px 8px;font-size:11px;" onclick="deleteExtension('${escapeHtml(ext.id)}')">Remove</button>` : ''}
+          </div>
+        </div>
+      `).join('');
+    }
   }
 
   const favorites = cfg.favorites || [];
@@ -582,6 +838,28 @@ document.getElementById('chk-adblock').addEventListener('change', (e) => {
   saveConfig();
 });
 
+document.getElementById('chk-site-adblock').addEventListener('change', (e) => {
+  const domain = getActiveDomain();
+  if (!domain || domain.startsWith('eclipse')) return;
+  postIpc({ action: 'toggle_site_adblock', domain: domain, enabled: e.target.checked });
+});
+
+document.getElementById('btn-add-allowlist-domain').addEventListener('click', () => {
+  const input = document.getElementById('new-allowlist-domain');
+  const domain = input.value.trim().toLowerCase();
+  if (!domain) return;
+  postIpc({ action: 'toggle_site_adblock', domain: domain, enabled: false });
+  input.value = '';
+});
+
+document.getElementById('btn-load-unpacked').addEventListener('click', () => {
+  const input = document.getElementById('txt-unpacked-path');
+  const path = input.value.trim();
+  if (!path) return;
+  postIpc({ action: 'install_extension', path: path });
+  input.value = '';
+});
+
 document.getElementById('chk-drm').addEventListener('change', (e) => {
   cfg.drm_fairplay_enabled = e.target.checked;
   saveConfig();
@@ -611,9 +889,9 @@ document.getElementById('txt-custom-css').addEventListener('input', (e) => {
   customCssDebounce = setTimeout(saveConfig, 500);
 });
 
-window.onEclipseConfigUpdated = function(newCfg) {
-  if (!newCfg) return;
-  cfg = newCfg;
+window.onEclipseConfigUpdated = function(newCfg, activeUrl) {
+  if (newCfg) cfg = newCfg;
+  if (activeUrl) currentActiveUrl = activeUrl;
   renderUI();
 };
 

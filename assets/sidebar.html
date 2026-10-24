@@ -1035,41 +1035,232 @@ body {
 /* =========================================================
    Arc-Style Fluid Popout Floating Sidebar
    ========================================================= */
+body.is-collapsed-state:not(.floating-popout) {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  transform: translateX(-105%) !important;
+  box-shadow: none !important;
+}
+
 body.floating-popout {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
   box-shadow: 14px 0 52px rgba(0, 0, 0, 0.78), 0 0 1px rgba(255, 255, 255, 0.16);
   border-right: 1px solid rgba(255, 255, 255, 0.15);
   background: var(--bg-sidebar);
   backdrop-filter: blur(36px) saturate(190%);
   -webkit-backdrop-filter: blur(36px) saturate(190%);
-  animation: sidebarPopoutIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
-  will-change: transform;
+  animation: sidebarPopoutIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
 }
 
 body.floating-popout.sliding-out {
-  animation: sidebarPopoutOut 0.20s cubic-bezier(0.32, 0.72, 0, 1) forwards;
-  will-change: transform;
+  animation: sidebarPopoutOut 0.20s cubic-bezier(0.32, 0.72, 0, 1) forwards !important;
+  box-shadow: none !important;
+  pointer-events: none !important;
+  will-change: transform, opacity;
 }
 
 @keyframes sidebarPopoutIn {
   from {
     transform: translateX(-100%);
+    opacity: 0;
   }
   to {
     transform: translateX(0);
+    opacity: 1;
   }
 }
 
 @keyframes sidebarPopoutOut {
-  from {
+  0% {
     transform: translateX(0);
+    opacity: 1;
   }
-  to {
-    transform: translateX(-100%);
+  99% {
+    transform: translateX(-105%);
+    opacity: 0;
+    visibility: visible;
+  }
+  100% {
+    transform: translateX(-105%);
+    opacity: 0;
+    visibility: hidden;
   }
 }
 
 #btn-collapse.is-collapsed svg {
   transform: rotate(180deg);
+}
+
+/* Site Controls & Privacy Popover (Arc-style) */
+.site-controls-popover {
+  position: absolute;
+  top: 96px;
+  left: 10px;
+  right: 10px;
+  background: rgba(18, 22, 33, 0.95);
+  backdrop-filter: blur(32px) saturate(190%);
+  -webkit-backdrop-filter: blur(32px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 1px rgba(255, 255, 255, 0.2);
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: popoverFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes popoverFadeIn {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.site-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.site-popover-identity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.site-popover-lock {
+  color: #34D399;
+  display: flex;
+  align-items: center;
+}
+
+.site-popover-domain {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.site-popover-status {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.site-popover-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 1px 0;
+}
+
+.site-popover-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.site-popover-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.site-popover-item-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.site-popover-item-desc {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.52);
+}
+
+.site-popover-subtext {
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.42);
+  line-height: 1.35;
+}
+
+/* iOS-style sleek toggle switch */
+.site-popover-switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.site-popover-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.site-popover-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: rgba(255, 255, 255, 0.16);
+  transition: 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  border-radius: 20px;
+}
+
+.site-popover-slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #fff;
+  transition: 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.site-popover-switch input:checked + .site-popover-slider {
+  background-color: #5E9EFF;
+}
+
+.site-popover-switch input:checked + .site-popover-slider:before {
+  transform: translateX(16px);
+}
+
+.site-popover-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.site-popover-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+
+.site-popover-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
 }
 
 /* Preferences Drawer & Shortcut Modal */
@@ -1695,7 +1886,7 @@ body.collapsed #toast-container {
         <div class="eclipse-diamond"></div>
       </div>
     </div>
-    <button id="btn-omnibar-tune" class="omnibar-tune" title="Site Settings & Filters">
+    <button id="btn-omnibar-tune" type="button" class="omnibar-tune" title="Site Settings & Filters">
       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <line x1="4" y1="21" x2="4" y2="14"/>
         <line x1="4" y1="10" x2="4" y2="3"/>
@@ -1710,6 +1901,59 @@ body.collapsed #toast-container {
     </button>
     <button id="omnibar-go" class="omnibar-go" title="Go" style="display:none;">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- Site Settings & Privacy Popover (Arc-style site control panel) -->
+<div id="site-controls-popover" class="site-controls-popover" style="display:none;">
+  <div class="site-popover-header">
+    <div class="site-popover-identity">
+      <span class="site-popover-lock">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="5" y="11" width="14" height="10" rx="2"/>
+          <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+        </svg>
+      </span>
+      <span class="site-popover-domain" id="site-popover-domain">Current Site</span>
+    </div>
+    <span class="site-popover-status" id="site-popover-status">Secure Connection</span>
+  </div>
+  
+  <div class="site-popover-divider"></div>
+  
+  <!-- Main Adblocker Toggle for Current Page -->
+  <div class="site-popover-item">
+    <div class="site-popover-item-info">
+      <div class="site-popover-item-title">Block Ads &amp; Trackers</div>
+      <div class="site-popover-item-desc" id="site-popover-adblock-desc">Active on this site</div>
+    </div>
+    <label class="site-popover-switch">
+      <input type="checkbox" id="site-adblock-toggle" checked />
+      <span class="site-popover-slider"></span>
+    </label>
+  </div>
+  
+  <div class="site-popover-subtext" id="site-popover-adblock-sub">
+    Turn off to allow ads on this page only.
+  </div>
+
+  <div class="site-popover-divider"></div>
+
+  <div class="site-popover-actions">
+    <button type="button" class="site-popover-btn" id="btn-site-clear-data" title="Clear site cache &amp; reload">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+      </svg>
+      <span>Clear Cache</span>
+    </button>
+    <button type="button" class="site-popover-btn" id="btn-site-open-settings" title="Open Eclipse Preferences">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      <span>Settings</span>
     </button>
   </div>
 </div>
@@ -1813,7 +2057,17 @@ body.collapsed #toast-container {
   </div>
 
   <div class="drawer-section">
-    <div class="section-label"><span>Privacy & Media</span></div>
+    <div class="section-label"><span>Privacy &amp; Shields</span></div>
+    <div class="toggle-row">
+      <span>Block Ads &amp; Trackers (Global)</span>
+      <div class="toggle-switch on" id="toggle-adblock" role="switch" aria-checked="true"><div class="toggle-knob"></div></div>
+    </div>
+    <!-- Toggle to turn off adblocker in current page only -->
+    <div class="toggle-row" id="drawer-site-adblock-row">
+      <span id="drawer-site-adblock-label">Block Ads on Current Site</span>
+      <div class="toggle-switch on" id="toggle-site-adblock" role="switch" aria-checked="true"><div class="toggle-knob"></div></div>
+    </div>
+    <div id="drawer-disabled-sites-list" style="display:none; font-size:11px; color:rgba(255,255,255,0.5); padding:4px 0;"></div>
     <div class="toggle-row">
       <span>Apple FairPlay DRM</span>
       <div class="toggle-switch on" id="toggle-drm" role="switch" aria-checked="true"><div class="toggle-knob"></div></div>
@@ -1822,10 +2076,15 @@ body.collapsed #toast-container {
       <span>Media Autoplay</span>
       <div class="toggle-switch on" id="toggle-autoplay" role="switch" aria-checked="true"><div class="toggle-knob"></div></div>
     </div>
+  </div>
+
+  <div class="drawer-section">
+    <div class="section-label"><span>Chrome Extensions</span></div>
     <div class="toggle-row">
-      <span>Cosmetic Ad &amp; Tracker Shields</span>
-      <div class="toggle-switch on" id="toggle-adblock" role="switch" aria-checked="true"><div class="toggle-knob"></div></div>
+      <span>Chrome Extensions Engine</span>
+      <div class="toggle-switch on" id="toggle-extensions" role="switch" aria-checked="true"><div class="toggle-knob"></div></div>
     </div>
+    <div id="drawer-extensions-container" style="display:flex; flex-direction:column; gap:6px; margin-top:6px;"></div>
   </div>
 
   <div class="drawer-section">
@@ -2029,13 +2288,125 @@ if (btnHeaderNewTab) btnHeaderNewTab.addEventListener('click', () => sendCommand
 const btnCollapse = document.getElementById('btn-collapse');
 if (btnCollapse) btnCollapse.addEventListener('click', () => sendCommand({ action: 'toggle_sidebar' }));
 
+// Site Controls & Privacy Popover (Arc-Style)
+const siteControlsPopover = document.getElementById('site-controls-popover');
+const sitePopoverDomain = document.getElementById('site-popover-domain');
+const sitePopoverStatus = document.getElementById('site-popover-status');
+const siteAdblockToggle = document.getElementById('site-adblock-toggle');
+const sitePopoverAdblockDesc = document.getElementById('site-popover-adblock-desc');
+const sitePopoverAdblockSub = document.getElementById('site-popover-adblock-sub');
+
+function getActiveDomain() {
+  try {
+    if (!activeUrl) return '';
+    const u = new URL(activeUrl);
+    return u.hostname || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function updateSiteControlsUI() {
+  if (!siteControlsPopover) return;
+  const domain = getActiveDomain();
+  if (!domain || domain.startsWith('eclipse')) {
+    if (sitePopoverDomain) sitePopoverDomain.textContent = 'Eclipse System';
+    if (sitePopoverStatus) {
+      sitePopoverStatus.textContent = 'Protected Internal Page';
+      sitePopoverStatus.style.color = 'rgba(255, 255, 255, 0.45)';
+    }
+    if (siteAdblockToggle) {
+      siteAdblockToggle.disabled = true;
+      siteAdblockToggle.checked = true;
+    }
+    if (sitePopoverAdblockDesc) {
+      sitePopoverAdblockDesc.textContent = 'Shields Active';
+      sitePopoverAdblockDesc.style.color = '#5E9EFF';
+    }
+    if (sitePopoverAdblockSub) sitePopoverAdblockSub.textContent = 'System internal pages are ad-free.';
+    return;
+  }
+
+  if (sitePopoverDomain) sitePopoverDomain.textContent = domain;
+  const isSecure = activeUrl.startsWith('https://');
+  if (sitePopoverStatus) {
+    sitePopoverStatus.textContent = isSecure ? 'Secure Connection (HTTPS)' : 'Standard Connection';
+    sitePopoverStatus.style.color = isSecure ? '#34D399' : 'rgba(255, 255, 255, 0.45)';
+  }
+
+  const disabledDomains = (currentConfig && currentConfig.adblock_disabled_domains) || [];
+  const isSiteDisabled = disabledDomains.some(d => d.toLowerCase() === domain.toLowerCase());
+  const globalAdblock = currentConfig && currentConfig.adblock_enabled !== false;
+  const isActive = globalAdblock && !isSiteDisabled;
+
+  if (siteAdblockToggle) {
+    siteAdblockToggle.disabled = false;
+    siteAdblockToggle.checked = isActive;
+  }
+  if (sitePopoverAdblockDesc) {
+    sitePopoverAdblockDesc.textContent = isActive ? 'Active on this site' : (isSiteDisabled ? 'Disabled on this site' : 'Global Shields Off');
+    sitePopoverAdblockDesc.style.color = isActive ? '#5E9EFF' : '#F59E0B';
+  }
+  if (sitePopoverAdblockSub) {
+    sitePopoverAdblockSub.textContent = isActive 
+      ? 'Turn off to allow ads on ' + domain + ' only.' 
+      : 'Ads & trackers are currently allowed on ' + domain + '.';
+  }
+}
+
+function toggleSiteControlsPopover() {
+  if (!siteControlsPopover) return;
+  if (siteControlsPopover.style.display === 'flex') {
+    siteControlsPopover.style.display = 'none';
+  } else {
+    updateSiteControlsUI();
+    siteControlsPopover.style.display = 'flex';
+  }
+}
+
 const btnOmnibarTune = document.getElementById('btn-omnibar-tune');
 if (btnOmnibarTune) {
   btnOmnibarTune.addEventListener('click', (e) => {
+    e.preventDefault();
     e.stopPropagation();
-    openSettingsDrawer();
+    toggleSiteControlsPopover();
   });
 }
+
+if (siteAdblockToggle) {
+  siteAdblockToggle.addEventListener('change', () => {
+    const domain = getActiveDomain();
+    if (!domain || domain.startsWith('eclipse')) return;
+    const enableForSite = siteAdblockToggle.checked;
+    sendCommand({ action: 'toggle_site_adblock', domain: domain, enabled: enableForSite });
+    setTimeout(updateSiteControlsUI, 120);
+  });
+}
+
+const btnSiteClearData = document.getElementById('btn-site-clear-data');
+if (btnSiteClearData) {
+  btnSiteClearData.addEventListener('click', () => {
+    sendCommand({ action: 'clean_memory' });
+    sendCommand({ action: 'reload' });
+    if (siteControlsPopover) siteControlsPopover.style.display = 'none';
+  });
+}
+
+const btnSiteOpenSettings = document.getElementById('btn-site-open-settings');
+if (btnSiteOpenSettings) {
+  btnSiteOpenSettings.addEventListener('click', () => {
+    if (siteControlsPopover) siteControlsPopover.style.display = 'none';
+    window.openPreferencesDrawer();
+  });
+}
+
+document.addEventListener('click', (e) => {
+  if (siteControlsPopover && siteControlsPopover.style.display === 'flex') {
+    if (!siteControlsPopover.contains(e.target) && e.target !== btnOmnibarTune && !btnOmnibarTune.contains(e.target)) {
+      siteControlsPopover.style.display = 'none';
+    }
+  }
+});
 
 const btnArchive = document.getElementById('btn-archive');
 if (btnArchive) btnArchive.addEventListener('click', () => sendCommand({ action: 'reopen_closed_tab' }));
@@ -2222,6 +2593,27 @@ function setupToggle(id, key) {
 setupToggle('toggle-drm', 'drm_fairplay_enabled');
 setupToggle('toggle-autoplay', 'autoplay_enabled');
 setupToggle('toggle-adblock', 'adblock_enabled');
+setupToggle('toggle-extensions', 'webextensions_enabled');
+
+const toggleSiteAdblock = document.getElementById('toggle-site-adblock');
+if (toggleSiteAdblock) {
+  toggleSiteAdblock.addEventListener('click', () => {
+    const domain = getActiveDomain();
+    if (!domain || domain.startsWith('eclipse')) return;
+    const disabledDomains = (currentConfig && currentConfig.adblock_disabled_domains) || [];
+    const isDomainDisabled = disabledDomains.some(d => d.toLowerCase() === domain.toLowerCase());
+    const nextState = isDomainDisabled;
+    sendCommand({ action: 'toggle_site_adblock', domain: domain, enabled: nextState });
+  });
+}
+
+window.reenableSiteAdblock = function(domain) {
+  sendCommand({ action: 'toggle_site_adblock', domain: domain, enabled: true });
+};
+
+window.toggleExtension = function(id, enabled) {
+  sendCommand({ action: 'toggle_extension', id: id, enabled: enabled });
+};
 
 document.getElementById('select-hibernate').addEventListener('change', (e) => {
   currentConfig.tab_hibernation_mins = parseInt(e.target.value, 10) || 0;
@@ -2232,8 +2624,6 @@ document.getElementById('select-engine').addEventListener('change', (e) => {
   currentConfig.search_engine = e.target.value;
   saveConfigChanges();
 });
-
-
 
 // Workspaces / Spaces switching
 document.querySelectorAll('.workspace-pill').forEach(pill => {
@@ -2287,14 +2677,53 @@ function syncSettingsControls() {
   setSwitch('toggle-drm', currentConfig.drm_fairplay_enabled !== false);
   setSwitch('toggle-autoplay', currentConfig.autoplay_enabled !== false);
   setSwitch('toggle-adblock', currentConfig.adblock_enabled !== false);
+  setSwitch('toggle-extensions', currentConfig.webextensions_enabled !== false);
+
+  const activeDomain = getActiveDomain();
+  const siteAdblockRow = document.getElementById('drawer-site-adblock-row');
+  const siteAdblockLabel = document.getElementById('drawer-site-adblock-label');
+  const disabledDomains = (currentConfig && currentConfig.adblock_disabled_domains) || [];
+  if (activeDomain && !activeDomain.startsWith('eclipse')) {
+    if (siteAdblockRow) siteAdblockRow.style.display = 'flex';
+    if (siteAdblockLabel) siteAdblockLabel.textContent = 'Block Ads on ' + activeDomain;
+    const isDomainDisabled = disabledDomains.some(d => d.toLowerCase() === activeDomain.toLowerCase());
+    setSwitch('toggle-site-adblock', currentConfig.adblock_enabled !== false && !isDomainDisabled);
+  } else {
+    if (siteAdblockRow) siteAdblockRow.style.display = 'none';
+  }
+
+  const disabledListEl = document.getElementById('drawer-disabled-sites-list');
+  if (disabledListEl) {
+    if (disabledDomains.length > 0) {
+      disabledListEl.style.display = 'block';
+      disabledListEl.innerHTML = '<div style="font-weight:600;margin-bottom:3px;color:rgba(255,255,255,0.7);">Ad blocker paused on:</div>' +
+        disabledDomains.map(d => `<span style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;margin-right:4px;margin-bottom:3px;display:inline-block;">${d} <span onclick="event.stopPropagation(); reenableSiteAdblock('${d}')" style="cursor:pointer;color:#F87171;font-weight:bold;margin-left:2px;">&times;</span></span>`).join('');
+    } else {
+      disabledListEl.style.display = 'none';
+      disabledListEl.innerHTML = '';
+    }
+  }
+
+  const extContainer = document.getElementById('drawer-extensions-container');
+  if (extContainer && currentConfig.installed_extensions) {
+    extContainer.innerHTML = currentConfig.installed_extensions.map(ext => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:7px;">
+        <div style="display:flex;flex-direction:column;gap:1px;min-width:0;flex:1;">
+          <div style="font-size:12px;font-weight:500;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${ext.name}</div>
+          <div style="font-size:10px;color:rgba(255,255,255,0.45);">${ext.version} &bull; ${ext.description || 'Extension'}</div>
+        </div>
+        <div class="toggle-switch ${ext.enabled ? 'on' : ''}" onclick="toggleExtension('${ext.id}', ${!ext.enabled})" style="transform:scale(0.85);margin-left:8px;"><div class="toggle-knob"></div></div>
+      </div>
+    `).join('');
+  }
 
   const shieldBtn = document.getElementById('btn-shield');
   if (shieldBtn) {
     const active = currentConfig.adblock_enabled !== false;
     shieldBtn.classList.toggle('shield-active', active);
     shieldBtn.title = active
-      ? 'Cosmetic Ad & Tracker Shields: Active (Click to disable)'
-      : 'Cosmetic Ad & Tracker Shields: Off (Click to enable)';
+      ? 'Ad & Tracker Shields: Active (Click to disable)'
+      : 'Ad & Tracker Shields: Off (Click to enable)';
   }
 
   const hibSelect = document.getElementById('select-hibernate');

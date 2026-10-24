@@ -87,6 +87,20 @@ pub enum IpcCommand {
     UpdateConfig {
         config: BrowserConfig,
     },
+    ToggleSiteAdblock {
+        domain: String,
+        enabled: bool,
+    },
+    InstallExtension {
+        path: String,
+    },
+    ToggleExtension {
+        id: String,
+        enabled: bool,
+    },
+    DeleteExtension {
+        id: String,
+    },
     SaveFavorite {
         index: Option<usize>,
         title: String,

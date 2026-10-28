@@ -1,0 +1,24 @@
+<!doctype html><html><head><title>Opener</title>
+<style>html,body{margin:0;height:100%}button{width:100%;height:100%;font-size:30px}</style></head>
+<body><button id=b>go</button><script>
+// The "other site": the same server on the next port, under another host name.
+var V = 'http://localhost:' + (Number(location.port) + 1);
+var s = new URLSearchParams(location.search).get('s');
+function report(m) { window.webkit.messageHandlers.ipc.postMessage('opener:' + m); }
+function fake(w) {
+  try { w.stop(); w.document.open(); w.document.write('<title>Sign in</title><h1>FAKE LOGIN</h1>'); w.document.close(); report('wrote:' + w.document.title); }
+  catch (e) { report('err:' + e); }
+}
+var S = {
+  stopwrite: function () { var w = window.open(V + '/slow', 'x', 'width=480,height=600'); setTimeout(function () { fake(w); }, 800); },
+  nocontent: function () { var w = window.open(V + '/generate_204', 'x', 'width=480,height=600'); setTimeout(function () { fake(w); }, 800); },
+  blankthen: function () { var w = window.open('', 'x', 'width=480,height=600'); w.location = V + '/slow'; setTimeout(function () { fake(w); }, 800); },
+  legit: function () { window.open(V + '/pop.html', 'x', 'width=480,height=600'); },
+  eclipse: function () { window.open('/eimg.html', 'x', 'width=480,height=600'); },
+  sameorigin: function () { window.open('/same.html', 'x', 'width=480,height=600'); },
+  five: function () { for (var i = 0; i < 5; i++) window.open('/pop.html?n=' + i, 'w' + i, 'width=400,height=300'); },
+  nested: function () { window.open('/nest.html', 'x', 'width=480,height=600'); },
+};
+if (s === 'nogesture') { window.open('/pop.html', 'x', 'width=480,height=600'); }
+document.getElementById('b').onclick = function () { S[s](); };
+</script></body></html>

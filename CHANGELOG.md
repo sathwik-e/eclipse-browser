@@ -5,23 +5,31 @@
 ### Added
 - **Little Eclipse windows for sign-in popups.** When a web page opens a
   sized popup (`window.open` with a width and height, as sign-in and payment
-  flows do), it now opens in a small native window instead of a tab. The
-  popup keeps `window.opener`, so it can post its result back and close
-  itself, which makes "Sign in with …" popups work.
+  flows do) in response to a click or key press, it now opens in a small
+  native window instead of a tab. The popup keeps `window.opener`, so it can
+  post its result back and close itself, which makes "Sign in with …" popups
+  work.
   - The window title shows the page title. The subtitle shows the host of the
     page actually on screen, with "Not Secure" for plain http. The page has no
-    control over it.
+    control over it: a page that is still loading, or that never finishes
+    loading, is not shown as the host until it is actually on screen.
   - JavaScript dialogs appear as sheets on the popup. `window.close()` closes
     it, and ⌘W closes it while it is in front.
   - A popup can only show web pages, never internal `eclipse://` pages, and it
     closes when the tab that opened it is closed or hibernated.
-  - Links without a size and popups from internal pages still open as tabs.
+  - Links without a size, popups from internal pages, popups a page opens
+    without a click or key press, and popups beyond three per tab (ten in
+    all) still open as tabs.
 
 ### Security
+- A page in a popup window is never taken for the tab that opened it. The
+  popup posts through its opener tab's channel, but WebKit marks its messages,
+  so even a popup on the tab's own site (an OAuth callback page, say) cannot
+  change the tab's address, icon, scroll position or audio state, and it
+  cannot load internal `eclipse://` resources. It can still open http(s)
+  links in new tabs.
 - Websites' reports about a tab's page (favicon, audio, scroll position) are
-  now accepted only from the tab's own document. A popup posts through its
-  opener tab's channel, so it can no longer change that tab's icon or state.
-  It can still open http(s) links in new tabs.
+  now accepted only from a frame on the same origin as the tab's document.
 
 ## 1.0.0 — 2026-10-28
 

@@ -462,6 +462,8 @@ impl Tab {
                 // Read now: a later commit must not change how a message the
                 // previous document posted is trusted.
                 let document = nav_ipc.document_trust();
+                // Also read now: only known while wry delivers the message.
+                let from_little_window = script_message_from_little_window();
                 let origin = req.uri().to_string();
                 let body = req.body().clone();
                 let _ = proxy_ipc.send_event(UserEvent::TabIpc {
@@ -469,6 +471,7 @@ impl Tab {
                     msg: body,
                     origin,
                     document,
+                    from_little_window,
                 });
             })
             .with_navigation_handler(move |url| {
@@ -568,14 +571,16 @@ impl Tab {
             .with_document_title_changed_handler(move |title| {
                 let _ = proxy_title.send_event(UserEvent::TitleChanged { tab_id, title });
             })
-            // Sized popups from a web page (sign-in and payment flows) open in
-            // a Little Eclipse window that keeps `window.opener`; everything
-            // else opens as an ordinary tab without one. The popup's webview
-            // is built on the configuration WebKit hands over, which shares
-            // this tab's WKUserContentController: it runs this tab's init
-            // scripts and its messages reach this tab's IPC handler, where
-            // they are trusted only as a website from another origin (see
-            // app::handle_tab_ipc).
+            // Sized popups a web page opens on a user gesture (sign-in and
+            // payment flows) open in a Little Eclipse window that keeps
+            // `window.opener`, within per-tab and overall limits (menu.m);
+            // everything else opens as an ordinary tab without one. The
+            // popup's webview is built on the configuration WebKit hands
+            // over, which shares this tab's WKUserContentController: it runs
+            // this tab's init scripts and its messages reach this tab's IPC
+            // handler, marked as coming from a popup, where they may only
+            // open http(s) tabs (see app::handle_tab_ipc). menu.m keeps its
+            // requests away from wry's eclipse:// handler.
             .with_new_window_req_handler(move |url, features| {
                 #[cfg(target_os = "macos")]
                 if opens_little_window(
@@ -1169,6 +1174,17 @@ fn navigation_policy_context() -> PolicyContext {
     #[cfg(not(target_os = "macos"))]
     {
         PolicyContext::default()
+    }
+}
+
+fn script_message_from_little_window() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos_menu::script_message_from_little_window()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
     }
 }
 

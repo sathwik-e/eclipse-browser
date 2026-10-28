@@ -60,12 +60,16 @@ pub enum IpcSender {
     DepartingInternal,
     /// Any other page.
     Web,
+    /// A page in a Little Eclipse popup window (menu.m), which posts through
+    /// its opener tab's handler: it is not the tab's page, so it may only
+    /// open http(s) links in new tabs.
+    LittleWindow,
 }
 
 impl IpcSender {
     fn message_limit(self) -> usize {
         match self {
-            IpcSender::Web => WEB_IPC_LIMIT,
+            IpcSender::Web | IpcSender::LittleWindow => WEB_IPC_LIMIT,
             IpcSender::Sidebar | IpcSender::Internal | IpcSender::DepartingInternal => {
                 TRUSTED_IPC_LIMIT
             }
@@ -1248,6 +1252,7 @@ impl BrowserApp {
         raw: &str,
         origin: &str,
         document: DocumentTrust,
+        from_little_window: bool,
     ) {
         let (tab, closing) = match self.tabs.iter().find(|tab| tab.id == tab_id) {
             Some(tab) => (tab, false),
@@ -1256,10 +1261,7 @@ impl BrowserApp {
                 None => return,
             },
         };
-        let mut sender = classify_tab_sender(origin, document);
-        if closing && sender == IpcSender::Internal {
-            sender = IpcSender::DepartingInternal;
-        }
+        let sender = tab_ipc_sender(origin, document, closing, from_little_window);
         let Some((token, command)) = parse_ipc(raw, sender.message_limit()) else {
             return;
         };
@@ -1268,8 +1270,9 @@ impl BrowserApp {
         }
         // Only the committed web document may report its own state (its
         // same-origin URL, favicon, audio, scroll position): never a late
-        // message from a page the tab already left, nor a Little Eclipse
-        // popup, which posts through its opener tab's handler.
+        // message from a page the tab already left. A Little Eclipse popup,
+        // which posts through its opener tab's handler even when it is on
+        // the tab's origin, is a sender of its own (see is_command_allowed).
         if sender == IpcSender::Web
             && !is_plausible_page_report(&command, origin, &tab.committed_url())
         {
@@ -2924,6 +2927,26 @@ pub fn classify_tab_sender(origin: &str, document: DocumentTrust) -> IpcSender {
     }
 }
 
+/// Who posted a message through a tab's IPC handler. WebKit's word that a
+/// Little Eclipse popup posted it wins over everything else: such a popup
+/// shares the tab's handler and can be on the tab's own origin, so origin
+/// checks cannot tell it from the tab's page. A message from a closing tab's
+/// internal page may only save what it still had pending.
+fn tab_ipc_sender(
+    origin: &str,
+    document: DocumentTrust,
+    closing: bool,
+    from_little_window: bool,
+) -> IpcSender {
+    if from_little_window {
+        return IpcSender::LittleWindow;
+    }
+    match classify_tab_sender(origin, document) {
+        IpcSender::Internal if closing => IpcSender::DepartingInternal,
+        sender => sender,
+    }
+}
+
 /// Both URLs parse and share a tuple (scheme, host, port) origin; opaque
 /// origins (about:, data:, eclipse:, file:) never match.
 fn is_same_tuple_origin(a: &str, b: &str) -> bool {
@@ -2946,9 +2969,9 @@ fn is_plausible_url_report(url: &str, frame_origin: &str, committed_url: &str) -
 
 /// A website's report about the tab's page (its URL, favicon, audio or
 /// scroll position) must come from the tab's committed document: a frame of
-/// another origin is a page the tab already left, or a Little Eclipse popup
-/// (which shares its opener tab's IPC handler). Other commands are left to
-/// the sender allowlist.
+/// another origin is a page the tab already left. (Little Eclipse popups are
+/// told apart by WebKit, not by origin: see `IpcSender::LittleWindow`.)
+/// Other commands are left to the sender allowlist.
 fn is_plausible_page_report(command: &IpcCommand, frame_origin: &str, committed_url: &str) -> bool {
     match command {
         IpcCommand::UrlChanged { url } => is_plausible_url_report(url, frame_origin, committed_url),
@@ -2960,7 +2983,8 @@ fn is_plausible_page_report(command: &IpcCommand, frame_origin: &str, committed_
 }
 
 /// The per-sender command allowlist (C1). Websites may only report their own
-/// page state and open http(s) links in new tabs.
+/// page state and open http(s) links in new tabs; a Little Eclipse popup is
+/// not the tab's page, so it may only open http(s) links in new tabs.
 pub fn is_command_allowed(sender: IpcSender, command: &IpcCommand) -> bool {
     match sender {
         IpcSender::Sidebar => true,
@@ -2985,6 +3009,9 @@ pub fn is_command_allowed(sender: IpcSender, command: &IpcCommand) -> bool {
             IpcCommand::NewTab { url: Some(url), .. } => is_http_url(url.trim()),
             _ => false,
         },
+        IpcSender::LittleWindow => {
+            matches!(command, IpcCommand::NewTab { url: Some(url), .. } if is_http_url(url.trim()))
+        }
     }
 }
 
@@ -3687,7 +3714,7 @@ mod tests {
         for json in reports {
             let report = command(json);
             assert!(is_plausible_page_report(&report, "https://shop.example/other", page), "{json}");
-            // A Little Eclipse popup posting through its opener tab's handler.
+            // A frame of another origin (a page the tab already left).
             assert!(!is_plausible_page_report(&report, popup, page), "{json}");
             // A blank popup the opener wrote into, and a late message after
             // the tab moved on to an internal page or has nothing committed.
@@ -3707,6 +3734,63 @@ mod tests {
         let new_tab = command(r#"{"action":"new_tab","url":"https://help.example/"}"#);
         assert!(is_plausible_page_report(&new_tab, popup, page));
         assert!(is_command_allowed(classify_tab_sender(popup, DocumentTrust::default()), &new_tab));
+    }
+
+    #[test]
+    fn little_window_messages_never_count_as_the_tabs_page() {
+        const WEB_DOC: DocumentTrust = DocumentTrust {
+            internal: false,
+            left_internal: false,
+        };
+        const INTERNAL_DOC: DocumentTrust = DocumentTrust {
+            internal: true,
+            left_internal: false,
+        };
+        let page = "http://127.0.0.1:8811/opener.html";
+        // An OAuth popup that ends on the opener's own origin passes every
+        // origin check, so only WebKit's marking tells it apart.
+        let callback = "http://127.0.0.1:8811/popup-callback?state=done";
+        let reports = [
+            r#"{"action":"url_changed","url":"http://127.0.0.1:8811/popup-callback?state=done"}"#,
+            r#"{"action":"update_favicon","favicon":"http://127.0.0.1:8811/f.ico"}"#,
+            r#"{"action":"set_audible","audible":true}"#,
+            r#"{"action":"update_scroll","x":0,"y":10}"#,
+        ];
+        let sender = tab_ipc_sender(callback, WEB_DOC, false, true);
+        assert_eq!(sender, IpcSender::LittleWindow);
+        for json in reports {
+            let report = command(json);
+            assert!(is_plausible_page_report(&report, callback, page), "{json}");
+            assert!(is_command_allowed(IpcSender::Web, &report), "{json}");
+            assert!(!is_command_allowed(sender, &report), "{json}");
+        }
+        // It may still open http(s) links in new tabs, nothing else.
+        let new_tab = command(r#"{"action":"new_tab","url":"https://help.example/"}"#);
+        assert!(is_command_allowed(sender, &new_tab));
+        let eclipse_tab = command(r#"{"action":"new_tab","url":"eclipse://settings"}"#);
+        assert!(!is_command_allowed(sender, &eclipse_tab));
+        let settings = command(r#"{"action":"update_settings","settings":{}}"#);
+        assert!(!is_command_allowed(sender, &settings));
+        assert_eq!(sender.message_limit(), WEB_IPC_LIMIT);
+        // Never promoted, whatever origin or document it claims.
+        assert_eq!(
+            tab_ipc_sender("eclipse://localhost/settings", INTERNAL_DOC, false, true),
+            IpcSender::LittleWindow
+        );
+        assert_eq!(
+            tab_ipc_sender("eclipse://localhost/settings", INTERNAL_DOC, true, true),
+            IpcSender::LittleWindow
+        );
+        // The tab's own messages are classified as before.
+        assert_eq!(tab_ipc_sender(page, WEB_DOC, false, false), IpcSender::Web);
+        assert_eq!(
+            tab_ipc_sender("eclipse://localhost/settings", INTERNAL_DOC, false, false),
+            IpcSender::Internal
+        );
+        assert_eq!(
+            tab_ipc_sender("eclipse://localhost/settings", INTERNAL_DOC, true, false),
+            IpcSender::DepartingInternal
+        );
     }
 
     #[test]

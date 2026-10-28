@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 #import <WebKit/WebKit.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -1016,6 +1017,275 @@ int eclipse_navigation_policy_context(void) {
     return gPolicyContext;
 }
 
+/* ------------------------------------------------------------- Popup guards */
+/* Little Eclipse windows (see below) rely on three things wry does not
+   provide. Each is added by wrapping a method of one of wry's classes, like
+   the policy context above:
+
+   - Whether a window.open came with a user gesture. wry's new-window handler
+     only receives the URL and the window features, so the UI delegate's
+     createWebView… method is wrapped to publish the navigation action's
+     gesture state while it (and with it the Rust handler) runs. Without a
+     gesture a popup opens as a tab, never as a window of its own.
+   - wry's eclipse:// WKURLSchemeHandler takes the requesting view to be a
+     WryWebView and reaches into that class's instance variables. A popup's
+     plain WKWebView inherits the handler through its configuration, so the
+     handler's start and stop methods are wrapped to fail every task from any
+     other view before wry sees it (popups never load eclipse:// resources).
+   - A popup shares its opener tab's WKUserContentController, so its script
+     messages reach the tab's IPC handler. wry's message handler is wrapped
+     so that, while it runs, Rust can ask whether the message came from a
+     Little Eclipse webview and never take it as the tab's own page.
+
+   Little Eclipse windows only open once all three are in place. Everything
+   runs on the main thread. */
+
+static BOOL eclipse_perf_enabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) enabled = getenv("ECLIPSE_PERF") != NULL ? 1 : 0;
+    return enabled == 1;
+}
+
+static NSMutableDictionary<NSString *, NSValue *> *gOriginalMethods = nil;
+
+static NSString *eclipse_original_method_key(Class cls, SEL sel) {
+    return [NSString stringWithFormat:@"%@ %@", NSStringFromClass(cls), NSStringFromSelector(sel)];
+}
+
+/* The implementation `sel` had before eclipse_wrap_method replaced it on
+   `cls` or one of its superclasses. */
+static IMP eclipse_original_method(Class cls, SEL sel) {
+    for (Class current = cls; current != Nil; current = class_getSuperclass(current)) {
+        NSValue *value = gOriginalMethods[eclipse_original_method_key(current, sel)];
+        if (value != nil) return (IMP)value.pointerValue;
+    }
+    return NULL;
+}
+
+/* Puts `wrapper` in place of `cls`'s implementation of `sel` and keeps the
+   original for eclipse_original_method. YES when the wrapper is in place
+   (also when it already was). */
+static BOOL eclipse_wrap_method(Class cls, SEL sel, IMP wrapper) {
+    if (cls == Nil) return NO;
+    Method method = class_getInstanceMethod(cls, sel);
+    if (method == NULL) return NO;
+    IMP current = method_getImplementation(method);
+    if (current == wrapper) return YES;
+    if (gOriginalMethods == nil) gOriginalMethods = [NSMutableDictionary dictionary];
+    gOriginalMethods[eclipse_original_method_key(cls, sel)] = [NSValue valueWithPointer:(const void *)current];
+    class_replaceMethod(cls, sel, wrapper, method_getTypeEncoding(method));
+    return YES;
+}
+
+static BOOL eclipse_method_is_wrapped(Class cls, SEL sel, IMP wrapper) {
+    return cls != Nil && class_getMethodImplementation(cls, sel) == wrapper;
+}
+
+/* -- user gesture */
+
+enum {
+    ECLIPSE_POPUP_REQUEST = 1,
+    ECLIPSE_POPUP_USER_INITIATED = 2,
+};
+
+static int gPopupRequestContext = 0;
+
+/* WebKit's -[WKNavigationAction _isUserInitiated] (SPI, present since macOS
+   10.12): the navigation, or the window.open, runs from a user gesture. An
+   unknown answer is "no", so a popup then opens as a tab. */
+static BOOL eclipse_action_user_initiated(WKNavigationAction *action) {
+    SEL sel = NSSelectorFromString(@"_isUserInitiated");
+    if (action == nil || ![action respondsToSelector:sel]) return NO;
+    return ((BOOL (*)(id, SEL))objc_msgSend)(action, sel);
+}
+
+typedef WKWebView *(*EclipseCreateWebViewIMP)(id, SEL, WKWebView *, WKWebViewConfiguration *,
+                                              WKNavigationAction *, WKWindowFeatures *);
+
+static WKWebView *eclipse_create_web_view(id self, SEL _cmd, WKWebView *webView,
+                                          WKWebViewConfiguration *configuration,
+                                          WKNavigationAction *action, WKWindowFeatures *features) {
+    IMP original = eclipse_original_method(object_getClass(self), _cmd);
+    if (original == NULL) return nil;
+    int previous = gPopupRequestContext;
+    gPopupRequestContext = ECLIPSE_POPUP_REQUEST |
+                           (eclipse_action_user_initiated(action) ? ECLIPSE_POPUP_USER_INITIATED : 0);
+    WKWebView *created = nil;
+    @try {
+        created = ((EclipseCreateWebViewIMP)original)(self, _cmd, webView, configuration, action, features);
+    } @finally {
+        // Never left set for a later request.
+        gPopupRequestContext = previous;
+    }
+    return created;
+}
+
+static SEL eclipse_create_web_view_selector(void) {
+    return @selector(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:);
+}
+
+/* -- eclipse:// requests from views that are not wry's */
+
+/* The class of the tabs' webviews (wry's WryWebView), the only views wry's
+   scheme handler may serve. */
+static Class gWryWebViewClass = Nil;
+
+typedef void (*EclipseSchemeTaskIMP)(id, SEL, WKWebView *, id<WKURLSchemeTask>);
+
+static BOOL eclipse_is_wry_webview(WKWebView *webView) {
+    Class cls = gWryWebViewClass;
+    return cls != Nil && webView != nil && [webView isKindOfClass:cls];
+}
+
+static void eclipse_start_scheme_task(id self, SEL _cmd, WKWebView *webView, id<WKURLSchemeTask> task) {
+    IMP original = eclipse_original_method(object_getClass(self), _cmd);
+    if (original != NULL && eclipse_is_wry_webview(webView)) {
+        ((EclipseSchemeTaskIMP)original)(self, _cmd, webView, task);
+        return;
+    }
+    if (eclipse_perf_enabled()) {
+        fprintf(stderr, "[little] refused %s request from a popup\n",
+                task.request.URL.scheme.UTF8String ?: "custom-scheme");
+    }
+    @try {
+        [task didFailWithError:[NSError errorWithDomain:NSURLErrorDomain
+                                                   code:NSURLErrorUnsupportedURL
+                                               userInfo:nil]];
+    } @catch (NSException *exception) {
+        (void)exception;  // WebKit already stopped the task.
+    }
+}
+
+static void eclipse_stop_scheme_task(id self, SEL _cmd, WKWebView *webView, id<WKURLSchemeTask> task) {
+    IMP original = eclipse_original_method(object_getClass(self), _cmd);
+    // A task from another view was failed when it started: wry never saw it.
+    if (original != NULL && eclipse_is_wry_webview(webView)) {
+        ((EclipseSchemeTaskIMP)original)(self, _cmd, webView, task);
+    }
+}
+
+/* Whether wry's handler for `scheme` in `configuration` (if any) is guarded. */
+static BOOL eclipse_scheme_handler_guarded(WKWebViewConfiguration *configuration, NSString *scheme) {
+    id<WKURLSchemeHandler> handler = [configuration urlSchemeHandlerForURLScheme:scheme];
+    if (handler == nil) return YES;
+    Class cls = object_getClass(handler);
+    return eclipse_method_is_wrapped(cls, @selector(webView:startURLSchemeTask:), (IMP)eclipse_start_scheme_task) &&
+           eclipse_method_is_wrapped(cls, @selector(webView:stopURLSchemeTask:), (IMP)eclipse_stop_scheme_task);
+}
+
+/* -- script messages from Little Eclipse webviews */
+
+/* Every Little Eclipse webview, until it is deallocated. */
+static NSHashTable<WKWebView *> *gLittleWebViews = nil;
+static int gScriptMessageFromLittleWindow = 0;
+
+typedef void (*EclipseScriptMessageIMP)(id, SEL, WKUserContentController *, WKScriptMessage *);
+
+static void eclipse_did_receive_script_message(id self, SEL _cmd, WKUserContentController *controller,
+                                               WKScriptMessage *message) {
+    IMP original = eclipse_original_method(object_getClass(self), _cmd);
+    if (original == NULL) return;
+    // A message from a view that is already gone is not trusted as the tab's
+    // page either once popups exist.
+    WKWebView *sender = message.frameInfo.webView;
+    BOOL fromLittle = gLittleWebViews != nil && (sender == nil || [gLittleWebViews containsObject:sender]);
+    int previous = gScriptMessageFromLittleWindow;
+    gScriptMessageFromLittleWindow = fromLittle ? 1 : 0;
+    @try {
+        ((EclipseScriptMessageIMP)original)(self, _cmd, controller, message);
+    } @finally {
+        gScriptMessageFromLittleWindow = previous;
+    }
+}
+
+/* 1 while wry's IPC handler runs for a message a Little Eclipse webview
+   posted, else 0. */
+int eclipse_script_message_from_little_window(void) {
+    return gScriptMessageFromLittleWindow;
+}
+
+/* wry's WKScriptMessageHandler class, WryWebViewDelegate. wry's classes are
+   made at run time by objc2, named "<module path>::<type><crate version>"
+   (objc2's documented default), so its name follows from the name of the
+   tabs' webview class, wry's WryWebView, defined in a sibling module. Nil
+   when the names do not fit that pattern or the class is not a message
+   handler (popups then open as tabs). */
+static Class eclipse_find_wry_ipc_class(Class wryWebViewClass) {
+    NSString *viewName = NSStringFromClass(wryWebViewClass);
+    NSString *viewPart = @"::wry_web_view::WryWebView";
+    NSRange range = [viewName rangeOfString:viewPart options:NSBackwardsSearch];
+    if (range.location == NSNotFound) return Nil;
+    NSString *prefix = [viewName substringToIndex:range.location];
+    NSString *version = [viewName substringFromIndex:NSMaxRange(range)];
+    NSString *name = [NSString stringWithFormat:@"%@::wry_web_view_delegate::WryWebViewDelegate%@", prefix, version];
+    Class cls = NSClassFromString(name);
+    if (cls == Nil || !class_conformsToProtocol(cls, @protocol(WKScriptMessageHandler)) ||
+        !class_respondsToSelector(cls, @selector(userContentController:didReceiveScriptMessage:))) {
+        return Nil;
+    }
+    return cls;
+}
+
+/* -- installation */
+
+static BOOL gLittleGuardsReady = NO;
+
+/* Installs the guards from a tab's webview (a WryWebView whose UI delegate
+   was already hooked). Little Eclipse windows stay off until this succeeds. */
+static void eclipse_little_guards_unavailable(const char *why) {
+    static BOOL logged = NO;
+    if (logged || !eclipse_perf_enabled()) return;
+    logged = YES;
+    fprintf(stderr, "[little] guards unavailable (%s): popups open as tabs\n", why);
+}
+
+static void eclipse_little_install_guards(WKWebView *tabView) {
+    if (gLittleGuardsReady || tabView == nil) return;
+    Class viewClass = [tabView class];
+    if (viewClass == [WKWebView class] || ![viewClass isSubclassOfClass:[WKWebView class]]) {
+        eclipse_little_guards_unavailable("tab view class");
+        return;
+    }
+    if (gWryWebViewClass == Nil) {
+        // Set before the scheme handler is wrapped: the wrapper serves only
+        // views of this class.
+        gWryWebViewClass = viewClass;
+    } else if (gWryWebViewClass != viewClass) {
+        eclipse_little_guards_unavailable("tab view class changed");
+        return;
+    }
+    id uiDelegate = tabView.UIDelegate;
+    if (uiDelegate == nil ||
+        !eclipse_method_is_wrapped(object_getClass(uiDelegate), eclipse_create_web_view_selector(),
+                                   (IMP)eclipse_create_web_view)) {
+        eclipse_little_guards_unavailable("UI delegate");
+        return;
+    }
+    id<WKURLSchemeHandler> handler = [tabView.configuration urlSchemeHandlerForURLScheme:@"eclipse"];
+    if (handler != nil) {
+        Class handlerClass = object_getClass(handler);
+        if (!eclipse_wrap_method(handlerClass, @selector(webView:startURLSchemeTask:),
+                                 (IMP)eclipse_start_scheme_task) ||
+            !eclipse_wrap_method(handlerClass, @selector(webView:stopURLSchemeTask:),
+                                 (IMP)eclipse_stop_scheme_task)) {
+            eclipse_little_guards_unavailable("scheme handler");
+            return;
+        }
+    }
+    // wry's WKScriptMessageHandler (the IPC handler of every webview).
+    Class ipcClass = eclipse_find_wry_ipc_class(viewClass);
+    if (ipcClass == Nil ||
+        !eclipse_wrap_method(ipcClass, @selector(userContentController:didReceiveScriptMessage:),
+                             (IMP)eclipse_did_receive_script_message)) {
+        eclipse_little_guards_unavailable("IPC handler");
+        return;
+    }
+    gLittleGuardsReady = YES;
+    if (eclipse_perf_enabled()) {
+        fprintf(stderr, "[little] guards installed\n");
+    }
+}
+
 /* ------------------------------------------------------------- JavaScript dialogs & page print */
 /* wry's UI delegate lacks alert/confirm/prompt (WebKit then silently returns
    cancel) and the print callback, so they are added the same way. */
@@ -1151,6 +1421,9 @@ static void eclipse_hook_delegates(WKWebView *webView) {
             (IMP)eclipse_run_text_input_panel, "v@:@@@@@?");
         added |= eclipse_add_method_if_missing(cls, NSSelectorFromString(@"_webView:printFrame:"),
                                                (IMP)eclipse_print_frame, "v@:@@");
+        // Publishes a window.open's user-gesture state to the new-window
+        // handler (see Popup guards).
+        eclipse_wrap_method(cls, eclipse_create_web_view_selector(), (IMP)eclipse_create_web_view);
         if (added) {
             webView.UIDelegate = uiDelegate;
         }
@@ -1177,6 +1450,7 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
         // Checked on every registration: a webview may come with a delegate
         // of a class that has not been hooked yet.
         eclipse_hook_delegates(webView);
+        eclipse_little_install_guards(webView);
     }
 }
 
@@ -1189,9 +1463,15 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
    runs the tab's init scripts and its messages reach the tab's IPC handler
    (Rust only trusts them as an ordinary website).
 
+   A popup opens as a window only for a window.open with a user gesture, and
+   at most kEclipseLittleMaxPerTab per tab and kEclipseLittleMaxTotal in all;
+   anything else opens as a tab. The guards above keep popups away from wry's
+   eclipse:// handler and mark their script messages.
+
    The window shows the page title, and its subtitle shows the host of the
-   committed document, derived here from WebKit's URL and never from page
-   content. A popup only ever loads web content: internal eclipse:// pages
+   document on screen, derived here from WebKit's URL and never from page
+   content: the host of a load only once it commits, never of one still
+   pending. A popup only ever loads web content: internal eclipse:// pages
    and other schemes are refused by its navigation delegate. Each window
    follows its root opener (the tab's webview): when that webview leaves its
    window (the tab was closed, hibernated or rebuilt) the popup closes. */
@@ -1203,7 +1483,8 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
    a destroyed tab's WKWebView alive, so its detachment, not its
    deallocation, is what signals that the tab is gone. */
 @property(nonatomic, weak) WKWebView *opener;
-/* The committed document's URL, whose host the subtitle shows. */
+/* The URL of the document on screen, whose host the subtitle shows: nil
+   until WebKit confirms one (see -syncDisplayURL). */
 @property(nonatomic, copy) NSURL *displayURL;
 @property(nonatomic) BOOL observing;
 @property(nonatomic) BOOL closed;
@@ -1214,15 +1495,11 @@ static __weak EclipseLittleWindow *gLastLittleWindow = nil;
 static NSTimer *gLittleOpenerTimer = nil;
 static void *kEclipseLittleKVOContext = &kEclipseLittleKVOContext;
 
+static const NSUInteger kEclipseLittleMaxPerTab = 3;
+static const NSUInteger kEclipseLittleMaxTotal = 10;
 static const CGFloat kEclipseLittleMinWidth = 360.0;
 static const CGFloat kEclipseLittleMinHeight = 260.0;
 static const NSUInteger kEclipseLittleMaxHostLength = 64;
-
-static BOOL eclipse_perf_enabled(void) {
-    static int enabled = -1;
-    if (enabled < 0) enabled = getenv("ECLIPSE_PERF") != NULL ? 1 : 0;
-    return enabled == 1;
-}
 
 static BOOL eclipse_is_web_scheme(NSString *scheme) {
     NSString *lower = scheme.lowercaseString;
@@ -1327,23 +1604,36 @@ static void eclipse_little_check_openers(void);
         return;
     }
     if (self.closed) return;
-    if ([keyPath isEqualToString:@"URL"]) {
-        // WebKit's URL already names a provisional load while the previous
-        // document is still on screen, so only a same-origin change (a
-        // fragment, pushState, a failed load reverting) is taken from here;
-        // a new origin is shown once its document commits.
-        NSURL *current = self.webView.URL;
-        if (self.displayURL == nil || eclipse_same_web_origin(self.displayURL, current)) {
-            if (current != nil) self.displayURL = current;
-        }
+    if ([keyPath isEqualToString:@"URL"] || [keyPath isEqualToString:@"loading"]) {
+        [self syncDisplayURL];
     }
     [self refreshTitle];
+}
+
+/* WebKit's URL already names a pending load while the previous document (or
+   the popup's initial blank document) is still on screen, and that load may
+   never commit: it can be stopped, fail, or get a 204. So while a load is
+   pending only a change within the shown origin is taken (a fragment,
+   pushState); a new origin is shown when its document commits
+   (didCommitNavigation). Once nothing is loading, WebKit's URL is the
+   document on screen, whatever it is: after an abandoned load it is the
+   previous document again, and after the opener wrote into the initial
+   blank document it is the opener's URL, which that document then has. */
+- (void)syncDisplayURL {
+    WKWebView *webView = self.webView;
+    NSURL *current = webView.URL;
+    if (!webView.isLoading) {
+        self.displayURL = current;
+    } else if (self.displayURL != nil && eclipse_same_web_origin(self.displayURL, current)) {
+        self.displayURL = current;
+    }
 }
 
 - (void)stopObserving {
     if (!self.observing) return;
     self.observing = NO;
     [self.webView removeObserver:self forKeyPath:@"URL" context:kEclipseLittleKVOContext];
+    [self.webView removeObserver:self forKeyPath:@"loading" context:kEclipseLittleKVOContext];
     [self.webView removeObserver:self forKeyPath:@"title" context:kEclipseLittleKVOContext];
 }
 
@@ -1429,24 +1719,26 @@ static void eclipse_little_check_openers(void);
     (void)webView;
     if (self.closed) return nil;
     NSURL *url = action.request.URL;
-    if (features.width == nil || features.height == nil) {
-        // Not a popup (a target=_blank link, window.open without a size):
-        // a web page opens as a tab, as it would from a tab.
-        if (eclipse_is_web_scheme(url.scheme) && gCallback != NULL) {
-            NSString *command = [@"little_window_new_tab:" stringByAppendingString:url.absoluteString];
-            gCallback(command.UTF8String);
-        }
-        return nil;
-    }
-    if (!eclipse_little_initial_url_allowed(url)) return nil;
     WKWebView *opener = self.opener;
-    if (opener == nil) return nil;
-    BOOL hasPosition = features.x != nil && features.y != nil;
-    NSPoint topLeft = hasPosition ? NSMakePoint(features.x.doubleValue, features.y.doubleValue) : NSZeroPoint;
-    EclipseLittleWindow *nested = eclipse_little_window_create(
-        configuration, opener, NSMakeSize(features.width.doubleValue, features.height.doubleValue),
-        hasPosition, topLeft);
-    return nested.webView;
+    // A sized window.open with a user gesture nests another Little Eclipse
+    // window, as it would from a tab (within the same limits).
+    if (features.width != nil && features.height != nil && opener != nil &&
+        eclipse_action_user_initiated(action) && eclipse_little_initial_url_allowed(url)) {
+        BOOL hasPosition = features.x != nil && features.y != nil;
+        NSPoint topLeft = hasPosition ? NSMakePoint(features.x.doubleValue, features.y.doubleValue) : NSZeroPoint;
+        EclipseLittleWindow *nested = eclipse_little_window_create(
+            configuration, opener, NSMakeSize(features.width.doubleValue, features.height.doubleValue),
+            hasPosition, topLeft);
+        if (nested != nil) return nested.webView;
+    }
+    // Anything else (a target=_blank link, window.open without a size or a
+    // gesture, a popup over the limit): a web page opens as a tab, as it
+    // would from a tab.
+    if (eclipse_is_web_scheme(url.scheme) && gCallback != NULL) {
+        NSString *command = [@"little_window_new_tab:" stringByAppendingString:url.absoluteString];
+        gCallback(command.UTF8String);
+    }
+    return nil;
 }
 
 - (void)webViewDidClose:(WKWebView *)webView {
@@ -1584,12 +1876,31 @@ static NSRect eclipse_clamp_frame(NSRect frame, NSRect visible) {
     return frame;
 }
 
+/* Whether one more window may open for `opener` (a tab's webview). */
+static BOOL eclipse_little_has_room(WKWebView *opener) {
+    NSUInteger total = 0, forOpener = 0;
+    for (EclipseLittleWindow *lw in gLittleWindows) {
+        if (lw.closed) continue;
+        total++;
+        if (lw.opener == opener) forOpener++;
+    }
+    return total < kEclipseLittleMaxTotal && forOpener < kEclipseLittleMaxPerTab;
+}
+
 static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration *configuration,
                                                          WKWebView *opener,
                                                          NSSize requested,
                                                          BOOL hasPosition,
                                                          NSPoint topLeft) {
     if (configuration == nil || !eclipse_little_opener_alive(opener)) return nil;
+    if (!gLittleGuardsReady || !eclipse_scheme_handler_guarded(configuration, @"eclipse")) {
+        if (eclipse_perf_enabled()) fprintf(stderr, "[little] guards missing, opening as a tab\n");
+        return nil;
+    }
+    if (!eclipse_little_has_room(opener)) {
+        if (eclipse_perf_enabled()) fprintf(stderr, "[little] limit reached, opening as a tab\n");
+        return nil;
+    }
 
     NSWindow *anchor = opener.window ?: eclipse_browser_window();
     NSScreen *screen = anchor.screen ?: [NSScreen mainScreen];
@@ -1629,6 +1940,10 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
         return nil;
     }
     if (webView == nil) return nil;
+    // Marked before it loads anything: its script messages are never the
+    // opener tab's page.
+    if (gLittleWebViews == nil) gLittleWebViews = [NSHashTable weakObjectsHashTable];
+    [gLittleWebViews addObject:webView];
     webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     webView.customUserAgent = opener.customUserAgent;
     webView.allowsMagnification = YES;
@@ -1681,6 +1996,7 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     webView.navigationDelegate = lw;
     window.delegate = lw;
     [webView addObserver:lw forKeyPath:@"URL" options:0 context:kEclipseLittleKVOContext];
+    [webView addObserver:lw forKeyPath:@"loading" options:0 context:kEclipseLittleKVOContext];
     [webView addObserver:lw forKeyPath:@"title" options:0 context:kEclipseLittleKVOContext];
     lw.observing = YES;
     [lw refreshTitle];
@@ -1702,8 +2018,11 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
    WKWebView), built on `configurationPtr` (the WKWebViewConfiguration WebKit
    handed the opener's UI delegate). `x`/`y` are the requested top-left in
    screen coordinates with y downwards from the primary screen's top.
+   Only called from wry's new-window handler, inside the wrapped UI delegate
+   method: a request without a user gesture gets no window.
    Returns the popup's WKWebView retained (+1; the caller owns that
-   reference and hands it to WebKit), or NULL when no window could be made. */
+   reference and hands it to WebKit), or NULL when no window may or could be
+   made (the caller then opens the URL as a tab). */
 void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double width, double height,
                                  int hasPosition, double x, double y) {
     if (configurationPtr == NULL || openerPtr == NULL) return NULL;
@@ -1712,6 +2031,10 @@ void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double
         WKWebView *opener = (__bridge WKWebView *)openerPtr;
         if (![configuration isKindOfClass:[WKWebViewConfiguration class]] ||
             ![opener isKindOfClass:[WKWebView class]]) {
+            return NULL;
+        }
+        if ((gPopupRequestContext & ECLIPSE_POPUP_USER_INITIATED) == 0) {
+            if (eclipse_perf_enabled()) fprintf(stderr, "[little] no user gesture, opening as a tab\n");
             return NULL;
         }
         EclipseLittleWindow *lw = eclipse_little_window_create(

@@ -156,8 +156,9 @@ fn main() {
                     msg,
                     origin,
                     document,
+                    from_little_window,
                 } => {
-                    app.handle_tab_ipc(tab_id, &msg, &origin, document);
+                    app.handle_tab_ipc(tab_id, &msg, &origin, document, from_little_window);
                 }
                 UserEvent::PageStarted { tab_id, url } => {
                     app.handle_page_started(tab_id, url);

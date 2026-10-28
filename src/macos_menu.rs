@@ -33,6 +33,7 @@ unsafe extern "C" {
     fn eclipse_register_tab_view(view_ptr: *mut std::ffi::c_void, tab_id: u64);
     fn eclipse_recheck_hover();
     fn eclipse_navigation_policy_context() -> i32;
+    fn eclipse_script_message_from_little_window() -> i32;
     fn eclipse_open_little_window(
         configuration: *mut std::ffi::c_void,
         opener: *mut std::ffi::c_void,
@@ -278,10 +279,21 @@ pub fn navigation_policy_context() -> PolicyContext {
     }
 }
 
+/// Whether the script message wry's IPC handler is delivering right now was
+/// posted by a Little Eclipse window's webview (menu.m wraps wry's message
+/// handler; outside a delivery this is false). Such a popup shares its opener
+/// tab's WKUserContentController, so its messages reach the tab's handler.
+pub fn script_message_from_little_window() -> bool {
+    unsafe { eclipse_script_message_from_little_window() != 0 }
+}
+
 /// Opens a Little Eclipse window (menu.m) for a popup `features` describes,
 /// built on the configuration WebKit handed the opener, and returns its
 /// webview for `NewWindowResponse::Create`. `None` when the request has no
-/// size or the native window could not be made.
+/// size, came without a user gesture, would exceed the popup limits, or the
+/// native window could not be made; the caller then opens it as a tab.
+/// Must be called from wry's new-window handler (menu.m reads the gesture
+/// state of the request being handled).
 pub fn open_little_window(
     features: &wry::NewWindowFeatures,
 ) -> Option<objc2::rc::Retained<objc2_web_kit::WKWebView>> {

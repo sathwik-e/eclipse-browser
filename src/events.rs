@@ -8,12 +8,14 @@ pub enum UserEvent {
     /// `origin` is the URL of the frame that posted the message, as reported by
     /// WebKit (not by the page). Together with `document` (what the tab had
     /// committed when the message arrived) it decides which commands the
-    /// sender may run.
+    /// sender may run. `from_little_window`: WebKit says a Little Eclipse
+    /// popup posted it (it shares the tab's handler), not the tab's page.
     TabIpc {
         tab_id: usize,
         msg: String,
         origin: String,
         document: DocumentTrust,
+        from_little_window: bool,
     },
     PageStarted { tab_id: usize, url: String },
     PageFinished { tab_id: usize, url: String },

@@ -1,0 +1,7 @@
+<!doctype html><html><head><title>EImg</title></head><body><script>
+var r = [];
+function rep() { window.webkit.messageHandlers.ipc.postMessage('popup:' + r.join('&')); }
+var i = new Image(); i.onload = function () { r.push('img=load'); }; i.onerror = function () { r.push('img=error'); }; i.src = 'eclipse://localhost/icon';
+fetch('eclipse://localhost/icon').then(function (x) { r.push('fetch=' + x.status); }, function () { r.push('fetch=err'); });
+setTimeout(rep, 1500);
+</script></body></html>

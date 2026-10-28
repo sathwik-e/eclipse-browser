@@ -33,10 +33,11 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
   configurable time and restored on demand. Tabs that are loading or playing
   audio are never discarded.
 - **Little Eclipse windows for sign-in popups.** Sign-in and payment popups
-  open in a small window of their own instead of a tab, so they keep
-  `window.opener` and can hand their result back to the page. The window
-  always shows the real host of the page it is on, with "Not Secure" for
-  plain http. Ordinary links that open new windows still open as tabs.
+  you open with a click open in a small window of their own instead of a
+  tab, so they keep `window.opener` and can hand their result back to the
+  page. The window always shows the real host of the page it is on, with
+  "Not Secure" for plain http. Ordinary links that open new windows, and
+  popups a page opens on its own, still open as tabs.
 - **Notes and Easel.** A notes page and a sketch-and-cards canvas, stored
   locally.
 - **Real browser plumbing:**
@@ -55,6 +56,10 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
   message**, using the frame URL reported by WebKit rather than by the page:
   - A normal website can only report its URL, title icon, audio and scroll
     position, and open http(s) links in new tabs.
+  - A page in a Little Eclipse popup window can only open http(s) links in
+    new tabs. WebKit tells its messages apart from the tab's own, even when
+    it is on the same site, and it cannot load internal `eclipse://`
+    resources.
   - Only the sidebar and internal pages can change settings, install
     extensions or manage tabs.
 - The page bridge never exposes its token to page scripts.
@@ -149,10 +154,12 @@ src/events.rs      event-loop events, IPC commands, UI state types
 src/bridge.js      page bridge: find in page, SPA URL, favicon, audio, links
 src/shields.js     cosmetic filtering and YouTube ad skipping
 src/menu.m         AppKit menu, window styling, edge hover, content blocker,
-                   navigation-failure hooks, JavaScript dialogs
+                   navigation-failure hooks, JavaScript dialogs, Little
+                   Eclipse popup windows
 src/ui_assets.rs   eclipse:// protocol serving the embedded pages below
 assets/            sidebar, new tab, settings, notes and easel pages; app icon
-scripts/           packaging (app bundle, dmg, zip) and icon generation
+scripts/           packaging (app bundle, dmg, zip), icon generation and the
+                   Little Eclipse end-to-end checks
 ```
 
 `BrowserApp` runs on the main thread. WebKit callbacks reach it through a `tao`
@@ -169,6 +176,12 @@ ECLIPSE_PERF=1                # print startup timing and UI probes
 ECLIPSE_SMOKE_TEST_MS=8000    # quit automatically after N ms
 ECLIPSE_SMOKE_URL=https://example.com   # open a URL through the normal tab path
 ```
+
+`scripts/little-eclipse-e2e/run.sh` checks Little Eclipse windows end to end
+(user gesture, limits, the host shown for loads that never commit, popup
+messages and `eclipse://` requests). It builds `src/menu.m` into a small
+harness, serves local test pages on ports 8831 and 8832, and opens windows
+for about a minute. `GUARD_MALLOC=1` runs it under `libgmalloc`.
 
 ## Known limitations
 

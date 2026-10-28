@@ -1,0 +1,4 @@
+<!doctype html><html><head><title>Same</title></head><body><script>
+history.replaceState(null, '', '/popup-callback?state=done');
+window.webkit.messageHandlers.ipc.postMessage('popup:url=' + location.href);
+</script></body></html>

@@ -6,33 +6,53 @@ use std::path::PathBuf;
 pub enum UserEvent {
     Ipc(String),
     /// `origin` is the URL of the frame that posted the message, as reported by
-    /// WebKit (not by the page). It decides which commands the sender may run.
-    TabIpc { tab_id: usize, msg: String, origin: String },
+    /// WebKit (not by the page). Together with `document` (what the tab had
+    /// committed when the message arrived) it decides which commands the
+    /// sender may run.
+    TabIpc {
+        tab_id: usize,
+        msg: String,
+        origin: String,
+        document: DocumentTrust,
+    },
     PageStarted { tab_id: usize, url: String },
     PageFinished { tab_id: usize, url: String },
     TitleChanged { tab_id: usize, title: String },
     NewWindowRequested { url: String },
+    /// `seq` identifies the download across its start and completion events.
     DownloadStarted {
+        seq: u64,
         file_name: String,
         url: String,
         path: String,
     },
     DownloadCompleted {
+        /// None when the start was never seen (the matching is by URL then).
+        seq: Option<u64>,
         url: String,
         file_name: String,
         path: Option<String>,
         success: bool,
     },
     MenuAction(String),
-    /// A navigation in a tab failed (provisional or after commit).
+    /// WebKit reported a main-frame navigation error in a tab, after
+    /// (`committed`) or before the new document committed. `domain`/`code`
+    /// are the NSError's; see `tab::classify_navigation_error`.
     NavigationFailed {
         tab_id: usize,
+        committed: bool,
+        domain: String,
         code: i64,
         description: String,
         url: String,
     },
     /// The WebContent process of a tab crashed or was killed.
     WebContentTerminated { tab_id: usize },
+    /// The sidebar's WebContent process crashed or was killed.
+    SidebarWebContentTerminated,
+    /// An internal page finished running its flush hook (see
+    /// `Tab::flush_internal_page`): every save it posted has been delivered.
+    PageFlushed { tab_id: usize },
     /// A Chrome Web Store download finished on its worker thread: the
     /// unpacked extension directory, or a user-facing error.
     ExtensionDownloaded {
@@ -43,6 +63,18 @@ pub enum UserEvent {
     HoverExpandSidebar,
     HoverCollapseSidebar,
     CloseWindow,
+}
+
+/// What a tab's committed document was when one of its IPC messages arrived
+/// (read on WebKit's callback, before any later commit can change it).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DocumentTrust {
+    /// The committed document is an internal eclipse:// page (not the error
+    /// page).
+    pub internal: bool,
+    /// The previous document was an internal page and this one is not: a
+    /// save posted by that page while it unloaded may still be arriving.
+    pub left_internal: bool,
 }
 
 #[derive(Debug, Deserialize)]

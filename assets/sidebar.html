@@ -106,6 +106,12 @@ body {
   padding: 4px 2px;
 }
 
+/* Native fullscreen: close, minimize and zoom do nothing useful there. */
+body.is-fullscreen #traffic-lights {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .traffic-lights-vertical {
   display: flex !important;
   flex-direction: column !important;
@@ -3380,6 +3386,8 @@ window.updateBrowserState = function(state) {
   }
 
   document.body.classList.toggle('is-collapsed-state', !!state.sidebar_collapsed);
+  // In native fullscreen the window controls do nothing useful.
+  document.body.classList.toggle('is-fullscreen', !!state.is_fullscreen);
   if (state.sidebar_collapsed) {
     document.body.classList.toggle('floating-popout', !!state.sidebar_hover_expanded);
   } else {
@@ -4048,7 +4056,20 @@ window.addEventListener('blur', () => {
   refreshOmnibar();
   flushQuickNoteSave();
   hideSiteControlsPopover();
-  if (commandBarOpen && Date.now() - commandBarOpenedAt > 400) closeCommandBar();
+  if (commandBarOpen) {
+    // Opening the bar can itself blur the window for a moment, so a blur
+    // right after opening only closes it if focus is still gone once that
+    // moment is over (and the bar was not closed and reopened meanwhile).
+    const openedAt = commandBarOpenedAt;
+    const remaining = 400 - (Date.now() - openedAt);
+    if (remaining <= 0) {
+      closeCommandBar();
+    } else {
+      setTimeout(() => {
+        if (commandBarOpen && commandBarOpenedAt === openedAt && !document.hasFocus()) closeCommandBar();
+      }, remaining + 10);
+    }
+  }
   updateSidebarInteraction();
 });
 

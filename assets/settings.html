@@ -784,7 +784,10 @@ function setSettingDebounced(key, value) {
   pendingTimer = setTimeout(() => flushSettings(), TEXT_DEBOUNCE_MS);
 }
 
-// Closing the tab or switching away must not drop a debounced edit.
+// Closing the tab or switching away must not drop a debounced edit. Eclipse
+// calls __eclipseFlush before it closes the tab, quits or navigates away;
+// pagehide and visibilitychange cover everything else (swipes, links).
+window.__eclipseFlush = () => flushSettings();
 window.addEventListener('pagehide', () => flushSettings());
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') flushSettings();

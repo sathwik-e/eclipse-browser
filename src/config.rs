@@ -344,15 +344,42 @@ impl BrowserConfig {
     /// When anything had to be dropped, the original file is copied to
     /// `config.json.bad-<timestamp>` first and the repaired config is saved.
     pub fn load() -> Self {
-        let path = Self::config_path();
-        let Ok(content) = fs::read_to_string(&path) else {
-            return Self::default();
+        Self::load_from(&Self::config_path())
+    }
+
+    fn load_from(path: &Path) -> Self {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(err) => {
+                // Unreadable (permissions, I/O): move it aside, so the next
+                // save cannot replace the user's data with these defaults.
+                let backup = bad_config_path(path);
+                match fs::rename(path, &backup) {
+                    Ok(()) => eprintln!(
+                        "[eclipse] config at {path:?} could not be read ({err}); moved to {backup:?}, starting from defaults"
+                    ),
+                    Err(move_err) => eprintln!(
+                        "[eclipse] config at {path:?} could not be read ({err}) or moved aside ({move_err})"
+                    ),
+                }
+                return Self::default();
+            }
         };
-        let (mut config, problems) = Self::parse_lenient(&content);
+        // Invalid UTF-8 (an edit in a Latin-1 editor) loses only the bad
+        // bytes, never the whole file.
+        let (content, invalid_utf8) = match String::from_utf8(bytes) {
+            Ok(content) => (content, false),
+            Err(err) => (String::from_utf8_lossy(err.as_bytes()).into_owned(), true),
+        };
+        let (mut config, mut problems) = Self::parse_lenient(&content);
+        if invalid_utf8 {
+            problems.insert(0, "invalid UTF-8 replaced".into());
+        }
         config.sanitize();
         if !problems.is_empty() {
-            let backup = path.with_extension(format!("json.bad-{}", unix_now()));
-            match fs::copy(&path, &backup) {
+            let backup = bad_config_path(path);
+            match fs::copy(path, &backup) {
                 Ok(_) => eprintln!(
                     "[eclipse] config at {path:?} had unreadable data ({}); original kept at {backup:?}",
                     problems.join("; ")
@@ -362,7 +389,7 @@ impl BrowserConfig {
                     problems.join("; ")
                 ),
             }
-            config.save();
+            config.save_to(path);
         }
         config
     }
@@ -440,8 +467,12 @@ impl BrowserConfig {
     /// Persist config atomically so a crash during save can never truncate the
     /// user's settings file.
     pub fn save(&self) {
+        self.save_to(&Self::config_path());
+    }
+
+    fn save_to(&self, path: &Path) {
         if let Ok(json) = serde_json::to_string_pretty(self) {
-            write_atomic(&Self::config_path(), &json);
+            write_atomic(path, &json);
         }
     }
 
@@ -657,6 +688,12 @@ pub fn write_atomic(path: &Path, contents: &str) {
     }
 }
 
+/// Where a config that could not be used as-is is kept:
+/// `config.json.bad-<timestamp>`.
+fn bad_config_path(path: &Path) -> PathBuf {
+    path.with_extension(format!("json.bad-{}", unix_now()))
+}
+
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -720,6 +757,66 @@ fn urlencode(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "eclipse-config-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn backups_in(dir: &Path) -> usize {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .is_ok_and(|e| e.file_name().to_string_lossy().contains(".bad-"))
+            })
+            .count()
+    }
+
+    #[test]
+    fn invalid_utf8_keeps_the_rest_of_the_config_and_a_backup() {
+        let dir = scratch_dir("utf8");
+        let path = dir.join("config.json");
+        let mut bytes = br#"{"notes":[{"id":"n1","title":"caf"#.to_vec();
+        bytes.push(0xE9); // Latin-1 e-acute
+        bytes.extend_from_slice(br#"","content":"keep me","workspace":"Default","updated_at":1}]}"#);
+        fs::write(&path, &bytes).unwrap();
+
+        let config = BrowserConfig::load_from(&path);
+        assert_eq!(config.notes.len(), 1);
+        assert_eq!(config.notes[0].content, "keep me");
+        assert_eq!(backups_in(&dir), 1);
+        // The repaired file is valid UTF-8 now.
+        assert!(fs::read_to_string(&path).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unreadable_config_is_moved_aside_not_overwritten() {
+        let dir = scratch_dir("unreadable");
+        let path = dir.join("config.json");
+        // Reading a directory fails with an error other than NotFound.
+        fs::create_dir_all(&path).unwrap();
+        let config = BrowserConfig::load_from(&path);
+        assert_eq!(config.notes.len(), BrowserConfig::default().notes.len());
+        assert!(!path.exists());
+        assert_eq!(backups_in(&dir), 1);
+
+        // A missing file is simply a first run.
+        let missing = dir.join("missing.json");
+        let _ = BrowserConfig::load_from(&missing);
+        assert!(!missing.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn encodes_search_queries() {

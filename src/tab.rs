@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -14,10 +14,13 @@ use wry::{
 };
 
 use crate::config::BrowserConfig;
-use crate::events::{TabState, UserEvent};
+use crate::events::{DocumentTrust, TabState, UserEvent};
 
 const BRIDGE_SCRIPT: &str = include_str!("bridge.js");
 const SHIELDS_SCRIPT: &str = include_str!("shields.js");
+
+/// Title of a tab whose web page has not reported one yet.
+pub const LOADING_TITLE: &str = "Loading…";
 
 pub const MIN_ZOOM: f64 = 0.5;
 pub const MAX_ZOOM: f64 = 3.0;
@@ -25,6 +28,38 @@ pub const MAX_ZOOM: f64 = 3.0;
 /// Revision passed by callers that do not track config revisions: the config
 /// is always pushed.
 const UNVERSIONED: u64 = u64::MAX;
+
+/// Runs an internal page's flush hook (settings, notes and easel post their
+/// debounced edits synchronously from it). Always evaluates to `true`, so
+/// the completion callback fires even when the page has no hook.
+const FLUSH_SCRIPT: &str = "(function () { try { if (typeof window.__eclipseFlush === 'function') window.__eclipseFlush(); } catch (_) {} return true; })()";
+
+/// `NavState::native_adblock` values (0 until the webview is built).
+const NATIVE_ADBLOCK_OFF: u8 = 1;
+const NATIVE_ADBLOCK_ON: u8 = 2;
+
+/// The ad-blocking rules that apply to one tab: its space's switch combined
+/// with the global one, and the sites the user excluded.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AdblockPolicy {
+    enabled: bool,
+    /// Lowercased, trimmed, never empty.
+    disabled_domains: Vec<String>,
+}
+
+impl AdblockPolicy {
+    fn for_space(config: &BrowserConfig, workspace: &str) -> Self {
+        let profile = config.profile_for_workspace(workspace);
+        Self {
+            enabled: profile.adblock_enabled && config.adblock_enabled,
+            disabled_domains: normalized_domains(&config.adblock_disabled_domains),
+        }
+    }
+
+    fn blocks(&self, url: &str) -> bool {
+        self.enabled && !url_host_in_domains(url, &self.disabled_domains)
+    }
+}
 
 /// Navigation state shared between a tab and its webview's WebKit callbacks.
 /// Every webview (including one rebuilt after hibernation) gets a fresh one.
@@ -39,12 +74,27 @@ struct NavState {
     committed_url: Mutex<String>,
     /// The committed document is an internal eclipse:// page.
     current_is_internal: AtomicBool,
-    /// The browser started the pending navigation itself (load_url, back,
-    /// forward, reload), so it may lead to an eclipse:// page.
-    browser_initiated: AtomicBool,
+    /// The previous committed document was internal and the current one is
+    /// not (a save the old page posted while unloading may still arrive).
+    left_internal: AtomicBool,
+    /// The eclipse:// URL the browser itself is loading (load_url, the start
+    /// URL, a retry from the error page). The navigation policy lets exactly
+    /// this URL through, once; commits and failures clear it.
+    browser_target: Mutex<Option<String>>,
+    /// A load the browser started (load_url, the start URL, a retry) has
+    /// neither committed nor failed yet.
+    browser_load_pending: AtomicBool,
     /// An error page is shown through load_html. Its about:blank load events
     /// are swallowed so the tab keeps reporting the URL that failed.
     showing_error_page: AtomicBool,
+    /// Whether the native content-rule list is attached (NATIVE_ADBLOCK_*).
+    native_adblock: AtomicU8,
+    /// The tab's ad-blocking rules, for decisions made at navigation time.
+    adblock: Mutex<AdblockPolicy>,
+    /// The tab's WKWebView as an NSView pointer once it is built (0 before).
+    /// It lives exactly as long as the webview that owns this state's
+    /// navigation handler.
+    view: AtomicUsize,
 }
 
 impl NavState {
@@ -56,14 +106,117 @@ impl NavState {
     }
 
     /// Navigation policy: web pages may not open internal pages (other than
-    /// the new-tab page, which holds nothing) in the tab or in frames.
-    fn allows_navigation(&self, url: &str) -> bool {
+    /// the new-tab page, which holds nothing) in the tab or in frames. An
+    /// internal page may, and so may the browser itself: a load it started
+    /// (exactly that URL, once) or a main-frame back/forward navigation,
+    /// which can only return to a page this tab already showed.
+    fn allows_navigation(&self, url: &str, main_frame_back_forward: bool) -> bool {
         if !is_eclipse_scheme(url) {
             return true;
         }
         self.current_is_internal.load(Ordering::Relaxed)
-            || self.browser_initiated.load(Ordering::Relaxed)
+            || main_frame_back_forward
             || is_newtab_url(url)
+            || self.take_browser_target(url)
+    }
+
+    fn set_browser_target(&self, url: Option<String>) {
+        if let Ok(mut target) = self.browser_target.lock() {
+            *target = url;
+        }
+    }
+
+    /// Consumes the browser's pending eclipse:// target if `url` is it.
+    fn take_browser_target(&self, url: &str) -> bool {
+        let Ok(mut target) = self.browser_target.lock() else {
+            return false;
+        };
+        let matches = target
+            .as_deref()
+            .is_some_and(|wanted| same_eclipse_url(wanted, url));
+        if matches {
+            *target = None;
+        }
+        matches
+    }
+
+    /// Records a browser-started load of `url` (the tab's webview URL).
+    fn begin_browser_load(&self, url: &str) {
+        self.set_browser_target(is_eclipse_scheme(url).then(|| url.to_string()));
+        self.browser_load_pending.store(true, Ordering::Relaxed);
+    }
+
+    /// A document committed: the previous one's grants and flags are over.
+    fn note_commit(&self, url: &str) {
+        self.showing_error_page.store(false, Ordering::Relaxed);
+        self.set_browser_target(None);
+        self.browser_load_pending.store(false, Ordering::Relaxed);
+        let internal = is_eclipse_scheme(url);
+        let was_internal = self.current_is_internal.swap(internal, Ordering::Relaxed);
+        self.left_internal
+            .store(was_internal && !internal, Ordering::Relaxed);
+        self.set_committed_url(url);
+        self.epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn set_committed_url(&self, url: &str) {
+        if let Ok(mut committed) = self.committed_url.lock() {
+            committed.clear();
+            committed.push_str(url);
+        }
+    }
+
+    /// What the committed document is, for an IPC message arriving now.
+    fn document_trust(&self) -> DocumentTrust {
+        if self.showing_error_page.load(Ordering::Relaxed) {
+            return DocumentTrust::default();
+        }
+        DocumentTrust {
+            internal: self.current_is_internal.load(Ordering::Relaxed),
+            left_internal: self.left_internal.load(Ordering::Relaxed),
+        }
+    }
+
+    fn set_adblock_policy(&self, policy: &AdblockPolicy) {
+        if let Ok(mut current) = self.adblock.lock()
+            && *current != *policy
+        {
+            *current = policy.clone();
+        }
+    }
+
+    /// Attaches or detaches the native rule list (only when that changes).
+    fn set_native_adblock(&self, enabled: bool) {
+        let ptr = self.view.load(Ordering::Relaxed) as *mut std::ffi::c_void;
+        if ptr.is_null() {
+            return;
+        }
+        let state = if enabled {
+            NATIVE_ADBLOCK_ON
+        } else {
+            NATIVE_ADBLOCK_OFF
+        };
+        if self.native_adblock.swap(state, Ordering::Relaxed) == state {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        crate::macos_menu::set_native_adblocker_enabled(ptr, enabled);
+    }
+
+    /// A main-frame navigation to `url` was allowed: switch the rule list to
+    /// the destination's site before its first request goes out, so a site
+    /// the user excluded is never filtered on its first load (and the
+    /// reverse).
+    fn prepare_main_frame_load(&self, url: &str) {
+        if !is_http_url(url) {
+            return;
+        }
+        let blocks = self
+            .adblock
+            .lock()
+            .map(|policy| policy.blocks(url))
+            .unwrap_or(false);
+        self.set_native_adblock(blocks);
     }
 }
 
@@ -80,8 +233,6 @@ struct SyncState {
     shields: Cell<Option<bool>>,
     /// Extension content scripts / custom JS were injected into this document.
     page_scripts_done: Cell<bool>,
-    /// Whether the native content-rule list is attached to the webview.
-    native_adblock: Cell<Option<bool>>,
 }
 
 pub struct Tab {
@@ -110,9 +261,11 @@ pub struct Tab {
     control_token: String,
     nav: Arc<NavState>,
     sync: SyncState,
-    /// Shields state, DRM shim and custom CSS baked into the webview's init
-    /// scripts (fixed at creation; later documents are topped up in sync).
-    init_shields: bool,
+    /// Ad-blocking rules, DRM shim and custom CSS baked into the webview's
+    /// init scripts (fixed at creation; later documents are topped up in
+    /// sync). The in-page shields start from `init_adblock` applied to each
+    /// document's own host.
+    init_adblock: AdblockPolicy,
     init_drm: bool,
     init_custom_css: String,
 }
@@ -137,7 +290,7 @@ impl Tab {
         } else if is_eclipse_url {
             "New Tab".to_string()
         } else {
-            "Loading…".to_string()
+            LOADING_TITLE.to_string()
         };
 
         let mut tab = Self {
@@ -163,7 +316,7 @@ impl Tab {
             control_token: generate_ipc_token(),
             nav: Arc::default(),
             sync: SyncState::default(),
-            init_shields: false,
+            init_adblock: AdblockPolicy::default(),
             init_drm: false,
             init_custom_css: String::new(),
         };
@@ -208,7 +361,7 @@ impl Tab {
             control_token: generate_ipc_token(),
             nav: Arc::default(),
             sync: SyncState::default(),
-            init_shields: false,
+            init_adblock: AdblockPolicy::default(),
             init_drm: false,
             init_custom_css: String::new(),
         }
@@ -230,21 +383,20 @@ impl Tab {
         let proxy_download_finished = proxy.clone();
 
         let space_profile = config.profile_for_workspace(&self.workspace);
-        let is_adblock_active =
-            space_profile.adblock_enabled && is_adblock_active_for_url(&self.url, config);
+        let adblock = AdblockPolicy::for_space(config, &self.workspace);
+        let is_adblock_active = adblock.blocks(&self.url);
         let active_ua = if !space_profile.custom_user_agent.trim().is_empty() {
             space_profile.custom_user_agent.trim()
         } else {
             config.active_user_agent()
         };
 
+        let target_url = tab_webview_url(&self.url);
         let nav = Arc::new(NavState::default());
-        nav.browser_initiated
-            .store(self.url.starts_with("eclipse://"), Ordering::Relaxed);
+        nav.begin_browser_load(&target_url);
+        nav.set_adblock_policy(&adblock);
         self.nav = nav.clone();
         self.sync = SyncState::default();
-        self.sync.native_adblock.set(Some(is_adblock_active));
-        self.init_shields = is_adblock_active;
         self.init_drm = config.drm_fairplay_enabled;
         self.init_custom_css = config.custom_css.clone();
 
@@ -255,14 +407,15 @@ impl Tab {
             build_config_seed_script(config, &self.url),
             build_bridge_script(&self.token, &self.control_token),
             build_drm_script(config.drm_fairplay_enabled),
-            build_shields_script(&self.control_token, is_adblock_active),
+            build_shields_script(&self.control_token, &adblock),
             build_custom_css_script(&config.custom_css),
         ];
 
-        let target_url = tab_webview_url(&self.url);
+        self.init_adblock = adblock;
         let webview_id = format!("tab_{tab_id}");
         let nav_load = nav.clone();
         let nav_policy = nav.clone();
+        let nav_ipc = nav.clone();
 
         let mut builder = WebViewBuilder::new()
             .with_id(&webview_id)
@@ -283,15 +436,26 @@ impl Tab {
 
         let builder = builder
             .with_ipc_handler(move |req| {
+                // Read now: a later commit must not change how a message the
+                // previous document posted is trusted.
+                let document = nav_ipc.document_trust();
                 let origin = req.uri().to_string();
                 let body = req.body().clone();
                 let _ = proxy_ipc.send_event(UserEvent::TabIpc {
                     tab_id,
                     msg: body,
                     origin,
+                    document,
                 });
             })
-            .with_navigation_handler(move |url| nav_policy.allows_navigation(&url))
+            .with_navigation_handler(move |url| {
+                let context = navigation_policy_context();
+                let allowed = nav_policy.allows_navigation(&url, context.back_forward);
+                if allowed && context.main_frame {
+                    nav_policy.prepare_main_frame_load(&url);
+                }
+                allowed
+            })
             .with_download_started_handler(move |url, path| {
                 let suggested = path
                     .file_name()
@@ -300,9 +464,10 @@ impl Tab {
                     .to_string();
                 let mut pending = pending_downloads();
 
+                let seq = NEXT_DOWNLOAD_SEQ.fetch_add(1, Ordering::Relaxed);
                 let Some(clean_name) = resolve_download_name(&suggested, &url) else {
                     // A page load WebKit could not display, not a file.
-                    remember_download(&mut pending, url, None);
+                    remember_download(&mut pending, seq, url, None);
                     return false;
                 };
 
@@ -316,10 +481,11 @@ impl Tab {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or(clean_name);
-                remember_download(&mut pending, url.clone(), Some(path.clone()));
+                remember_download(&mut pending, seq, url.clone(), Some(path.clone()));
                 drop(pending);
 
                 let _ = proxy_download_started.send_event(UserEvent::DownloadStarted {
+                    seq,
                     file_name,
                     url,
                     path: path.to_string_lossy().to_string(),
@@ -327,8 +493,10 @@ impl Tab {
                 true
             })
             .with_download_completed_handler(move |url, path, success| {
-                // wry reports no path on macOS; the path chosen at start is
-                // remembered by URL instead.
+                // wry reports neither a path nor an identity on macOS: the
+                // completion is matched to the oldest download of that URL
+                // still pending, and its sequence number lets the app update
+                // exactly the list item that download created.
                 let started = {
                     let mut pending = pending_downloads();
                     pending
@@ -336,10 +504,12 @@ impl Tab {
                         .position(|d| d.url == url)
                         .map(|index| pending.remove(index))
                 };
-                let final_path = match started {
+                let (seq, final_path) = match started {
                     Some(PendingDownload { path: None, .. }) => return,
-                    Some(PendingDownload { path: Some(p), .. }) => path.or(Some(p)),
-                    None => path,
+                    Some(PendingDownload {
+                        seq, path: Some(p), ..
+                    }) => (Some(seq), path.or(Some(p))),
+                    None => (None, path),
                 };
                 let file_name = final_path
                     .as_ref()
@@ -347,6 +517,7 @@ impl Tab {
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| download_file_name(&url));
                 let _ = proxy_download_finished.send_event(UserEvent::DownloadCompleted {
+                    seq,
                     url,
                     file_name,
                     path: final_path.map(|p| p.to_string_lossy().to_string()),
@@ -361,18 +532,11 @@ impl Tab {
                 }
                 let payload = match event {
                     PageLoadEvent::Started => {
-                        nav_load.showing_error_page.store(false, Ordering::Relaxed);
-                        nav_load.browser_initiated.store(false, Ordering::Relaxed);
-                        nav_load
-                            .current_is_internal
-                            .store(is_eclipse_scheme(&url), Ordering::Relaxed);
-                        if let Ok(mut committed) = nav_load.committed_url.lock() {
-                            committed.clone_from(&url);
-                        }
-                        nav_load.epoch.fetch_add(1, Ordering::Relaxed);
+                        nav_load.note_commit(&url);
                         UserEvent::PageStarted { tab_id, url }
                     }
                     PageLoadEvent::Finished => {
+                        nav_load.set_browser_target(None);
                         nav_load
                             .finished_epoch
                             .store(nav_load.epoch.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -423,6 +587,15 @@ impl Tab {
             crate::macos_menu::enable_swipe_gestures(ptr);
             crate::macos_menu::install_native_adblocker(ptr, is_adblock_active);
             crate::macos_menu::register_tab_view(ptr, tab_id);
+            nav.view.store(ptr as usize, Ordering::Relaxed);
+            nav.native_adblock.store(
+                if is_adblock_active {
+                    NATIVE_ADBLOCK_ON
+                } else {
+                    NATIVE_ADBLOCK_OFF
+                },
+                Ordering::Relaxed,
+            );
         }
 
         webview
@@ -482,7 +655,90 @@ impl Tab {
         ));
     }
 
+    /// The committed document is an internal eclipse:// page (not the
+    /// error page, and not merely the target of a pending load).
+    pub fn committed_is_internal(&self) -> bool {
+        self.webview.is_some() && self.nav.document_trust().internal
+    }
+
+    /// URL of the document on screen, as WebKit reports it (empty before
+    /// the first commit; the failed URL while the error page is shown).
+    pub fn committed_url(&self) -> String {
+        self.nav.committed_url()
+    }
+
+    /// The committed document changed its own URL (pushState, a fragment).
+    pub fn note_same_document_url(&self, url: &str) {
+        self.nav.set_committed_url(url);
+    }
+
+    /// Asks the internal page on screen to post its pending (debounced)
+    /// edits now. `on_done` runs once the hook has returned, after every
+    /// message it posted has been delivered. Returns false, without calling
+    /// `on_done`, when no internal page is on screen.
+    pub fn flush_internal_page<F>(&self, on_done: F) -> bool
+    where
+        F: Fn(String) + Send + 'static,
+    {
+        if !self.committed_is_internal() {
+            return false;
+        }
+        self.evaluate_with_callback(FLUSH_SCRIPT, on_done);
+        true
+    }
+
+    /// Before the browser navigates the tab away from an internal page: its
+    /// edits go out while it is still the committed document, so they are
+    /// still trusted as coming from it.
+    fn flush_before_leaving(&self) {
+        if self.committed_is_internal() {
+            self.evaluate_script(FLUSH_SCRIPT);
+        }
+    }
+
+    /// A media (or other plug-in) document took over the load: WebKit
+    /// reports no didFinish for it, so the load is marked finished here.
+    pub fn mark_load_finished(&self) {
+        self.nav.set_browser_target(None);
+        self.nav
+            .browser_load_pending
+            .store(false, Ordering::Relaxed);
+        self.nav
+            .finished_epoch
+            .store(self.nav.epoch.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+
+    /// The load the browser started ended without a new document (it became
+    /// a download, the policy refused it, or it was stopped): the tab goes
+    /// back to describing the document still on screen. Returns false when
+    /// no browser-started load was pending (nothing changed). The caller
+    /// refreshes the title.
+    pub fn abandon_pending_load(&mut self) -> bool {
+        if !self.nav.browser_load_pending.swap(false, Ordering::Relaxed) {
+            return false;
+        }
+        self.nav.set_browser_target(None);
+        self.is_loading = false;
+        self.set_loading_indicator(false);
+        let showing_error = self.nav.showing_error_page.load(Ordering::Relaxed);
+        let committed = self.nav.committed_url();
+        if self.webview.is_none() || committed.is_empty() {
+            // Nothing on screen yet: the tab keeps the URL it was opened for.
+            return true;
+        }
+        let canonical = canonicalize_eclipse_url(&committed);
+        self.favicon = get_default_favicon(&canonical);
+        self.favicon_url = if showing_error {
+            None
+        } else {
+            get_favicon_url(&canonical)
+        };
+        self.url = canonical;
+        true
+    }
+
     pub fn load_url(&mut self, url: &str) {
+        self.flush_before_leaving();
         let canonical = canonicalize_eclipse_url(url);
         self.url = canonical.clone();
         self.favicon = get_default_favicon(&canonical);
@@ -493,55 +749,62 @@ impl Tab {
         self.scroll_y = 0.0;
         self.pending_scroll_restore = None;
         self.last_active = Instant::now();
-        self.nav.showing_error_page.store(false, Ordering::Relaxed);
-        self.nav
-            .browser_initiated
-            .store(canonical.starts_with("eclipse://"), Ordering::Relaxed);
 
         if let Some(ref wv) = self.webview {
             self.is_hibernated = false;
             if self.is_loading {
                 self.set_loading_indicator(true);
             }
-            let _ = wv.load_url(&tab_webview_url(&canonical));
+            let target = tab_webview_url(&canonical);
+            self.nav.begin_browser_load(&target);
+            let _ = wv.load_url(&target);
         }
     }
 
+    /// Reloads the page. A reload of an internal page passes the policy as
+    /// the current document; a WebKit reload never needs a grant.
     pub fn reload(&self) {
         if let Some(ref wv) = self.webview {
             self.set_loading_indicator(true);
             if self.nav.showing_error_page.load(Ordering::Relaxed) {
                 // Reloading would only redisplay the error page.
-                let _ = wv.load_url(&tab_webview_url(&self.url));
+                let target = tab_webview_url(&self.url);
+                self.nav.begin_browser_load(&target);
+                let _ = wv.load_url(&target);
                 return;
             }
-            self.nav.browser_initiated.store(true, Ordering::Relaxed);
             let _ = wv.reload();
         }
     }
 
-    pub fn stop_loading(&mut self) {
+    /// Stops loading. Returns true when a load the browser had started was
+    /// abandoned, so the tab went back to the document on screen.
+    pub fn stop_loading(&mut self) -> bool {
         self.evaluate_script(
             "window.stop(); window.__eclipseSetLoading && window.__eclipseSetLoading(false);",
         );
         self.is_loading = false;
+        self.abandon_pending_load()
     }
 
+    /// History navigation. WebKit's back/forward reaches the navigation
+    /// policy as a main-frame back/forward action, which may return to an
+    /// internal page without any grant from here.
     pub fn go_back(&self) {
         if let Some(ref wv) = self.webview {
-            self.nav.browser_initiated.store(true, Ordering::Relaxed);
             if wv.can_go_back().unwrap_or(false) {
+                self.flush_before_leaving();
                 let _ = wv.go_back();
             } else {
-                let _ = wv.evaluate_script("if (window.history && window.history.length > 1) { window.history.back(); } else { window.history.back(); }");
+                let _ = wv.evaluate_script("if (window.history) { window.history.back(); }");
             }
         }
     }
 
     pub fn go_forward(&self) {
         if let Some(ref wv) = self.webview {
-            self.nav.browser_initiated.store(true, Ordering::Relaxed);
             if wv.can_go_forward().unwrap_or(false) {
+                self.flush_before_leaving();
                 let _ = wv.go_forward();
             } else {
                 let _ = wv.evaluate_script("if (window.history) { window.history.forward(); }");
@@ -607,7 +870,14 @@ impl Tab {
         }
         self.nav.showing_error_page.store(true, Ordering::Relaxed);
         self.nav.current_is_internal.store(false, Ordering::Relaxed);
-        self.nav.browser_initiated.store(false, Ordering::Relaxed);
+        self.nav.left_internal.store(false, Ordering::Relaxed);
+        self.nav.set_browser_target(None);
+        self.nav
+            .browser_load_pending
+            .store(false, Ordering::Relaxed);
+        // What the tab reports while the error page is up (and what an
+        // abandoned load from it returns to).
+        self.nav.set_committed_url(failed_url);
         self.url = failed_url.to_string();
         self.title = failed_url.to_string();
         self.favicon = get_default_favicon(failed_url);
@@ -627,27 +897,17 @@ impl Tab {
     /// Internal eclipse:// pages get `config.to_page_json()` through
     /// `onEclipseConfigUpdated`, once per (revision, active URL) per document.
     pub fn sync_config(&self, config: &BrowserConfig, revision: u64, active_url: Option<&str>) {
-        let Some(ref _wv) = self.webview else {
+        if self.webview.is_none() {
             return;
-        };
-        let space_profile = config.profile_for_workspace(&self.workspace);
-        let blocking =
-            |url: &str| space_profile.adblock_enabled && is_adblock_active_for_url(url, config);
+        }
+        let adblock = AdblockPolicy::for_space(config, &self.workspace);
+        self.nav.set_adblock_policy(&adblock);
 
         // The rule list applies to the tab's next loads, so it follows the
-        // tab's target URL rather than the document still on screen.
+        // tab's target URL rather than the document still on screen (links
+        // a page follows are switched when the navigation is allowed).
         if !self.url.starts_with("eclipse://") {
-            let desired = blocking(&self.url);
-            if self.sync.native_adblock.get() != Some(desired) {
-                self.sync.native_adblock.set(Some(desired));
-                #[cfg(target_os = "macos")]
-                {
-                    use wry::WebViewExtMacOS;
-                    let ns_view = _wv.webview();
-                    let ptr = (&*ns_view) as *const _ as *mut std::ffi::c_void;
-                    crate::macos_menu::set_native_adblocker_enabled(ptr, desired);
-                }
-            }
+            self.nav.set_native_adblock(adblock.blocks(&self.url));
         }
 
         let nav = &self.nav;
@@ -683,8 +943,13 @@ impl Tab {
         }
 
         let committed = nav.committed_url();
-        let desired = blocking(&committed);
-        if self.sync.shields.get().unwrap_or(self.init_shields) != desired {
+        let desired = adblock.blocks(&committed);
+        let current = self
+            .sync
+            .shields
+            .get()
+            .unwrap_or_else(|| self.init_adblock.blocks(&committed));
+        if current != desired {
             self.evaluate_script(&format!(
                 "typeof window.__eclipseShields === 'function' && window.__eclipseShields({}, {desired});",
                 js_string(&self.control_token)
@@ -805,24 +1070,102 @@ pub fn canonicalize_eclipse_url(url: &str) -> String {
     url.to_string()
 }
 
-pub fn is_adblock_active_for_url(url: &str, config: &BrowserConfig) -> bool {
-    if !config.adblock_enabled {
+/// Trimmed, lowercased, non-empty entries of a site list.
+fn normalized_domains(domains: &[String]) -> Vec<String> {
+    domains
+        .iter()
+        .map(|domain| domain.trim().to_lowercase())
+        .filter(|domain| !domain.is_empty())
+        .collect()
+}
+
+/// `url`'s host is one of `domains` (normalized) or a subdomain of one.
+fn url_host_in_domains(url: &str, domains: &[String]) -> bool {
+    let Some(host) = Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_lowercase))
+    else {
         return false;
-    }
-    if let Ok(parsed) = url::Url::parse(url)
-        && let Some(host) = parsed.host_str()
+    };
+    domains
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+
+fn is_http_url(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
+/// Two eclipse:// URLs name the same page (WebKit may add a trailing slash).
+fn same_eclipse_url(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/')
+        .eq_ignore_ascii_case(b.trim_end_matches('/'))
+}
+
+/// What the navigation policy is being asked about (see menu.m).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PolicyContext {
+    /// The navigation targets the tab's main frame (not a subframe or a new
+    /// window).
+    pub main_frame: bool,
+    /// A main-frame back/forward history navigation (toolbar, swipe, context
+    /// menu or `history.back()`): it can only reach an entry the tab already
+    /// visited.
+    pub back_forward: bool,
+}
+
+fn navigation_policy_context() -> PolicyContext {
+    #[cfg(target_os = "macos")]
     {
-        let host_clean = host.to_lowercase();
-        for domain in &config.adblock_disabled_domains {
-            let d_clean = domain.trim().to_lowercase();
-            if !d_clean.is_empty()
-                && (host_clean == d_clean || host_clean.ends_with(&format!(".{d_clean}")))
-            {
-                return false;
-            }
-        }
+        crate::macos_menu::navigation_policy_context()
     }
-    true
+    #[cfg(not(target_os = "macos"))]
+    {
+        PolicyContext::default()
+    }
+}
+
+/// What a main-frame navigation error WebKit reported means for the tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationError {
+    /// Not this load failing: it was superseded by another navigation, or
+    /// the WebContent process died (reported by the terminate handler).
+    Ignore,
+    /// WebKitErrorPlugInWillHandleLoad (204): a standalone media document
+    /// (a direct .mp4/.mp3 URL) took over the load after it committed. The
+    /// page is fine and plays; the load counts as finished.
+    HandledByPlugin,
+    /// The load ended without a new document and with nothing to report: it
+    /// became a download or the navigation policy refused it (102), or
+    /// WebKit cannot open the scheme (mailto:, app links).
+    Interrupted,
+    /// A real failure (DNS, offline, TLS, ...). `committed`: the new
+    /// document had already committed, so (part of) it is on screen.
+    Failed { committed: bool },
+}
+
+pub fn classify_navigation_error(
+    committed: bool,
+    domain: &str,
+    code: i64,
+    url: &str,
+) -> NavigationError {
+    match (domain, code) {
+        // NSURLErrorCancelled.
+        ("NSURLErrorDomain", -999) => return NavigationError::Ignore,
+        // WKErrorWebContentProcessTerminated.
+        ("WKErrorDomain", 2) => return NavigationError::Ignore,
+        ("WebKitErrorDomain", 204) => return NavigationError::HandledByPlugin,
+        // WebKitErrorFrameLoadInterruptedByPolicyChange.
+        ("WebKitErrorDomain", 102) => return NavigationError::Interrupted,
+        _ => {}
+    }
+    if let Ok(parsed) = Url::parse(url)
+        && !matches!(parsed.scheme(), "http" | "https" | "file")
+    {
+        return NavigationError::Interrupted;
+    }
+    NavigationError::Failed { committed }
 }
 
 fn wildcard_match(pattern: &str, text: &str) -> bool {
@@ -1181,13 +1524,25 @@ fn build_bridge_script(token: &str, control: &str) -> String {
         .replace("__ECLIPSE_CONTROL__", control)
 }
 
-fn build_shields_script(control: &str, enabled: bool) -> String {
+/// The in-page shields of every document the webview loads start from
+/// `policy` applied to that document's own host, so a site the user
+/// excluded is not filtered even when the tab was created elsewhere.
+fn build_shields_script(control: &str, policy: &AdblockPolicy) -> String {
+    let initial = if policy.enabled {
+        let domains =
+            serde_json::to_string(&policy.disabled_domains).unwrap_or_else(|_| "[]".into());
+        format!(
+            "(function (host, domains) {{ host = String(host || '').toLowerCase(); \
+             for (var i = 0; i < domains.length; i++) {{ var d = domains[i]; \
+             if (host === d || (host.length > d.length && host.slice(-d.length - 1) === '.' + d)) return false; }} \
+             return true; }})(location.hostname, {domains})"
+        )
+    } else {
+        "false".to_string()
+    };
     SHIELDS_SCRIPT
         .replace("__ECLIPSE_CONTROL__", control)
-        .replace(
-            "__ECLIPSE_ENABLED__",
-            if enabled { "true" } else { "false" },
-        )
+        .replace("__ECLIPSE_ENABLED__", &initial)
 }
 
 /// One init-script part, isolated so a runtime error in it cannot abort the
@@ -1375,9 +1730,13 @@ pub fn downloads_dir() -> Option<PathBuf> {
 /// A download WebKit announced, by original request URL. `path` is where it
 /// is being written, or None when it was refused as a mis-detected page.
 struct PendingDownload {
+    seq: u64,
     url: String,
     path: Option<PathBuf>,
 }
+
+/// Identifies a download from its start to its completion event.
+static NEXT_DOWNLOAD_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Shared by every tab: destinations stay reserved until WebKit reports the
 /// download finished, so two concurrent downloads never pick the same file.
@@ -1390,11 +1749,16 @@ fn pending_downloads() -> std::sync::MutexGuard<'static, Vec<PendingDownload>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn remember_download(pending: &mut Vec<PendingDownload>, url: String, path: Option<PathBuf>) {
+fn remember_download(
+    pending: &mut Vec<PendingDownload>,
+    seq: u64,
+    url: String,
+    path: Option<PathBuf>,
+) {
     if pending.len() >= PENDING_DOWNLOAD_LIMIT {
         pending.remove(0);
     }
-    pending.push(PendingDownload { url, path });
+    pending.push(PendingDownload { seq, url, path });
 }
 
 fn unique_download_path(dir: &Path, file_name: &str, reserved: &[&Path]) -> PathBuf {
@@ -1768,18 +2132,126 @@ mod tests {
     #[test]
     fn web_pages_cannot_open_internal_pages() {
         let nav = NavState::default();
-        assert!(nav.allows_navigation("https://example.com/"));
-        assert!(nav.allows_navigation("about:blank"));
-        assert!(nav.allows_navigation("eclipse://localhost/newtab"));
-        assert!(!nav.allows_navigation("eclipse://localhost/settings"));
-        assert!(!nav.allows_navigation("ECLIPSE://localhost/notes"));
-
-        nav.browser_initiated.store(true, Ordering::Relaxed);
-        assert!(nav.allows_navigation("eclipse://localhost/settings"));
-        nav.browser_initiated.store(false, Ordering::Relaxed);
+        assert!(nav.allows_navigation("https://example.com/", false));
+        assert!(nav.allows_navigation("about:blank", false));
+        assert!(nav.allows_navigation("eclipse://localhost/newtab", false));
+        assert!(!nav.allows_navigation("eclipse://localhost/settings", false));
+        assert!(!nav.allows_navigation("ECLIPSE://localhost/notes", false));
 
         nav.current_is_internal.store(true, Ordering::Relaxed);
-        assert!(nav.allows_navigation("eclipse://localhost/easel"));
+        assert!(nav.allows_navigation("eclipse://localhost/easel", false));
+    }
+
+    #[test]
+    fn browser_loads_grant_exactly_their_target_once() {
+        let nav = NavState::default();
+        nav.begin_browser_load("eclipse://localhost/settings");
+        // Another internal page (a racing subframe of the old document).
+        assert!(!nav.allows_navigation("eclipse://localhost/notes", false));
+        // The target itself, once (WebKit may add a trailing slash).
+        assert!(nav.allows_navigation("eclipse://localhost/settings/", false));
+        assert!(!nav.allows_navigation("eclipse://localhost/settings", false));
+
+        // A grant left by a load that never committed is gone after the
+        // next commit, and a web load leaves none.
+        nav.begin_browser_load("eclipse://localhost/notes");
+        nav.note_commit("https://example.com/");
+        assert!(!nav.allows_navigation("eclipse://localhost/notes", false));
+        nav.begin_browser_load("https://example.com/page");
+        assert!(!nav.allows_navigation("eclipse://localhost/notes", false));
+    }
+
+    #[test]
+    fn back_forward_may_return_to_internal_pages() {
+        let nav = NavState::default();
+        nav.note_commit("https://example.com/");
+        // Swipe or context-menu Back from a website to Settings.
+        assert!(nav.allows_navigation("eclipse://localhost/settings", true));
+        // Not a history navigation: still refused.
+        assert!(!nav.allows_navigation("eclipse://localhost/settings", false));
+    }
+
+    #[test]
+    fn ipc_trust_follows_the_committed_document() {
+        let nav = NavState::default();
+        assert_eq!(nav.document_trust(), DocumentTrust::default());
+        nav.note_commit("eclipse://localhost/notes");
+        assert_eq!(
+            nav.document_trust(),
+            DocumentTrust {
+                internal: true,
+                left_internal: false
+            }
+        );
+        // A load that never commits changes nothing.
+        nav.begin_browser_load("https://example.com/file.dmg");
+        assert!(nav.document_trust().internal);
+        nav.note_commit("https://example.com/");
+        assert_eq!(
+            nav.document_trust(),
+            DocumentTrust {
+                internal: false,
+                left_internal: true
+            }
+        );
+        nav.note_commit("https://example.com/next");
+        assert_eq!(nav.document_trust(), DocumentTrust::default());
+        // The error page is never trusted.
+        nav.note_commit("eclipse://localhost/settings");
+        nav.showing_error_page.store(true, Ordering::Relaxed);
+        assert_eq!(nav.document_trust(), DocumentTrust::default());
+    }
+
+    #[test]
+    fn navigation_errors_are_classified_by_domain_and_code() {
+        // A direct media URL: the media document took over after commit.
+        assert_eq!(
+            classify_navigation_error(
+                true,
+                "WebKitErrorDomain",
+                204,
+                "https://cdn.example/clip.mp4"
+            ),
+            NavigationError::HandledByPlugin
+        );
+        // The same code in another domain is an ordinary failure.
+        assert_eq!(
+            classify_navigation_error(false, "NSURLErrorDomain", 204, "https://example.com/"),
+            NavigationError::Failed { committed: false }
+        );
+        assert_eq!(
+            classify_navigation_error(false, "WebKitErrorDomain", 102, "https://example.com/a.dmg"),
+            NavigationError::Interrupted
+        );
+        assert_eq!(
+            classify_navigation_error(false, "WebKitErrorDomain", 101, "mailto:a@example.com"),
+            NavigationError::Interrupted
+        );
+        assert_eq!(
+            classify_navigation_error(false, "NSURLErrorDomain", -999, "https://example.com/"),
+            NavigationError::Ignore
+        );
+        assert_eq!(
+            classify_navigation_error(true, "WKErrorDomain", 2, "https://example.com/"),
+            NavigationError::Ignore
+        );
+        assert_eq!(
+            classify_navigation_error(
+                false,
+                "NSURLErrorDomain",
+                -1003,
+                "https://nonexistent.invalid/"
+            ),
+            NavigationError::Failed { committed: false }
+        );
+        assert_eq!(
+            classify_navigation_error(true, "NSURLErrorDomain", -1005, "https://example.com/"),
+            NavigationError::Failed { committed: true }
+        );
+        assert_eq!(
+            classify_navigation_error(false, "NSURLErrorDomain", -1009, ""),
+            NavigationError::Failed { committed: false }
+        );
     }
 
     #[test]
@@ -1871,7 +2343,16 @@ mod tests {
         assert!(!bridge.contains("__eclipseCommandBar"));
         assert!(!bridge.contains("__eclipseLittleArc"));
         assert!(!bridge.contains("set_fullscreen"));
-        let shields = build_shields_script("ccccdddd", true);
+        let policy = AdblockPolicy {
+            enabled: true,
+            disabled_domains: vec!["youtube.com".into()],
+        };
+        let shields = build_shields_script("ccccdddd", &policy);
+        assert!(shields.contains("location.hostname, [\"youtube.com\"]"));
+        assert!(
+            build_shields_script("ccccdddd", &AdblockPolicy::default())
+                .contains("setEnabled(false)")
+        );
         assert!(!shields.contains("__ECLIPSE_CONTROL__"));
         assert!(!shields.contains("__ECLIPSE_ENABLED__"));
         assert!(!shields.contains("aaaabbbb"));
@@ -1883,25 +2364,22 @@ mod tests {
     fn test_adblock_site_toggling_and_extension_matching() {
         let mut cfg = BrowserConfig {
             adblock_enabled: true,
-            adblock_disabled_domains: vec!["net77.cc".into(), "youtube.com".into()],
+            adblock_disabled_domains: vec!["net77.cc".into(), " YouTube.com ".into(), "".into()],
             ..BrowserConfig::default()
         };
+        let policy = AdblockPolicy::for_space(&cfg, "Default");
+        assert_eq!(policy.disabled_domains, vec!["net77.cc", "youtube.com"]);
 
-        assert!(!is_adblock_active_for_url("https://net77.cc/home", &cfg));
-        assert!(!is_adblock_active_for_url(
-            "https://sub.net77.cc/video",
-            &cfg
-        ));
-        assert!(!is_adblock_active_for_url(
-            "https://www.youtube.com/watch?v=123",
-            &cfg
-        ));
-
-        assert!(is_adblock_active_for_url("https://github.com", &cfg));
-        assert!(is_adblock_active_for_url("https://apple.com", &cfg));
+        assert!(!policy.blocks("https://net77.cc/home"));
+        assert!(!policy.blocks("https://sub.net77.cc/video"));
+        assert!(!policy.blocks("https://www.youtube.com/watch?v=123"));
+        assert!(policy.blocks("https://github.com"));
+        assert!(policy.blocks("https://apple.com"));
+        // A suffix that is not a subdomain.
+        assert!(policy.blocks("https://notyoutube.com/"));
 
         cfg.adblock_enabled = false;
-        assert!(!is_adblock_active_for_url("https://github.com", &cfg));
+        assert!(!AdblockPolicy::for_space(&cfg, "Default").blocks("https://github.com"));
 
         assert!(extension_matches_url(
             "*://*.youtube.com/*",

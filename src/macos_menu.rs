@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use tao::event_loop::EventLoopProxy;
 
 use crate::events::UserEvent;
+use crate::tab::PolicyContext;
 
 type MenuCallback = extern "C" fn(*const c_char);
 
@@ -31,13 +32,24 @@ unsafe extern "C" {
     fn eclipse_install_navigation_hooks(callback: NavigationCallback);
     fn eclipse_register_tab_view(view_ptr: *mut std::ffi::c_void, tab_id: u64);
     fn eclipse_recheck_hover();
+    fn eclipse_navigation_policy_context() -> i32;
 }
 
 /// `kind`: 0 = provisional navigation failed, 1 = committed navigation failed.
-/// Strings are UTF-8, may be null. WebContent crashes are not reported here;
-/// tabs get them from wry's web-content-process-terminate handler.
-type NavigationCallback =
-    extern "C" fn(tab_id: u64, kind: i32, code: i64, description: *const c_char, url: *const c_char);
+/// `domain` is the NSError domain. Strings are UTF-8, may be null. Every
+/// error is reported; `tab::classify_navigation_error` decides what it means.
+type NavigationCallback = extern "C" fn(
+    tab_id: u64,
+    kind: i32,
+    domain: *const c_char,
+    code: i64,
+    description: *const c_char,
+    url: *const c_char,
+);
+
+/// Bits of `eclipse_navigation_policy_context` (keep in sync with menu.m).
+const POLICY_MAIN_FRAME: i32 = 1;
+const POLICY_BACK_FORWARD: i32 = 2;
 
 static MENU_PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
 static EDGE_PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
@@ -194,8 +206,8 @@ fn c_string(ptr: *const c_char) -> String {
 
 extern "C" fn handle_navigation_event(
     tab_id: u64,
-    // UserEvent::NavigationFailed treats both kinds alike.
-    _kind: i32,
+    kind: i32,
+    domain: *const c_char,
     code: i64,
     description: *const c_char,
     url: *const c_char,
@@ -209,6 +221,8 @@ extern "C" fn handle_navigation_event(
     };
     let _ = proxy.send_event(UserEvent::NavigationFailed {
         tab_id: tab_id as usize,
+        committed: kind == 1,
+        domain: c_string(domain),
         code,
         description: c_string(description),
         url: c_string(url),
@@ -241,5 +255,16 @@ pub fn register_tab_view(view_ptr: *mut std::ffi::c_void, tab_id: usize) {
 pub fn recheck_hover() {
     unsafe {
         eclipse_recheck_hover();
+    }
+}
+
+/// What WebKit is deciding a navigation policy for while wry's navigation
+/// handler runs (menu.m wraps the delegate method; outside a decision both
+/// flags are false).
+pub fn navigation_policy_context() -> PolicyContext {
+    let bits = unsafe { eclipse_navigation_policy_context() };
+    PolicyContext {
+        main_frame: bits & POLICY_MAIN_FRAME != 0,
+        back_forward: bits & POLICY_BACK_FORWARD != 0,
     }
 }

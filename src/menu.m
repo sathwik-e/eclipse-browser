@@ -137,8 +137,10 @@ void eclipse_install_menu(EclipseMenuCallback callback) {
         EclipseAddItem(appMenu, @"Show All", @selector(unhideAllApplications:), @"",
                        0, NSApp, nil);
         [appMenu addItem:[NSMenuItem separatorItem]];
-        EclipseAddItem(appMenu, @"Quit Eclipse", @selector(terminate:), @"q",
-                       NSEventModifierFlagCommand, NSApp, nil);
+        // Routed through Rust so open internal pages can save pending edits
+        // before the app exits.
+        EclipseAddItem(appMenu, @"Quit Eclipse", @selector(performEclipseAction:), @"q",
+                       NSEventModifierFlagCommand, gMenuTarget, @"quit");
 
         /* ------------------------------------------------------------ File */
         NSMenuItem *fileMenuItem = [[NSMenuItem alloc] initWithTitle:@"File"
@@ -150,8 +152,6 @@ void eclipse_install_menu(EclipseMenuCallback callback) {
 
         EclipseAddItem(fileMenu, @"New Tab", @selector(performEclipseAction:), @"t",
                        NSEventModifierFlagCommand, gMenuTarget, @"new_tab");
-        EclipseAddItem(fileMenu, @"New Little Arc Window", @selector(performEclipseAction:), @"n",
-                       NSEventModifierFlagCommand | NSEventModifierFlagOption, gMenuTarget, @"little_arc");
         EclipseAddItem(fileMenu, @"New Note", @selector(performEclipseAction:), @"n",
                        NSEventModifierFlagCommand | NSEventModifierFlagShift, gMenuTarget, @"open_notes");
         EclipseAddItem(fileMenu, @"New Easel", @selector(performEclipseAction:), @"e",
@@ -899,9 +899,13 @@ void eclipse_install_edge_monitor(void (*expand_cb)(void), void (*collapse_cb)(v
 /* wry's navigation delegate has no didFail* methods, so a failed load would
    leave the tab spinning on a blank page. The methods are added to the class
    of each tab's existing delegate (never replacing one it implements) and
-   report to Rust with the tab id registered for that webview. */
+   report every error to Rust with the tab id registered for that webview.
+   Rust decides what an error means (tab::classify_navigation_error): a
+   superseded load is ignored, a download or a refused scheme only ends the
+   pending load, a media document that took over the load counts as finished,
+   and only real failures show the error page. */
 
-typedef void (*EclipseNavigationCallback)(uint64_t tabId, int kind, int64_t code,
+typedef void (*EclipseNavigationCallback)(uint64_t tabId, int kind, const char *domain, int64_t code,
                                           const char *description, const char *url);
 
 static EclipseNavigationCallback gNavigationCallback = NULL;
@@ -912,14 +916,6 @@ static void eclipse_report_navigation_failure(WKWebView *webView, int kind, NSEr
     NSNumber *tabId = [gTabIdsByWebView objectForKey:webView];
     if (tabId == nil) return;
 
-    // Superseded by another navigation.
-    if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled) return;
-    // WebKitErrorFrameLoadInterruptedByPolicyChange: the response became a
-    // download or the navigation handler cancelled it.
-    if ([error.domain isEqualToString:@"WebKitErrorDomain"] && error.code == 102) return;
-    // A crashed WebContent process is reported by the terminate handler.
-    if ([error.domain isEqualToString:WKErrorDomain] && error.code == WKErrorWebContentProcessTerminated) return;
-
     NSURL *failingURL = error.userInfo[NSURLErrorFailingURLErrorKey];
     NSString *url = [failingURL isKindOfClass:[NSURL class]] ? failingURL.absoluteString : nil;
     if (url.length == 0) {
@@ -929,16 +925,10 @@ static void eclipse_report_navigation_failure(WKWebView *webView, int kind, NSEr
     if (url.length == 0) {
         url = webView.URL.absoluteString;
     }
-    // Links to schemes WebKit cannot load (mailto:, app links) must not
-    // replace the current page with an error page.
-    NSString *scheme = [[NSURL URLWithString:url ?: @""] scheme].lowercaseString;
-    if (scheme.length > 0 && ![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"] &&
-        ![scheme isEqualToString:@"file"]) {
-        return;
-    }
 
+    NSString *domain = error.domain ?: @"";
     NSString *description = error.localizedDescription ?: @"";
-    gNavigationCallback(tabId.unsignedLongLongValue, kind, (int64_t)error.code,
+    gNavigationCallback(tabId.unsignedLongLongValue, kind, domain.UTF8String, (int64_t)error.code,
                         description.UTF8String, (url ?: @"").UTF8String);
 }
 
@@ -952,6 +942,72 @@ static void eclipse_did_fail_navigation(id self, SEL _cmd, WKWebView *webView,
                                         WKNavigation *navigation, NSError *error) {
     (void)self; (void)_cmd; (void)navigation;
     eclipse_report_navigation_failure(webView, 1, error);
+}
+
+/* ------------------------------------------------------------- Navigation policy context */
+/* wry's navigation handler only receives the URL. The delegate's
+   decidePolicyForNavigationAction: is wrapped so that, while the original
+   implementation (and with it the Rust handler) runs, Rust can ask whether
+   the decision is for a tab's main frame and whether it is a back/forward
+   history navigation. Everything runs on the main thread. */
+
+enum {
+    ECLIPSE_POLICY_MAIN_FRAME = 1,
+    ECLIPSE_POLICY_BACK_FORWARD = 2,
+};
+
+typedef void (*EclipseDecidePolicyIMP)(id, SEL, WKWebView *, WKNavigationAction *,
+                                       void (^)(WKNavigationActionPolicy));
+
+static int gPolicyContext = 0;
+static NSMutableDictionary<NSString *, NSValue *> *gOriginalDecidePolicy = nil;
+
+static IMP eclipse_original_decide_policy(Class cls) {
+    for (Class current = cls; current != Nil; current = class_getSuperclass(current)) {
+        NSValue *value = gOriginalDecidePolicy[NSStringFromClass(current)];
+        if (value != nil) return (IMP)value.pointerValue;
+    }
+    return NULL;
+}
+
+static void eclipse_decide_policy(id self, SEL _cmd, WKWebView *webView, WKNavigationAction *action,
+                                  void (^decisionHandler)(WKNavigationActionPolicy)) {
+    IMP original = eclipse_original_decide_policy(object_getClass(self));
+    if (original == NULL) {
+        // Cannot happen (the wrapper is only installed with its original);
+        // fail closed rather than skip the navigation policy.
+        decisionHandler(WKNavigationActionPolicyCancel);
+        return;
+    }
+    int context = 0;
+    WKFrameInfo *target = action.targetFrame;
+    if (target != nil && target.isMainFrame) {
+        context |= ECLIPSE_POLICY_MAIN_FRAME;
+        if (action.navigationType == WKNavigationTypeBackForward) {
+            context |= ECLIPSE_POLICY_BACK_FORWARD;
+        }
+    }
+    int previous = gPolicyContext;
+    gPolicyContext = context;
+    ((EclipseDecidePolicyIMP)original)(self, _cmd, webView, action, decisionHandler);
+    gPolicyContext = previous;
+}
+
+static void eclipse_wrap_decide_policy(Class cls) {
+    SEL sel = @selector(webView:decidePolicyForNavigationAction:decisionHandler:);
+    Method method = class_getInstanceMethod(cls, sel);
+    if (method == NULL) return;
+    IMP current = method_getImplementation(method);
+    if (current == (IMP)eclipse_decide_policy) return;
+    if (gOriginalDecidePolicy == nil) {
+        gOriginalDecidePolicy = [NSMutableDictionary dictionary];
+    }
+    gOriginalDecidePolicy[NSStringFromClass(cls)] = [NSValue valueWithPointer:(const void *)current];
+    class_replaceMethod(cls, sel, (IMP)eclipse_decide_policy, method_getTypeEncoding(method));
+}
+
+int eclipse_navigation_policy_context(void) {
+    return gPolicyContext;
 }
 
 /* ------------------------------------------------------------- JavaScript dialogs & page print */
@@ -979,8 +1035,14 @@ static NSAlert *eclipse_dialog_alert(WKFrameInfo *frame, NSString *message) {
 }
 
 /* Shows the alert as a sheet on the webview's window; `done` always runs
-   exactly once, also when the sheet is dismissed because its window closes. */
+   exactly once, also when the sheet is dismissed because its window closes.
+   A hidden webview (a background or closing tab) gets an immediate "Cancel":
+   its sheet would block the whole window over another tab. */
 static void eclipse_present_dialog(WKWebView *webView, NSAlert *alert, void (^done)(NSModalResponse)) {
+    if (webView.isHiddenOrHasHiddenAncestor) {
+        done(NSModalResponseCancel);
+        return;
+    }
     NSWindow *window = webView.window;
     if (window != nil) {
         [alert beginSheetModalForWindow:window completionHandler:done];
@@ -1060,6 +1122,7 @@ static void eclipse_hook_delegates(WKWebView *webView) {
                                                (IMP)eclipse_did_fail_provisional_navigation, "v@:@@@");
         added |= eclipse_add_method_if_missing(cls, @selector(webView:didFailNavigation:withError:),
                                                (IMP)eclipse_did_fail_navigation, "v@:@@@");
+        eclipse_wrap_decide_policy(cls);
         // WebKit records which optional methods a delegate implements when it
         // is assigned, so re-assign it for a class that just gained some.
         if (added) {

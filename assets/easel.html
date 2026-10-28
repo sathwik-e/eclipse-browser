@@ -654,6 +654,9 @@ function flushSave() {
   setStatus('Saved');
 }
 
+// Eclipse calls __eclipseFlush before it closes the tab, quits or navigates
+// away; pagehide and visibilitychange cover everything else.
+window.__eclipseFlush = flushSave;
 window.addEventListener('pagehide', flushSave);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') flushSave();

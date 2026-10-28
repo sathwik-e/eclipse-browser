@@ -93,11 +93,16 @@ fn main() {
 
     event_loop.run(move |event, _, control_flow| {
         match event {
+            // Internal pages first get a moment to save pending edits; the
+            // loop exits once they have (see `ready_to_quit` below).
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
+            } => {
+                app.request_quit();
             }
-            | Event::WindowEvent {
+
+            Event::WindowEvent {
                 event: WindowEvent::Destroyed,
                 ..
             } => {
@@ -128,6 +133,9 @@ fn main() {
             // sleep until the next deadline. Deciding here, and only here,
             // keeps a WaitUntil from being overwritten by later events.
             Event::RedrawEventsCleared => {
+                if app.ready_to_quit() {
+                    *control_flow = ControlFlow::Exit;
+                }
                 if !matches!(
                     *control_flow,
                     ControlFlow::Exit | ControlFlow::ExitWithCode(_)
@@ -147,8 +155,9 @@ fn main() {
                     tab_id,
                     msg,
                     origin,
+                    document,
                 } => {
-                    app.handle_tab_ipc(tab_id, &msg, &origin);
+                    app.handle_tab_ipc(tab_id, &msg, &origin, document);
                 }
                 UserEvent::PageStarted { tab_id, url } => {
                     app.handle_page_started(tab_id, url);
@@ -163,30 +172,40 @@ fn main() {
                     app.handle_new_window(url);
                 }
                 UserEvent::DownloadStarted {
+                    seq,
                     file_name,
                     url,
                     path,
                 } => {
-                    app.handle_download_started(file_name, url, path);
+                    app.handle_download_started(seq, file_name, url, path);
                 }
                 UserEvent::DownloadCompleted {
+                    seq,
                     url,
                     file_name,
                     path,
                     success,
                 } => {
-                    app.handle_download_completed(url, file_name, path, success);
+                    app.handle_download_completed(seq, url, file_name, path, success);
                 }
                 UserEvent::NavigationFailed {
                     tab_id,
+                    committed,
+                    domain,
                     code,
                     description,
                     url,
                 } => {
-                    app.handle_navigation_failed(tab_id, code, description, url);
+                    app.handle_navigation_failed(tab_id, committed, &domain, code, description, url);
                 }
                 UserEvent::WebContentTerminated { tab_id } => {
                     app.handle_web_content_terminated(tab_id);
+                }
+                UserEvent::SidebarWebContentTerminated => {
+                    app.handle_sidebar_terminated();
+                }
+                UserEvent::PageFlushed { tab_id } => {
+                    app.handle_page_flushed(tab_id);
                 }
                 UserEvent::ExtensionDownloaded { ext_id, result } => {
                     app.handle_extension_downloaded(ext_id, result);
@@ -204,7 +223,7 @@ fn main() {
                     app.hover_collapse_sidebar();
                 }
                 UserEvent::CloseWindow => {
-                    *control_flow = ControlFlow::Exit;
+                    app.request_quit();
                 }
             },
 

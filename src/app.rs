@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -11,10 +11,10 @@ use crate::config::{
     BrowserConfig, DownloadItem, EaselItem, FavoriteShortcut, NoteItem, Session, SessionTab,
     normalize_site_domain, write_atomic,
 };
-use crate::events::{BrowserUiState, IpcCommand, UserEvent};
+use crate::events::{BrowserUiState, DocumentTrust, IpcCommand, UserEvent};
 use crate::tab::{
-    Tab, canonicalize_eclipse_url, downloads_dir, generate_ipc_token, get_default_favicon,
-    get_favicon_url,
+    LOADING_TITLE, NavigationError, Tab, canonicalize_eclipse_url, classify_navigation_error,
+    downloads_dir, generate_ipc_token, get_default_favicon, get_favicon_url,
 };
 
 pub const ARC_BORDER: f64 = 8.0;
@@ -35,6 +35,11 @@ const CRASH_WINDOW: Duration = Duration::from_secs(30);
 const MAX_CRASHES_IN_WINDOW: usize = 2;
 const WEB_IPC_LIMIT: usize = 64 * 1024;
 const TRUSTED_IPC_LIMIT: usize = 16 * 1024 * 1024;
+/// How long a closed internal tab may take to deliver its pending edits
+/// before its webview is dropped anyway (a hung or crashed page).
+const CLOSE_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long quitting waits for open internal pages to deliver their edits.
+const QUIT_FLUSH_TIMEOUT: Duration = Duration::from_millis(500);
 
 struct ClosedTab {
     url: String,
@@ -47,8 +52,12 @@ struct ClosedTab {
 pub enum IpcSender {
     /// The sidebar webview, with its token.
     Sidebar,
-    /// An eclipse:// page in a tab whose current URL is eclipse://.
+    /// An eclipse:// frame while the tab's committed document is an internal
+    /// page.
     Internal,
+    /// An internal page that is being closed, or that the tab just left: it
+    /// may only save the edits it still had pending.
+    DepartingInternal,
     /// Any other page.
     Web,
 }
@@ -57,7 +66,9 @@ impl IpcSender {
     fn message_limit(self) -> usize {
         match self {
             IpcSender::Web => WEB_IPC_LIMIT,
-            IpcSender::Sidebar | IpcSender::Internal => TRUSTED_IPC_LIMIT,
+            IpcSender::Sidebar | IpcSender::Internal | IpcSender::DepartingInternal => {
+                TRUSTED_IPC_LIMIT
+            }
         }
     }
 }
@@ -106,6 +117,19 @@ pub struct BrowserApp {
     last_web_url: String,
     /// Off for ECLIPSE_TEST_URL runs so tests never touch the user's session.
     persist_session: bool,
+    /// Closed internal tabs whose page is still delivering its pending
+    /// edits, with the time their webview is dropped regardless.
+    closing_tabs: HashMap<usize, (Tab, Instant)>,
+    /// Set once quitting was requested: the time the app exits regardless.
+    quit_deadline: Option<Instant>,
+    /// Internal tabs whose flush quitting still waits for.
+    quit_waiting: HashSet<usize>,
+    sidebar_crashes: Vec<Instant>,
+    /// A sidebar in a crash loop is reloaded only after a pause.
+    sidebar_reload_due: Option<Instant>,
+    /// Download sequence number (from tab.rs) to the DownloadItem id it
+    /// created, so a completion updates exactly that item.
+    download_items: HashMap<u64, usize>,
 }
 
 impl BrowserApp {
@@ -135,7 +159,7 @@ impl BrowserApp {
         let proxy_clone = proxy.clone();
         // Set while a drag that carries files is over the sidebar.
         let dragging_files = std::cell::Cell::new(false);
-        let sidebar_webview = WebViewBuilder::new()
+        let sidebar_builder = WebViewBuilder::new()
             .with_id("sidebar")
             .with_bounds(sidebar_bounds)
             .with_visible(true)
@@ -165,7 +189,18 @@ impl BrowserApp {
             .with_ipc_handler(move |req| {
                 let body = req.body().clone();
                 let _ = proxy_clone.send_event(UserEvent::Ipc(body));
+            });
+        // wry's delegate claims the crash callback either way, so without a
+        // handler WebKit would not reload a killed sidebar on its own.
+        #[cfg(target_os = "macos")]
+        let sidebar_builder = {
+            use wry::WebViewBuilderExtDarwin;
+            let proxy_terminated = proxy.clone();
+            sidebar_builder.with_on_web_content_process_terminate_handler(move || {
+                let _ = proxy_terminated.send_event(UserEvent::SidebarWebContentTerminated);
             })
+        };
+        let sidebar_webview = sidebar_builder
             .build_as_child(&*window)
             .expect("Failed to initialize sidebar webview");
 
@@ -222,6 +257,12 @@ impl BrowserApp {
             crash_history: HashMap::new(),
             last_web_url: String::new(),
             persist_session: std::env::var_os("ECLIPSE_TEST_URL").is_none(),
+            closing_tabs: HashMap::new(),
+            quit_deadline: None,
+            quit_waiting: HashSet::new(),
+            sidebar_crashes: Vec::new(),
+            sidebar_reload_due: None,
+            download_items: HashMap::new(),
         };
         app.last_broadcast_memory_mb = app.memory_mb;
 
@@ -514,7 +555,8 @@ impl BrowserApp {
             closed.workspace.clone()
         };
         self.remember_closed_tab(&closed);
-        drop(closed);
+        self.retire_tab(closed);
+        self.forget_closed_web_url();
 
         if was_active {
             let in_space = |tab: &Tab| {
@@ -537,6 +579,80 @@ impl BrowserApp {
             self.create_tab("eclipse://newtab", true);
         } else {
             self.broadcast_state();
+        }
+    }
+
+    /// Drops a tab that left `self.tabs`. An internal page first runs its
+    /// flush hook, so edits still in its debounce window are saved; its IPC
+    /// stays accepted (saves only) until the hook returns or times out.
+    fn retire_tab(&mut self, tab: Tab) {
+        tab.set_visible(false);
+        let id = tab.id;
+        let proxy = self.proxy.clone();
+        let flushing = tab.flush_internal_page(move |_| {
+            let _ = proxy.send_event(UserEvent::PageFlushed { tab_id: id });
+        });
+        if flushing {
+            self.closing_tabs
+                .insert(id, (tab, Instant::now() + CLOSE_FLUSH_TIMEOUT));
+        }
+    }
+
+    /// An internal page's flush hook returned: a closed tab can go now, and
+    /// quitting has one page less to wait for.
+    pub fn handle_page_flushed(&mut self, tab_id: usize) {
+        self.closing_tabs.remove(&tab_id);
+        if self.quit_waiting.remove(&tab_id) && self.perf {
+            eprintln!("[perf] tab {tab_id} flushed before quitting");
+        }
+    }
+
+    /// ⌘Q, the window's close control and smoke tests: open internal pages
+    /// deliver their pending edits first (see `ready_to_quit`).
+    pub fn request_quit(&mut self) {
+        if self.quit_deadline.is_some() {
+            return;
+        }
+        for tab in &self.tabs {
+            let id = tab.id;
+            let proxy = self.proxy.clone();
+            let flushing = tab.flush_internal_page(move |_| {
+                let _ = proxy.send_event(UserEvent::PageFlushed { tab_id: id });
+            });
+            if flushing {
+                self.quit_waiting.insert(id);
+            }
+        }
+        self.quit_waiting.extend(self.closing_tabs.keys().copied());
+        self.quit_deadline = Some(Instant::now() + QUIT_FLUSH_TIMEOUT);
+        if self.perf {
+            eprintln!("[perf] quitting: {} internal page(s) to flush", self.quit_waiting.len());
+        }
+    }
+
+    /// Quitting was requested and every internal page has flushed (or the
+    /// wait timed out).
+    pub fn ready_to_quit(&self) -> bool {
+        self.quit_deadline
+            .is_some_and(|deadline| self.quit_waiting.is_empty() || Instant::now() >= deadline)
+    }
+
+    /// After tabs were closed: Preferences' "current site" must not keep
+    /// naming a page that is no longer open.
+    fn forget_closed_web_url(&mut self) {
+        let open: Vec<(&str, Instant)> = self
+            .tabs
+            .iter()
+            .map(|tab| (tab.url.as_str(), tab.last_active))
+            .collect();
+        let next = surviving_web_url(&self.last_web_url, &open);
+        if next == self.last_web_url {
+            return;
+        }
+        self.last_web_url = next;
+        let reference = self.reference_url();
+        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == self.active_tab_id) {
+            sync_tab_config(tab, &self.config, self.config_revision, &reference);
         }
     }
 
@@ -800,7 +916,11 @@ impl BrowserApp {
                 let closed = self.tabs.remove(position);
                 self.crash_history.remove(&id);
                 self.remember_closed_tab(&closed);
+                self.retire_tab(closed);
             }
+        }
+        if removed_count > 0 {
+            self.forget_closed_web_url();
         }
 
         // Ensure at least 1 tab remains
@@ -1096,17 +1216,39 @@ impl BrowserApp {
     }
 
     /// Messages from a tab. `origin` is the posting frame's URL as reported by
-    /// WebKit, which together with the tab's current URL decides whether the
-    /// sender is an internal page or an ordinary website.
-    pub fn handle_tab_ipc(&mut self, tab_id: usize, raw: &str, origin: &str) {
-        let Some(tab) = self.tabs.iter().find(|tab| tab.id == tab_id) else {
-            return;
+    /// WebKit, which together with the tab's committed document when the
+    /// message arrived (`document`) decides whether the sender is an internal
+    /// page or an ordinary website. A tab that is closing only delivers the
+    /// saves its page flushes.
+    pub fn handle_tab_ipc(
+        &mut self,
+        tab_id: usize,
+        raw: &str,
+        origin: &str,
+        document: DocumentTrust,
+    ) {
+        let (tab, closing) = match self.tabs.iter().find(|tab| tab.id == tab_id) {
+            Some(tab) => (tab, false),
+            None => match self.closing_tabs.get(&tab_id) {
+                Some((tab, _)) => (tab, true),
+                None => return,
+            },
         };
-        let sender = classify_tab_sender(origin, &tab.url);
+        let mut sender = classify_tab_sender(origin, document);
+        if closing && sender == IpcSender::Internal {
+            sender = IpcSender::DepartingInternal;
+        }
         let Some((token, command)) = parse_ipc(raw, sender.message_limit()) else {
             return;
         };
         if token != tab.token {
+            return;
+        }
+        // Only the committed web document may report its own (same-origin)
+        // URL: never a late message from a page the tab already left.
+        if let IpcCommand::UrlChanged { url } = &command
+            && !is_plausible_url_report(url, origin, &tab.committed_url())
+        {
             return;
         }
         if !is_command_allowed(sender, &command) {
@@ -1157,16 +1299,7 @@ impl BrowserApp {
                     tab.reload();
                 }
             }
-            IpcCommand::StopLoading => {
-                if let Some(tab) = self
-                    .tabs
-                    .iter_mut()
-                    .find(|tab| tab.id == self.active_tab_id)
-                {
-                    tab.stop_loading();
-                }
-                self.broadcast_state();
-            }
+            IpcCommand::StopLoading => self.stop_active(),
             IpcCommand::ZoomIn => self.zoom_active(0.1),
             IpcCommand::ZoomOut => self.zoom_active(-0.1),
             IpcCommand::ZoomReset => self.zoom_active(0.0),
@@ -1495,6 +1628,7 @@ impl BrowserApp {
                 if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == target_id)
                     && tab.url != url
                 {
+                    tab.note_same_document_url(&url);
                     tab.url = url;
                     if tab.id == self.active_tab_id {
                         self.last_web_url = tab.url.clone();
@@ -1524,7 +1658,14 @@ impl BrowserApp {
             IpcCommand::Ready => {
                 // A (re)loaded document has none of the previous state.
                 match source_tab_id {
-                    None => self.sidebar_pushed_revision = None,
+                    None => {
+                        self.sidebar_pushed_revision = None;
+                        // Nor does a fresh sidebar hold the command bar or a
+                        // field open; it only reports holds that start.
+                        self.command_bar_open = false;
+                        self.sidebar_interaction_active = false;
+                        self.release_sidebar_hold_if_idle();
+                    }
                     Some(_) => self.internal_pushed = None,
                 }
                 self.flush_state();
@@ -1857,9 +1998,16 @@ impl BrowserApp {
         }
     }
 
-    pub fn handle_download_started(&mut self, file_name: String, url: String, path: String) {
+    pub fn handle_download_started(
+        &mut self,
+        seq: u64,
+        file_name: String,
+        url: String,
+        path: String,
+    ) {
         let id = self.next_download_id;
         self.next_download_id += 1;
+        self.download_items.insert(seq, id);
         let item = DownloadItem {
             id,
             file_name: file_name.clone(),
@@ -1876,18 +2024,29 @@ impl BrowserApp {
         self.config_changed();
     }
 
-    /// Completion events carry the original request URL (the name WebKit
-    /// finally used may differ from what the URL suggests), so match by URL
-    /// first and only fall back to the file name.
+    /// A completion names the download it belongs to by `seq` when its start
+    /// was seen; otherwise it carries the original request URL (the name
+    /// WebKit finally used may differ from what the URL suggests), so match
+    /// by URL first and only fall back to the file name.
     pub fn handle_download_completed(
         &mut self,
+        seq: Option<u64>,
         url: String,
         file_name: String,
         path: Option<String>,
         success: bool,
     ) {
         let status = if success { "completed" } else { "failed" };
-        let display_name = match find_download_for_completion(&self.config.downloads, &url, &file_name) {
+        let started_item = seq.and_then(|seq| self.download_items.remove(&seq));
+        let index = started_item
+            .and_then(|id| {
+                self.config
+                    .downloads
+                    .iter()
+                    .position(|d| d.id == id && d.status == "downloading")
+            })
+            .or_else(|| find_download_for_completion(&self.config.downloads, &url, &file_name));
+        let display_name = match index {
             Some(index) => {
                 let item = &mut self.config.downloads[index];
                 item.status = status.into();
@@ -1921,20 +2080,54 @@ impl BrowserApp {
         self.config_changed();
     }
 
-    /// A navigation failed (DNS, offline, TLS, …): stop the spinner and show
-    /// an error page with a retry button instead of a blank "Loading…" tab.
+    /// WebKit reported a navigation error (see `classify_navigation_error`).
+    /// A real failure before commit (DNS, offline, TLS, …) shows an error
+    /// page with a retry button instead of a blank "Loading…" tab; one after
+    /// commit leaves the partly loaded page alone.
     pub fn handle_navigation_failed(
         &mut self,
         tab_id: usize,
+        committed: bool,
+        domain: &str,
         code: i64,
         description: String,
         url: String,
     ) {
+        let outcome = classify_navigation_error(committed, domain, code, &url);
+        if self.perf {
+            eprintln!("[nav] tab {tab_id} {outcome:?} ({domain} {code}) {url}: {description}");
+        }
         let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
             return;
         };
-        if self.perf {
-            eprintln!("[nav] tab {tab_id} failed ({code}) {url}: {description}");
+        match outcome {
+            NavigationError::Ignore => return,
+            NavigationError::HandledByPlugin => {
+                tab.mark_load_finished();
+                let committed_url = tab.committed_url();
+                let finished_url = if committed_url.is_empty() { url } else { committed_url };
+                // A bare media document may never report a title.
+                if tab.title == LOADING_TITLE {
+                    tab.title = crate::tab::download_file_name(&finished_url);
+                }
+                self.refresh_title_from_page(tab_id);
+                self.handle_page_finished(tab_id, finished_url);
+                return;
+            }
+            NavigationError::Interrupted => {
+                if tab.abandon_pending_load() {
+                    self.after_abandoned_load(tab_id);
+                }
+                return;
+            }
+            NavigationError::Failed { committed: true } => {
+                tab.mark_load_finished();
+                tab.is_loading = false;
+                tab.set_loading_indicator(false);
+                self.broadcast_state();
+                return;
+            }
+            NavigationError::Failed { committed: false } => {}
         }
         let failed_url = if url.is_empty() { tab.url.clone() } else { url };
         let description = if description.trim().is_empty() {
@@ -1947,6 +2140,86 @@ impl BrowserApp {
         tab.url = failed_url.clone();
         tab.show_error_page(&failed_url, &description);
         self.broadcast_state();
+    }
+
+    /// The browser-started load of a tab ended without a new document and the
+    /// tab went back to the document on screen: refresh what describes it.
+    fn after_abandoned_load(&mut self, tab_id: usize) {
+        let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        let url = tab.url.clone();
+        if url.starts_with("eclipse://") {
+            tab.title = title_for_url(&url);
+        } else if is_http_url(&url) {
+            // The title was replaced by the abandoned target's.
+            self.refresh_title_from_page(tab_id);
+        }
+        if tab_id == self.active_tab_id && is_http_url(&url) {
+            self.last_web_url = url;
+        }
+        let reference = self.reference_url();
+        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+            sync_tab_config(tab, &self.config, self.config_revision, &reference);
+        }
+        self.broadcast_state();
+    }
+
+    /// Re-reads the page's title (WebKit only reports it when it changes).
+    fn refresh_title_from_page(&self, tab_id: usize) {
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        let proxy = self.proxy.clone();
+        tab.evaluate_with_callback("document.title", move |result| {
+            if let Ok(title) = serde_json::from_str::<String>(&result) {
+                let _ = proxy.send_event(UserEvent::TitleChanged { tab_id, title });
+            }
+        });
+    }
+
+    fn stop_active(&mut self) {
+        let tab_id = self.active_tab_id;
+        let abandoned = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.id == tab_id)
+            .is_some_and(Tab::stop_loading);
+        if abandoned {
+            self.after_abandoned_load(tab_id);
+        } else {
+            self.broadcast_state();
+        }
+    }
+
+    /// The sidebar's WebContent process died: reload the chrome document
+    /// (its token bridge is a persistent user script, so it comes back with
+    /// it) unless it keeps crashing, in which case it is retried later. The
+    /// new document announces itself with `ready` and gets the full state.
+    pub fn handle_sidebar_terminated(&mut self) {
+        let now = Instant::now();
+        self.sidebar_crashes
+            .retain(|at| now.duration_since(*at) < CRASH_WINDOW);
+        self.sidebar_crashes.push(now);
+        self.sidebar_pushed_revision = None;
+        self.command_bar_open = false;
+        self.sidebar_interaction_active = false;
+        self.hover_hold_until = None;
+        self.release_sidebar_hold_if_idle();
+        if self.sidebar_crashes.len() > MAX_CRASHES_IN_WINDOW {
+            eprintln!(
+                "[eclipse] the sidebar keeps crashing; retrying in {}s",
+                CRASH_WINDOW.as_secs()
+            );
+            self.sidebar_reload_due = Some(now + CRASH_WINDOW);
+        } else {
+            self.reload_sidebar();
+        }
+    }
+
+    fn reload_sidebar(&mut self) {
+        self.sidebar_reload_due = None;
+        let _ = self.sidebar_webview.load_html(crate::ui_assets::SIDEBAR_HTML);
     }
 
     /// The tab's WebContent process died. The active tab reloads right away
@@ -1997,11 +2270,6 @@ impl BrowserApp {
             "command_bar" => {
                 self.open_command_bar();
             }
-            // Little Arc (an in-page preview) is gone; its menu item opens a
-            // fresh tab.
-            "little_arc" => {
-                self.create_tab("eclipse://newtab", true);
-            }
             "open_notes" => {
                 self.open_notes_tab();
             }
@@ -2019,6 +2287,7 @@ impl BrowserApp {
             "close_window" => {
                 let _ = self.proxy.send_event(UserEvent::CloseWindow);
             }
+            "quit" => self.request_quit(),
             "focus_omnibar" => self.focus_omnibar(),
             "open_settings" => self.open_settings(),
             "open_settings_tab" => self.open_settings_tab(),
@@ -2027,16 +2296,7 @@ impl BrowserApp {
                     tab.reload();
                 }
             }
-            "stop_loading" => {
-                if let Some(tab) = self
-                    .tabs
-                    .iter_mut()
-                    .find(|tab| tab.id == self.active_tab_id)
-                {
-                    tab.stop_loading();
-                }
-                self.broadcast_state();
-            }
+            "stop_loading" => self.stop_active(),
             "go_back" => {
                 if let Some(tab) = self.tabs.iter().find(|tab| tab.id == self.active_tab_id) {
                     tab.go_back();
@@ -2243,6 +2503,11 @@ impl BrowserApp {
                 let _ = self.sidebar_webview.set_visible(false);
             }
         }
+        if self.sidebar_reload_due.is_some_and(|due| now >= due) {
+            self.reload_sidebar();
+        }
+        // Closed internal tabs whose page never confirmed its flush.
+        self.closing_tabs.retain(|_, (_, deadline)| now < *deadline);
 
         [
             self.state_dirty.then_some(self.next_state_flush),
@@ -2250,6 +2515,9 @@ impl BrowserApp {
             self.session_save_due,
             self.hover_hold_until,
             self.sidebar_hide_due.map(|(due, _)| due),
+            self.sidebar_reload_due,
+            self.closing_tabs.values().map(|(_, deadline)| *deadline).min(),
+            self.quit_deadline,
         ]
         .into_iter()
         .flatten()
@@ -2391,37 +2659,52 @@ impl BrowserApp {
         let Some(session) = Session::load() else {
             return false;
         };
-        let active_url = session
-            .active_index
-            .and_then(|index| session.tabs.get(index))
-            .map(|tab| tab.url.clone());
-        let mut active_id = None;
-        for record in session
+        let workspace = session.current_workspace;
+        let active_index = session.active_index;
+        let mut records = Vec::new();
+        // Enumerated before filtering: `active_index` is a position in the
+        // file as written, so a hand-edited or stale entry cannot shift it.
+        for (index, record) in session
             .tabs
             .into_iter()
-            .filter(|record| is_restorable_url(&record.url))
+            .enumerate()
+            .filter(|(_, record)| is_restorable_url(&record.url))
             .take(MAX_SESSION_TABS)
         {
-            let id = self.next_tab_id;
-            self.next_tab_id += 1;
             let favorite_index = record
                 .favorite_url
                 .as_ref()
                 .and_then(|url| self.config.favorites.iter().position(|f| &f.url == url));
-            if active_id.is_none() && active_url.as_deref() == Some(record.url.as_str()) {
+            records.push((index, record, favorite_index));
+        }
+        let keys: Vec<RestoreKey> = records
+            .iter()
+            .map(|(index, record, favorite_index)| RestoreKey {
+                index: *index,
+                workspace: &record.workspace,
+                in_space_list: !record.is_pinned && favorite_index.is_none(),
+            })
+            .collect();
+        let Some(active_position) = restored_active_position(&keys, active_index, &workspace) else {
+            return false;
+        };
+        let mut active_id = None;
+        for (position, (_, record, favorite_index)) in records.into_iter().enumerate() {
+            let id = self.next_tab_id;
+            self.next_tab_id += 1;
+            if position == active_position {
                 active_id = Some(id);
             }
             self.tabs.push(hibernated_tab(id, record, favorite_index));
         }
-        let Some(first) = self.tabs.first().map(|tab| tab.id) else {
+        let Some(active_id) = active_id else {
             return false;
         };
-        let workspace = session.current_workspace;
         self.current_workspace = workspace.clone();
         let profile = self.config.profile_for_workspace(&workspace);
         self.config.theme = profile.theme;
         self.config.accent_color = profile.accent_color;
-        self.select_tab(active_id.unwrap_or(first));
+        self.select_tab(active_id);
         true
     }
 
@@ -2434,8 +2717,13 @@ impl BrowserApp {
             return;
         };
         let next = if delta == 0.0 { 1.0 } else { tab.zoom + delta };
+        let previous = tab.zoom;
         let zoom = tab.set_zoom(next);
         self.show_toast(&format!("Zoom {:.0}%", zoom * 100.0));
+        // The site popover shows the zoom, and the session saves it.
+        if (zoom - previous).abs() > f64::EPSILON {
+            self.broadcast_state();
+        }
     }
 
     fn find_active(&mut self, action: &str) {
@@ -2574,16 +2862,42 @@ fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Internal = an eclipse:// frame in a tab that is currently on an eclipse://
-/// page. Everything else (including the error page, a subframe of a website,
-/// or a web document still current while an eclipse:// load is pending) is a
+/// Internal = an eclipse:// frame while the tab's committed document is an
+/// internal page. The classification follows the committed document, never
+/// the URL the tab is loading, so a load that never commits (a download, a
+/// refused or stopped navigation) cannot demote the page still on screen,
+/// and a web document still current while an eclipse:// load is pending is
+/// never promoted. An eclipse:// frame right after the tab left an internal
+/// page is that page saving as it unloads (web documents cannot host
+/// eclipse:// frames). Everything else, including the error page, is a
 /// website.
-pub fn classify_tab_sender(origin: &str, tab_url: &str) -> IpcSender {
+pub fn classify_tab_sender(origin: &str, document: DocumentTrust) -> IpcSender {
     let origin_is_eclipse = url::Url::parse(origin).is_ok_and(|u| u.scheme() == "eclipse");
-    if origin_is_eclipse && tab_url.starts_with("eclipse://") {
+    if !origin_is_eclipse {
+        IpcSender::Web
+    } else if document.internal {
         IpcSender::Internal
+    } else if document.left_internal {
+        IpcSender::DepartingInternal
     } else {
         IpcSender::Web
+    }
+}
+
+/// A `url_changed` report comes from the committed web document itself:
+/// the new URL, the posting frame and the committed document share an
+/// origin (pushState cannot leave it), so a late report from a page the tab
+/// already left, or from an internal or error page, is ignored.
+fn is_plausible_url_report(url: &str, frame_origin: &str, committed_url: &str) -> bool {
+    if !is_http_url(url) {
+        return false;
+    }
+    let origin = |value: &str| url::Url::parse(value).ok().map(|parsed| parsed.origin());
+    match (origin(url), origin(frame_origin), origin(committed_url)) {
+        (Some(target), Some(frame), Some(committed)) => {
+            target.is_tuple() && target == frame && target == committed
+        }
+        _ => false,
     }
 }
 
@@ -2598,6 +2912,12 @@ pub fn is_command_allowed(sender: IpcSender, command: &IpcCommand) -> bool {
                 | IpcCommand::WindowMinimize
                 | IpcCommand::WindowZoom
                 | IpcCommand::DragWindow
+        ),
+        IpcSender::DepartingInternal => matches!(
+            command,
+            IpcCommand::UpdateSettings { .. }
+                | IpcCommand::SaveNote { .. }
+                | IpcCommand::SaveEasel { .. }
         ),
         IpcSender::Web => match command {
             IpcCommand::UrlChanged { .. }
@@ -2653,6 +2973,52 @@ fn truncate_message(message: &str, limit: usize) -> String {
         truncated.push('…');
     }
     truncated
+}
+
+/// The "current site" after tabs closed: `current` while a tab still shows
+/// it, else the most recently active open web page, else nothing.
+fn surviving_web_url(current: &str, open: &[(&str, Instant)]) -> String {
+    if current.is_empty() || open.iter().any(|(url, _)| *url == current) {
+        return current.to_string();
+    }
+    open.iter()
+        .filter(|(url, _)| is_http_url(url))
+        .max_by_key(|(_, last_active)| *last_active)
+        .map(|(url, _)| url.to_string())
+        .unwrap_or_default()
+}
+
+/// What session restore needs to know about a saved tab to pick the active
+/// one.
+struct RestoreKey<'a> {
+    /// Position in session.json as written.
+    index: usize,
+    workspace: &'a str,
+    /// Neither pinned nor a favorite's tab (those show in every space).
+    in_space_list: bool,
+}
+
+/// Which restored tab (position in `keys`) becomes active: the one saved as
+/// active, matched by its position in the file (URLs repeat across tabs and
+/// spaces), unless it belongs to another space than the saved one; then the
+/// saved space's first tab, then the first tab. None when nothing restores.
+fn restored_active_position(
+    keys: &[RestoreKey],
+    active_index: Option<usize>,
+    workspace: &str,
+) -> Option<usize> {
+    let first_in_space = keys
+        .iter()
+        .position(|key| key.in_space_list && key.workspace == workspace);
+    let saved_active = active_index
+        .and_then(|index| keys.iter().position(|key| key.index == index))
+        .filter(|&position| {
+            let key = &keys[position];
+            !key.in_space_list || key.workspace == workspace
+        });
+    saved_active
+        .or(first_in_space)
+        .or_else(|| (!keys.is_empty()).then_some(0))
 }
 
 /// What the ⌘1-9 / next / prev ordering needs to know about a tab.
@@ -2913,7 +3279,7 @@ pub fn title_for_url(url: &str) -> String {
     } else if url.starts_with("eclipse://") {
         "New Tab".into()
     } else {
-        "Loading…".into()
+        LOADING_TITLE.into()
     }
 }
 
@@ -3141,20 +3507,141 @@ mod tests {
         serde_json::from_str(json).unwrap()
     }
 
+    const INTERNAL_DOC: DocumentTrust = DocumentTrust {
+        internal: true,
+        left_internal: false,
+    };
+    const WEB_DOC: DocumentTrust = DocumentTrust {
+        internal: false,
+        left_internal: false,
+    };
+    const LEFT_INTERNAL_DOC: DocumentTrust = DocumentTrust {
+        internal: false,
+        left_internal: true,
+    };
+
     #[test]
-    fn classifies_ipc_senders_by_frame_origin_and_tab_url() {
+    fn classifies_ipc_senders_by_frame_origin_and_committed_document() {
         assert_eq!(
-            classify_tab_sender("eclipse://localhost/settings", "eclipse://settings"),
+            classify_tab_sender("eclipse://localhost/settings", INTERNAL_DOC),
+            IpcSender::Internal
+        );
+        // The internal page stays trusted while a load that never commits
+        // (a download, a refused navigation) is pending: the classification
+        // follows the committed document, not the tab's target URL.
+        assert_eq!(
+            classify_tab_sender("eclipse://localhost/notes", INTERNAL_DOC),
             IpcSender::Internal
         );
         // A website, even one that iframes or links to eclipse:// pages.
-        assert_eq!(classify_tab_sender("https://evil.example/", "https://evil.example/"), IpcSender::Web);
-        assert_eq!(classify_tab_sender("eclipse://localhost/settings", "https://evil.example/"), IpcSender::Web);
+        assert_eq!(classify_tab_sender("https://evil.example/", WEB_DOC), IpcSender::Web);
+        assert_eq!(classify_tab_sender("eclipse://localhost/settings", WEB_DOC), IpcSender::Web);
         // A web document still current while an eclipse:// load is pending.
-        assert_eq!(classify_tab_sender("https://evil.example/", "eclipse://notes"), IpcSender::Web);
+        assert_eq!(classify_tab_sender("https://evil.example/", INTERNAL_DOC), IpcSender::Web);
+        assert_eq!(classify_tab_sender("https://evil.example/", LEFT_INTERNAL_DOC), IpcSender::Web);
+        // The internal page the tab just left, saving as it unloads.
+        assert_eq!(
+            classify_tab_sender("eclipse://localhost/settings", LEFT_INTERNAL_DOC),
+            IpcSender::DepartingInternal
+        );
         // The error page (load_html) and unparseable origins.
-        assert_eq!(classify_tab_sender("about:blank", "https://down.example/"), IpcSender::Web);
-        assert_eq!(classify_tab_sender("", "eclipse://newtab"), IpcSender::Web);
+        assert_eq!(classify_tab_sender("about:blank", WEB_DOC), IpcSender::Web);
+        assert_eq!(classify_tab_sender("", INTERNAL_DOC), IpcSender::Web);
+    }
+
+    #[test]
+    fn departing_internal_pages_may_only_save() {
+        for json in [
+            r#"{"action":"update_settings","settings":{"custom_css":"a{}"}}"#,
+            r#"{"action":"save_note","id":"n1","title":"t","content":"c"}"#,
+            r#"{"action":"save_easel","id":"e1","title":"t","elements_json":"[]"}"#,
+        ] {
+            assert!(is_command_allowed(IpcSender::DepartingInternal, &command(json)), "{json}");
+        }
+        for json in [
+            r#"{"action":"delete_note","id":"n1"}"#,
+            r#"{"action":"navigate","url":"https://a.example"}"#,
+            r#"{"action":"install_extension","path":"/tmp/x"}"#,
+            r#"{"action":"close_tab","id":3}"#,
+            r#"{"action":"window_close"}"#,
+        ] {
+            assert!(!is_command_allowed(IpcSender::DepartingInternal, &command(json)), "{json}");
+        }
+        assert_eq!(IpcSender::DepartingInternal.message_limit(), TRUSTED_IPC_LIMIT);
+    }
+
+    #[test]
+    fn url_reports_must_come_from_the_committed_web_document() {
+        let page = "https://app.example/feed";
+        assert!(is_plausible_url_report("https://app.example/feed?p=2", page, page));
+        // A late report from the page the tab already left.
+        assert!(!is_plausible_url_report(
+            "https://old.example/x",
+            "https://old.example/",
+            "https://new.example/"
+        ));
+        // ... or arriving after an internal page committed.
+        assert!(!is_plausible_url_report(
+            "https://old.example/x",
+            "https://old.example/",
+            "eclipse://localhost/settings"
+        ));
+        // A cross-origin URL, an error page and non-web URLs.
+        assert!(!is_plausible_url_report("https://evil.example/", page, page));
+        assert!(!is_plausible_url_report(
+            "https://down.example/",
+            "about:blank",
+            "https://down.example/"
+        ));
+        let settings = "eclipse://localhost/settings";
+        assert!(!is_plausible_url_report("eclipse://settings", settings, settings));
+        assert!(!is_plausible_url_report("https://app.example/", page, ""));
+    }
+
+    #[test]
+    fn current_site_forgets_closed_pages() {
+        let now = Instant::now();
+        let earlier = now - Duration::from_secs(60);
+        let open = [
+            ("https://old.example/", earlier),
+            ("eclipse://settings", now),
+            ("https://recent.example/", now),
+        ];
+        // Still open: unchanged.
+        assert_eq!(surviving_web_url("https://old.example/", &open), "https://old.example/");
+        // Closed: the most recently active open web page.
+        assert_eq!(surviving_web_url("https://gone.example/", &open), "https://recent.example/");
+        // No web page left.
+        assert_eq!(surviving_web_url("https://gone.example/", &[("eclipse://settings", now)]), "");
+        assert_eq!(surviving_web_url("", &open), "");
+    }
+
+    fn restore_key(index: usize, workspace: &str, in_space_list: bool) -> RestoreKey<'_> {
+        RestoreKey {
+            index,
+            workspace,
+            in_space_list,
+        }
+    }
+
+    #[test]
+    fn session_restore_picks_the_active_tab_by_position() {
+        // Two new-tab pages in two spaces; the second (Media) was active.
+        let keys = [restore_key(0, "Default", true), restore_key(1, "Media", true)];
+        assert_eq!(restored_active_position(&keys, Some(1), "Media"), Some(1));
+        // Positions count the file as written, before unrestorable entries
+        // are skipped.
+        let keys = [restore_key(0, "Default", true), restore_key(2, "Media", true)];
+        assert_eq!(restored_active_position(&keys, Some(2), "Media"), Some(1));
+        // A saved index pointing into another space falls back to the saved
+        // space's first tab; a pinned tab shows in every space.
+        assert_eq!(restored_active_position(&keys, Some(0), "Media"), Some(1));
+        let keys = [restore_key(0, "Default", false), restore_key(1, "Media", true)];
+        assert_eq!(restored_active_position(&keys, Some(0), "Media"), Some(0));
+        // No (valid) index: the saved space's first tab, else the first tab.
+        assert_eq!(restored_active_position(&keys, None, "Media"), Some(1));
+        assert_eq!(restored_active_position(&keys, Some(9), "Work"), Some(0));
+        assert_eq!(restored_active_position(&[], Some(0), "Media"), None);
     }
 
     #[test]

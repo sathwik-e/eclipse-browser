@@ -63,10 +63,31 @@ def main() -> int:
     shutil.copyfile(ICONSET / "icon_512x512.png", PREVIEW)
 
     ICNS.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    res = subprocess.run(
         ["iconutil", "-c", "icns", str(ICONSET), "-o", str(ICNS)],
-        check=True,
+        capture_output=True,
     )
+    if res.returncode != 0 or not ICNS.exists():
+        import struct
+
+        chunks = []
+        ostype_map = [
+            (b"icp4", "icon_16x16.png"),
+            (b"ic11", "icon_16x16@2x.png"),
+            (b"icp5", "icon_32x32.png"),
+            (b"ic12", "icon_32x32@2x.png"),
+            (b"ic07", "icon_128x128.png"),
+            (b"ic13", "icon_128x128@2x.png"),
+            (b"ic08", "icon_256x256.png"),
+            (b"ic14", "icon_256x256@2x.png"),
+            (b"ic09", "icon_512x512.png"),
+            (b"ic10", "icon_512x512@2x.png"),
+        ]
+        for ostype, filename in ostype_map:
+            data = (ICONSET / filename).read_bytes()
+            chunks.append(ostype + struct.pack(">I", 8 + len(data)) + data)
+        body = b"".join(chunks)
+        ICNS.write_bytes(b"icns" + struct.pack(">I", 8 + len(body)) + body)
     print(f"Generated {PREVIEW.relative_to(ROOT)} and {ICNS.relative_to(ROOT)}")
     return 0
 

@@ -566,29 +566,46 @@ input[type="checkbox"]:hover {
 </div>
 
 <div class="card">
-  <div class="card-header">
-    <h2>Chrome Extensions &amp; User Scripts</h2>
+  <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+    <h2>Chrome Extensions &amp; Web Store</h2>
+    <button class="btn primary" id="btn-open-webstore" style="display:inline-flex; align-items:center; gap:6px; font-size:12px;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="21.17" y1="8" x2="12" y2="8"/><line x1="3.95" y1="6.06" x2="8.54" y2="14"/><line x1="10.88" y1="21.94" x2="15.46" y2="14"/></svg>
+      Open Chrome Web Store
+    </button>
   </div>
   <div class="row">
     <div>
       <div style="font-weight:500;">Chrome Extensions Runtime (WebExtensions API)</div>
-      <div class="hint" style="margin-top:2px;">Enables <code>chrome.runtime</code>, <code>chrome.storage</code>, <code>chrome.tabs</code>, and MV2/MV3 content scripts in Eclipse.</div>
+      <div class="hint" style="margin-top:2px;">Enables <code>chrome.runtime</code>, <code>chrome.storage</code>, <code>chrome.tabs</code>, and MV2/MV3 content scripts.</div>
     </div>
     <input type="checkbox" id="chk-extensions" checked />
   </div>
 
-  <div style="margin-top: 16px;">
-    <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Load Unpacked Chrome Extension</div>
-    <div class="add-shortcut-form">
-      <input type="text" id="txt-unpacked-path" placeholder="/path/to/unpacked-chrome-extension (folder containing manifest.json)" style="flex:1;" />
-      <button class="btn primary" id="btn-load-unpacked">Load Extension</button>
+  <div style="margin-top: 16px; padding: 12px 14px; background: rgba(94, 158, 255, 0.05); border: 1px solid rgba(94, 158, 255, 0.18); border-radius: 8px;">
+    <div style="font-size: 13px; font-weight: 600; margin-bottom: 4px; display:flex; align-items:center; gap:6px; color:#fff;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5E9EFF" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+      Install Directly from Chrome Web Store
     </div>
-    <p class="hint">Point to any unpacked Chrome MV2/MV3 extension folder. Eclipse executes extension content scripts and injects extension CSS into matching URLs.</p>
+    <div class="hint" style="margin-bottom:8px;">Paste any Chrome Web Store URL or 32-character extension ID to download and activate it immediately.</div>
+    <div class="add-shortcut-form">
+      <input type="text" id="txt-webstore-input" placeholder="e.g. https://chromewebstore.google.com/detail/ublock-origin/cjpalhdlnbpafiamejdnhcphjbkeiagm or ID" style="flex:1;" />
+      <button class="btn primary" id="btn-install-webstore">Install Extension</button>
+    </div>
+    <div id="webstore-status" style="font-size: 11.5px; margin-top: 6px; display:none;"></div>
   </div>
 
   <div style="margin-top: 18px;">
     <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Installed Chrome Extensions</div>
     <div class="ext-grid" id="installed-ext-list"></div>
+  </div>
+
+  <div style="margin-top: 16px;">
+    <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Developer: Load Unpacked Extension</div>
+    <div class="add-shortcut-form">
+      <input type="text" id="txt-unpacked-path" placeholder="/path/to/unpacked-folder (containing manifest.json)" style="flex:1;" />
+      <button class="btn" id="btn-load-unpacked">Load Unpacked</button>
+    </div>
+    <p class="hint">Point to any unpacked Chrome MV2/MV3 extension folder on your Mac.</p>
   </div>
 
   <div style="margin-top: 14px;">
@@ -629,8 +646,9 @@ let cfg = window.__ECLIPSE_CONFIG__ || {
 
 function getActiveDomain() {
   try {
-    if (!currentActiveUrl) return '';
+    if (!currentActiveUrl || currentActiveUrl.startsWith('eclipse://')) return '';
     const u = new URL(currentActiveUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
     return u.hostname || '';
   } catch (_) {
     return '';
@@ -717,7 +735,11 @@ function renderUI() {
   if (activeDomain && !activeDomain.startsWith('eclipse')) {
     siteRow.style.display = 'flex';
     chkSiteAdblock.disabled = false;
-    const isSiteDisabled = disabledDomains.some(d => d.toLowerCase() === activeDomain.toLowerCase());
+    const activeLower = activeDomain.toLowerCase();
+    const isSiteDisabled = disabledDomains.some(d => {
+      const dl = d.trim().toLowerCase();
+      return dl && (activeLower === dl || activeLower.endsWith('.' + dl));
+    });
     const isSiteActive = (cfg.adblock_enabled !== false) && !isSiteDisabled;
     chkSiteAdblock.checked = isSiteActive;
     siteDomainText.textContent = isSiteActive 
@@ -750,7 +772,7 @@ function renderUI() {
   if (extList) {
     const extensions = cfg.installed_extensions || [];
     if (extensions.length === 0) {
-      extList.innerHTML = '<span style="font-size:11.5px;color:var(--text-dim);">No Chrome extensions installed.</span>';
+      extList.innerHTML = '<span style="font-size:12px;color:var(--text-dim);">No Chrome extensions installed. Click "Open Chrome Web Store" above or paste an extension link to install one.</span>';
     } else {
       extList.innerHTML = extensions.map(ext => `
         <div class="ext-item">
@@ -852,6 +874,36 @@ document.getElementById('btn-add-allowlist-domain').addEventListener('click', ()
   input.value = '';
 });
 
+const btnOpenWebstore = document.getElementById('btn-open-webstore');
+if (btnOpenWebstore) {
+  btnOpenWebstore.addEventListener('click', () => {
+    postIpc({ action: 'new_tab', url: 'https://chromewebstore.google.com' });
+  });
+}
+
+const btnInstallWebstore = document.getElementById('btn-install-webstore');
+if (btnInstallWebstore) {
+  btnInstallWebstore.addEventListener('click', () => {
+    const input = document.getElementById('txt-webstore-input');
+    const val = input.value.trim();
+    if (!val) return;
+    const status = document.getElementById('webstore-status');
+    if (status) {
+      status.style.display = 'block';
+      status.style.color = '#5E9EFF';
+      status.textContent = 'Downloading and installing from Chrome Web Store...';
+    }
+    postIpc({ action: 'install_from_web_store', input: val });
+    input.value = '';
+    setTimeout(() => {
+      if (status) {
+        status.textContent = 'Extension installation request sent to Eclipse engine.';
+        setTimeout(() => { status.style.display = 'none'; }, 3500);
+      }
+    }, 1200);
+  });
+}
+
 document.getElementById('btn-load-unpacked').addEventListener('click', () => {
   const input = document.getElementById('txt-unpacked-path');
   const path = input.value.trim();
@@ -891,7 +943,7 @@ document.getElementById('txt-custom-css').addEventListener('input', (e) => {
 
 window.onEclipseConfigUpdated = function(newCfg, activeUrl) {
   if (newCfg) cfg = newCfg;
-  if (activeUrl) currentActiveUrl = activeUrl;
+  if (typeof activeUrl === 'string') currentActiveUrl = activeUrl;
   renderUI();
 };
 

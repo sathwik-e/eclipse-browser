@@ -217,6 +217,198 @@
   window.addEventListener('hashchange', reportUrl, true);
   window.addEventListener('pageshow', reportUrl, true);
 
+  /* ------------------------------------ Celestial Eclipse Loading Overlay */
+  var loadingHost = null;
+  var loadingHideTimer = null;
+
+  function ensureLoadingUi() {
+    if (loadingHost || internal) return;
+    if (!document.documentElement) return;
+    loadingHost = document.createElement('div');
+    loadingHost.id = '__eclipse_loading_host';
+    loadingHost.style.cssText =
+      'all: initial; position: fixed; top: 14px; right: 16px; z-index: 2147483646; pointer-events: none; display: none;';
+    var shadow = loadingHost.attachShadow({ mode: 'closed' });
+    shadow.innerHTML = [
+      '<style>',
+      ':host{all:initial}',
+      '.pill{display:inline-flex;align-items:center;gap:10px;padding:7px 13px;border-radius:999px;',
+      'background:rgba(11,14,23,.92);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);',
+      'border:1px solid rgba(94,158,255,.4);box-shadow:0 10px 28px rgba(0,0,0,.55),0 0 18px rgba(56,189,248,.28);',
+      'font:500 11.5px -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:rgba(255,255,255,.92);',
+      'animation:pillIn .18s cubic-bezier(.16,1,.3,1)}',
+      '@keyframes pillIn{from{opacity:0;transform:translateY(-6px) scale(.95)}to{opacity:1;transform:none}}',
+      '.eclipse-loader{width:20px;height:20px;position:relative;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}',
+      '.eclipse-star{position:absolute;width:10px;height:10px;border-radius:50%;',
+      'background:radial-gradient(circle at 38% 38%,#fff 0%,#93c5fd 25%,#38bdf8 55%,#1d4ed8 100%);',
+      'box-shadow:0 0 6px #38bdf8,0 0 12px rgba(56,189,248,.75);animation:starLuminescence 2.2s ease-in-out infinite;z-index:1}',
+      '.eclipse-corona{position:absolute;width:15px;height:15px;border-radius:50%;border:1px solid rgba(147,197,253,.9);',
+      'box-shadow:0 0 10px rgba(56,189,248,.8),inset 0 0 6px rgba(37,99,235,.6);animation:coronaFlare 2.2s ease-in-out infinite;z-index:0}',
+      '.eclipse-moon{position:absolute;width:10.6px;height:10.6px;border-radius:50%;',
+      'background:radial-gradient(circle at 35% 35%,#0f172a 0%,#030712 100%);',
+      'box-shadow:inset -1px -1px 2px rgba(147,197,253,.5);animation:moonTransit 2.2s cubic-bezier(.42,0,.58,1) infinite;z-index:2}',
+      '.eclipse-diamond{position:absolute;width:3px;height:3px;border-radius:50%;background:#fff;',
+      'box-shadow:0 0 5px #fff,0 0 9px #93c5fd;animation:diamondFlash 2.2s ease-in-out infinite;z-index:3}',
+      '@keyframes moonTransit{0%{transform:translateX(-14px) scale(.9);opacity:0}15%{opacity:1}50%{transform:translateX(0) scale(1.02);opacity:1}85%{opacity:1}100%{transform:translateX(14px) scale(.9);opacity:0}}',
+      '@keyframes starLuminescence{0%,100%{transform:scale(.95);opacity:.85}50%{transform:scale(1.08);opacity:1}}',
+      '@keyframes coronaFlare{0%,100%{transform:scale(.86);opacity:.35}46%,54%{transform:scale(1.34);opacity:1}}',
+      '@keyframes diamondFlash{0%,43%{opacity:0;transform:translate(3.5px,-3.5px) scale(0)}50%{opacity:1;transform:translate(4px,-4px) scale(1.55)}57%,100%{opacity:0;transform:translate(4.5px,-4.5px) scale(0)}}',
+      '</style>',
+      '<div class="pill">',
+      '  <div class="eclipse-loader">',
+      '    <div class="eclipse-corona"></div>',
+      '    <div class="eclipse-star"></div>',
+      '    <div class="eclipse-moon"></div>',
+      '    <div class="eclipse-diamond"></div>',
+      '  </div>',
+      '  <span>Loading Eclipse…</span>',
+      '</div>'
+    ].join('');
+    document.documentElement.appendChild(loadingHost);
+  }
+
+  function setLoadingState(isLoading) {
+    if (internal) return;
+    ensureLoadingUi();
+    if (!loadingHost) return;
+    if (loadingHideTimer) {
+      clearTimeout(loadingHideTimer);
+      loadingHideTimer = null;
+    }
+    if (isLoading) {
+      loadingHost.style.display = 'block';
+      loadingHideTimer = setTimeout(function () {
+        if (loadingHost) loadingHost.style.display = 'none';
+      }, 8000);
+    } else {
+      loadingHost.style.display = 'none';
+    }
+  }
+
+  if (!internal && document.readyState === 'loading') {
+    setLoadingState(true);
+    window.addEventListener(
+      'DOMContentLoaded',
+      function () {
+        setTimeout(function () {
+          setLoadingState(false);
+        }, 280);
+      },
+      { once: true }
+    );
+  }
+
+  window.addEventListener('beforeunload', function () {
+    setLoadingState(true);
+  });
+
+  try {
+    Object.defineProperty(window, '__eclipseSetLoading', {
+      value: function (isLoading) {
+        setLoadingState(!!isLoading);
+      },
+      writable: false,
+      configurable: false,
+      enumerable: false
+    });
+  } catch (_) {}
+
+  /* ------------------------------------------------- Little Arc Quick Window */
+  var littleArcHost = null;
+  var littleArcFrame = null;
+  var littleArcTitle = null;
+  var littleArcUrlText = null;
+  var currentLittleArcUrl = '';
+
+  function ensureLittleArcUi() {
+    if (littleArcHost) return;
+    if (!document.documentElement) return;
+    littleArcHost = document.createElement('div');
+    littleArcHost.id = '__eclipse_little_arc_host';
+    littleArcHost.style.cssText =
+      'all: initial; position: fixed; inset: 0; z-index: 2147483647; display: none; align-items: center; justify-content: center; background: rgba(4, 6, 12, 0.58); backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%);';
+    var shadow = littleArcHost.attachShadow({ mode: 'closed' });
+    shadow.innerHTML = [
+      '<style>',
+      ':host{all:initial}',
+      '*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}',
+      '.window{width:min(760px,90vw);height:min(560px,84vh);background:rgba(14,17,26,.98);border:1px solid rgba(94,158,255,.45);border-radius:16px;box-shadow:0 28px 80px rgba(0,0,0,.82),0 0 36px rgba(94,158,255,.22);display:flex;flex-direction:column;overflow:hidden;animation:laPop .18s cubic-bezier(.16,1,.3,1)}',
+      '@keyframes laPop{from{opacity:0;transform:scale(.95) translateY(10px)}to{opacity:1;transform:none}}',
+      '.topbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.09)}',
+      '.badge{font-size:10.5px;font-weight:650;color:#5E9EFF;background:rgba(94,158,255,.14);border:1px solid rgba(94,158,255,.35);padding:3px 8px;border-radius:6px;letter-spacing:.3px;text-transform:uppercase}',
+      '.url-bar{flex:1;font-size:12px;color:rgba(255,255,255,.78);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:4px 10px;background:rgba(0,0,0,.28);border-radius:7px;border:1px solid rgba(255,255,255,.07)}',
+      '.btn{border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:#fff;font-size:11.5px;font-weight:550;padding:5px 11px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:5px}',
+      '.btn:hover{background:rgba(94,158,255,.24);border-color:#5E9EFF}',
+      '.btn.primary{background:#5E9EFF;color:#080A10;border-color:transparent;font-weight:600}',
+      '.btn.primary:hover{filter:brightness(1.08)}',
+      '.body{flex:1;position:relative;background:#090A0F;display:flex;flex-direction:column}',
+      'iframe{flex:1;width:100%;height:100%;border:0;background:#fff}',
+      '.footer-note{padding:6px 14px;font-size:11px;color:rgba(255,255,255,.48);background:rgba(10,12,18,.95);border-top:1px solid rgba(255,255,255,.07);display:flex;justify-content:space-between;align-items:center}',
+      '</style>',
+      '<div class="window">',
+      '  <div class="topbar">',
+      '    <span class="badge">Little Arc</span>',
+      '    <div class="url-bar" id="la-url">https://</div>',
+      '    <button class="btn primary" id="la-promote" title="Open in Main Tab">Expand to Tab ↗</button>',
+      '    <button class="btn" id="la-close" title="Close (Esc)">✕</button>',
+      '  </div>',
+      '  <div class="body">',
+      '    <iframe id="la-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>',
+      '  </div>',
+      '  <div class="footer-note">',
+      '    <span>Quick preview window • Tip: Shift+Click any link to preview in Little Arc</span>',
+      '    <span id="la-title">Ready</span>',
+      '  </div>',
+      '</div>'
+    ].join('');
+
+    littleArcHost.addEventListener('click', function (e) {
+      if (e.target === littleArcHost) closeLittleArc();
+    });
+    shadow.getElementById('la-close').addEventListener('click', closeLittleArc);
+    shadow.getElementById('la-promote').addEventListener('click', function () {
+      var target = currentLittleArcUrl;
+      closeLittleArc();
+      if (target) {
+        post({ action: 'promote_little_arc', url: target });
+      }
+    });
+
+    littleArcFrame = shadow.getElementById('la-frame');
+    littleArcUrlText = shadow.getElementById('la-url');
+    littleArcTitle = shadow.getElementById('la-title');
+    document.documentElement.appendChild(littleArcHost);
+  }
+
+  function openLittleArc(url) {
+    ensureLittleArcUi();
+    if (!littleArcHost) return;
+    currentLittleArcUrl = url || location.href;
+    if (littleArcUrlText) littleArcUrlText.textContent = currentLittleArcUrl;
+    if (littleArcTitle) littleArcTitle.textContent = 'Preview Active';
+    if (littleArcFrame) littleArcFrame.src = currentLittleArcUrl;
+    littleArcHost.style.display = 'flex';
+  }
+
+  function closeLittleArc() {
+    if (!littleArcHost) return;
+    littleArcHost.style.display = 'none';
+    if (littleArcFrame) littleArcFrame.src = 'about:blank';
+    post({ action: 'close_little_arc' });
+  }
+
+  try {
+    Object.defineProperty(window, '__eclipseLittleArc', {
+      value: function (action, url) {
+        if (action === 'open') openLittleArc(url);
+        else if (action === 'close') closeLittleArc();
+      },
+      writable: false,
+      configurable: false,
+      enumerable: false
+    });
+  } catch (_) {}
+
   /* ------------------------------------------------- link click behaviour */
   function linkTarget(event, background) {
     if (!event.isTrusted) return;
@@ -233,7 +425,15 @@
   document.addEventListener(
     'click',
     function (event) {
-      if (event.button !== 0 || !event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!event.isTrusted || event.button !== 0) return;
+      var anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+      if (anchor && event.shiftKey && !event.metaKey && !event.ctrlKey && /^https?:/i.test(anchor.href)) {
+        event.preventDefault();
+        event.stopPropagation();
+        openLittleArc(anchor.href);
+        return;
+      }
+      if (!event.metaKey || event.ctrlKey || event.altKey) return;
       linkTarget(event, false);
     },
     true
@@ -500,7 +700,6 @@
     if (q) {
       var qLower = q.toLowerCase();
 
-      // 1. Matching open tabs with "Switch to Tab" option!
       if (cachedOpenTabs && cachedOpenTabs.length > 0) {
         cachedOpenTabs.forEach(function (t) {
           if (t.url !== 'eclipse://newtab' && (
@@ -518,7 +717,6 @@
         });
       }
 
-      // 2. Direct URL option if domain-like
       if (q.indexOf('.') !== -1 || q.startsWith('http://') || q.startsWith('https://') || q.startsWith('localhost')) {
         var directUrl = q;
         if (!/^https?:\/\//i.test(directUrl)) directUrl = 'https://' + directUrl;
@@ -530,16 +728,13 @@
         });
       }
 
-      // 3. Search query
-      var searchUrl = 'https://www.google.com/search?q=' + encodeURIComponent(q);
       cmdItems.push({
         title: 'Search for "' + q + '"',
-        sub: 'Google Search',
-        url: searchUrl,
+        sub: 'Web Search',
+        url: q,
         icon: ICONS.search
       });
 
-      // 4. Favorites matching query
       DEFAULT_FAVORITES.forEach(function (f) {
         if (f.title.toLowerCase().indexOf(qLower) !== -1 || f.url.toLowerCase().indexOf(qLower) !== -1) {
           cmdItems.push({
@@ -572,8 +767,27 @@
 
       var favTitle = document.createElement('div');
       favTitle.className = 'section-title';
-      favTitle.textContent = 'Quick Links';
+      favTitle.textContent = 'Quick Actions & Links';
       cmdBarResults.appendChild(favTitle);
+
+      cmdItems.push({
+        title: 'Tidy Tabs',
+        sub: 'Auto-group & deduplicate tabs (⇧⌘Y)',
+        action: 'tidy_tabs',
+        icon: ICONS.clean
+      });
+      cmdItems.push({
+        title: 'Eclipse Notes',
+        sub: 'Open workspace notes (⇧⌘N)',
+        url: 'eclipse://notes',
+        icon: ICONS.link
+      });
+      cmdItems.push({
+        title: 'Eclipse Easel',
+        sub: 'Open visual canvas board (⇧⌘E)',
+        url: 'eclipse://easel',
+        icon: ICONS.link
+      });
 
       DEFAULT_FAVORITES.forEach(function (f) {
         cmdItems.push({
@@ -634,7 +848,9 @@
     } else if (item.action === 'open_settings') {
       post({ action: 'open_settings' });
     } else if (item.action === 'clean_memory') {
-      post({ action: 'tick_memory' });
+      post({ action: 'clean_memory' });
+    } else if (item.action === 'tidy_tabs') {
+      post({ action: 'tidy_tabs' });
     } else if (item.url) {
       post({ action: 'navigate_or_new_tab', url: item.url });
     }
@@ -642,13 +858,9 @@
 
   function executeUrl(val) {
     closeCommandBar();
-    var target = val;
-    if (val.indexOf('.') === -1 && !val.startsWith('http://') && !val.startsWith('https://')) {
-      target = 'https://www.google.com/search?q=' + encodeURIComponent(val);
-    } else if (!/^https?:\/\//i.test(val)) {
-      target = 'https://' + val;
-    }
-    post({ action: 'navigate_or_new_tab', url: target });
+    var trimmed = (val || '').trim();
+    if (!trimmed) return;
+    post({ action: 'navigate_or_new_tab', url: trimmed });
   }
 
   function escapeHtml(str) {
@@ -714,6 +926,11 @@
       var shift = event.shiftKey;
 
       if (event.key === 'Escape') {
+        if (littleArcHost && littleArcHost.style.display !== 'none') {
+          closeLittleArc();
+          event.preventDefault();
+          return;
+        }
         if (cmdBarHost && cmdBarHost.style.display !== 'none') {
           closeCommandBar();
           event.preventDefault();
@@ -736,6 +953,13 @@
         return;
       }
 
+      if (meta && event.altKey && key === 'n') {
+        event.preventDefault();
+        event.stopPropagation();
+        openLittleArc(location.href);
+        return;
+      }
+
       if (!meta || event.altKey) return;
 
       if (event.repeat && (key === 'w' || key === 'q' || key === 't')) {
@@ -747,15 +971,23 @@
       if (key === 't' && shift) {
         post({ action: 'reopen_closed_tab' });
       } else if (key === 't') {
-        openCommandBar();
+        post({ action: 'new_tab', url: 'eclipse://newtab' });
       } else if (key === 'w' && shift) {
         post({ action: 'window_close' });
       } else if (key === 'w') {
         post({ action: 'close_tab' });
       } else if (key === 'r') {
         post({ action: 'reload' });
-      } else if (key === 'l') {
+      } else if (key === 'l' || key === 'k') {
         openCommandBar();
+      } else if (key === 'j') {
+        post({ action: 'command_bar_open_url', command: 'open_downloads' });
+      } else if (key === 'y' && shift) {
+        post({ action: 'tidy_tabs' });
+      } else if (key === 'n' && shift) {
+        post({ action: 'open_notes_tab' });
+      } else if (key === 'e' && shift) {
+        post({ action: 'open_easel_tab' });
       } else if (key === 's' || (key === 'b' && shift)) {
         post({ action: 'toggle_sidebar' });
       } else if (key === 'p') {
@@ -774,23 +1006,17 @@
         post({ action: 'window_minimize' });
       } else if (key === '.') {
         post({ action: 'stop_loading' });
-      } else if (key === 'f' && shift) {
-        openFind();
-        runFind(true);
-      } else if (key === 'f') {
-        openFind();
-      } else if (key === 'g' && shift) {
-        openFind();
-        runFind(true);
-      } else if (key === 'g') {
-        openFind();
-        runFind(false);
       } else if (key === '+' || key === '=') {
         post({ action: 'zoom_in' });
       } else if (key === '-' || key === '_') {
         post({ action: 'zoom_out' });
       } else if (key === '0') {
         post({ action: 'zoom_reset' });
+      } else if (key === 'f') {
+        openFind();
+      } else if (key === 'g') {
+        openFind();
+        runFind(shift);
       } else if (key >= '1' && key <= '9' && !shift) {
         post({ action: 'select_tab_index', index: parseInt(key, 10) - 1 });
       } else {

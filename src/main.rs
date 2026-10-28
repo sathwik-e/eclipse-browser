@@ -143,11 +143,19 @@ fn main() {
                 UserEvent::NewWindowRequested { url } => {
                     app.handle_new_window(url);
                 }
-                UserEvent::DownloadStarted { file_name } => {
-                    app.handle_download_started(file_name);
+                UserEvent::DownloadStarted {
+                    file_name,
+                    url,
+                    path,
+                } => {
+                    app.handle_download_started(file_name, url, path);
                 }
-                UserEvent::DownloadCompleted { file_name, success } => {
-                    app.handle_download_completed(file_name, success);
+                UserEvent::DownloadCompleted {
+                    file_name,
+                    path,
+                    success,
+                } => {
+                    app.handle_download_completed(file_name, path, success);
                 }
                 UserEvent::MenuAction(action) => {
                     app.handle_menu_action(&action);
@@ -161,8 +169,8 @@ fn main() {
                 UserEvent::HoverCollapseSidebar => {
                     app.hover_collapse_sidebar();
                 }
-                UserEvent::FinishSidebarCollapse => {
-                    app.finish_sidebar_collapse();
+                UserEvent::FinishSidebarCollapse(generation) => {
+                    app.finish_sidebar_collapse(generation);
                 }
                 UserEvent::CloseWindow => {
                     *control_flow = ControlFlow::Exit;

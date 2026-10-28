@@ -1,9 +1,17 @@
+# Build output
 /target
-.DS_Store
 Eclipse.app
 *.dmg
 *.zip
 scripts/icon_512.png
 scripts/AppIcon.iconset
+
+# Local working copies and downloaded builds (not part of the project)
 Deepseek/
 upstream-helium/
+/Eclipse */
+
+# Screen recordings and OS clutter
+*.mov
+*.mp4
+.DS_Store

@@ -1,4 +1,4 @@
-use crate::config::{BrowserConfig, FavoriteShortcut};
+use crate::config::{BrowserConfig, DownloadItem, EaselItem, FavoriteShortcut, NoteItem, SpaceProfile};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
@@ -9,13 +9,22 @@ pub enum UserEvent {
     PageFinished { tab_id: usize, url: String },
     TitleChanged { tab_id: usize, title: String },
     NewWindowRequested { url: String },
-    DownloadStarted { file_name: String },
-    DownloadCompleted { file_name: String, success: bool },
+    DownloadStarted {
+        file_name: String,
+        url: String,
+        path: String,
+    },
+    DownloadCompleted {
+        file_name: String,
+        path: Option<String>,
+        success: bool,
+    },
     MenuAction(String),
     TickMemory,
     HoverExpandSidebar,
     HoverCollapseSidebar,
-    FinishSidebarCollapse,
+    #[allow(dead_code)]
+    FinishSidebarCollapse(u64),
     CloseWindow,
 }
 
@@ -80,6 +89,7 @@ pub enum IpcCommand {
     SetWorkspace {
         workspace: String,
     },
+    #[serde(alias = "tick_memory")]
     CleanMemory,
     HibernateTab {
         id: usize,
@@ -93,6 +103,9 @@ pub enum IpcCommand {
     },
     InstallExtension {
         path: String,
+    },
+    InstallFromWebStore {
+        input: String,
     },
     ToggleExtension {
         id: String,
@@ -109,6 +122,59 @@ pub enum IpcCommand {
     DeleteFavorite {
         index: usize,
     },
+    ReorderTab {
+        from_id: usize,
+        to_id: usize,
+        #[serde(default)]
+        before: bool,
+    },
+    ReorderFavorite {
+        from_index: usize,
+        to_index: usize,
+    },
+    TidyTabs,
+    OpenDownload {
+        id: usize,
+    },
+    RevealDownload {
+        id: usize,
+    },
+    OpenDownloadsFolder,
+    ClearDownloads,
+    SaveNote {
+        id: Option<String>,
+        title: String,
+        content: String,
+        workspace: Option<String>,
+    },
+    DeleteNote {
+        id: String,
+    },
+    OpenNotesTab,
+    SaveEasel {
+        id: Option<String>,
+        title: String,
+        elements_json: String,
+        workspace: Option<String>,
+    },
+    DeleteEasel {
+        id: String,
+    },
+    OpenEaselTab {
+        #[serde(default)]
+        #[allow(dead_code)]
+        id: Option<String>,
+    },
+    UpdateSpaceProfile {
+        profile: SpaceProfile,
+    },
+    OpenLittleArc {
+        url: String,
+    },
+    PromoteLittleArc {
+        url: String,
+    },
+    CloseLittleArc,
     UpdateScroll {
         x: f64,
         y: f64,
@@ -147,6 +213,7 @@ pub struct TabState {
     pub zoom: f64,
     pub workspace: String,
     pub favorite_index: Option<usize>,
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,4 +231,9 @@ pub struct BrowserUiState {
     pub memory_mb: f64,
     pub config: BrowserConfig,
     pub favorites: Vec<FavoriteShortcut>,
+    pub downloads: Vec<DownloadItem>,
+    pub notes: Vec<NoteItem>,
+    pub easels: Vec<EaselItem>,
+    pub space_profiles: Vec<SpaceProfile>,
+    pub active_little_arc_url: Option<String>,
 }

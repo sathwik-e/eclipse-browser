@@ -3,6 +3,8 @@ use std::borrow::Cow;
 pub const SIDEBAR_HTML: &str = include_str!("../assets/sidebar.html");
 pub const NEWTAB_HTML: &str = include_str!("../assets/newtab.html");
 pub const SETTINGS_HTML: &str = include_str!("../assets/settings.html");
+pub const NOTES_HTML: &str = include_str!("../assets/notes.html");
+pub const EASEL_HTML: &str = include_str!("../assets/easel.html");
 
 /// Runtime brand mark (a 256 px PNG derived from the supplied artwork).
 /// Keeping the small copy embedded costs ~40 KB and makes the sidebar, new-tab
@@ -26,6 +28,8 @@ pub fn handle_eclipse_protocol(
         "icon" => (ECLIPSE_ICON_PNG, "image/png"),
         "sidebar" => (SIDEBAR_HTML.as_bytes(), "text/html; charset=utf-8"),
         "settings" => (SETTINGS_HTML.as_bytes(), "text/html; charset=utf-8"),
+        "notes" => (NOTES_HTML.as_bytes(), "text/html; charset=utf-8"),
+        "easel" => (EASEL_HTML.as_bytes(), "text/html; charset=utf-8"),
         "newtab" | "" => (NEWTAB_HTML.as_bytes(), "text/html; charset=utf-8"),
         _ => (NEWTAB_HTML.as_bytes(), "text/html; charset=utf-8"),
     };

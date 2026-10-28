@@ -1,14 +1,17 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tao::dpi::{LogicalPosition, LogicalSize, Position, Size};
 use tao::event_loop::EventLoopProxy;
 use tao::window::Window;
 use wry::{Rect, WebView, WebViewBuilder};
 
-use crate::config::{BrowserConfig, FavoriteShortcut};
+use crate::config::{
+    BrowserConfig, DownloadItem, EaselItem, FavoriteShortcut, NoteItem,
+};
 use crate::events::{BrowserUiState, IpcCommand, UserEvent};
 use crate::tab::{
-    Tab, canonicalize_eclipse_url, generate_ipc_token, get_default_favicon, get_favicon_url,
+    Tab, canonicalize_eclipse_url, downloads_dir, generate_ipc_token, get_default_favicon,
+    get_favicon_url,
 };
 
 pub const ARC_BORDER: f64 = 8.0;
@@ -29,6 +32,7 @@ pub struct BrowserApp {
     pub tabs: Vec<Tab>,
     pub active_tab_id: usize,
     pub next_tab_id: usize,
+    pub next_download_id: usize,
     pub config: BrowserConfig,
     pub current_workspace: String,
     pub window_size: (f64, f64),
@@ -42,6 +46,8 @@ pub struct BrowserApp {
     pub first_page_logged: bool,
     pub sidebar_hover_expanded: bool,
     pub is_fullscreen: bool,
+    pub collapse_generation: u64,
+    pub active_little_arc_url: Option<String>,
 }
 
 impl BrowserApp {
@@ -57,7 +63,7 @@ impl BrowserApp {
 
         let sidebar_h = (initial_size.1 - (ARC_BORDER * 2.0)).max(100.0);
         let initial_sidebar_x = if config.sidebar_collapsed {
-            -sidebar_w - 50.0
+            -sidebar_w - 16.0
         } else {
             ARC_BORDER
         };
@@ -72,7 +78,7 @@ impl BrowserApp {
         let sidebar_webview = WebViewBuilder::new()
             .with_id("sidebar")
             .with_bounds(sidebar_bounds)
-            .with_visible(!config.sidebar_collapsed)
+            .with_visible(true)
             .with_transparent(true)
             .with_accept_first_mouse(true)
             .with_devtools(cfg!(debug_assertions))
@@ -88,6 +94,22 @@ impl BrowserApp {
             .build_as_child(&*window)
             .expect("Failed to initialize sidebar webview");
 
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            let sidebar_view = sidebar_webview.webview();
+            let ptr = (&*sidebar_view) as *const _ as *mut std::ffi::c_void;
+            crate::macos_menu::style_sidebar_view(ptr);
+        }
+
+        let next_download_id = config
+            .downloads
+            .iter()
+            .map(|d| d.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+
         let mut app = Self {
             window: window.clone(),
             proxy: proxy.clone(),
@@ -96,6 +118,7 @@ impl BrowserApp {
             tabs: Vec::new(),
             active_tab_id: 1,
             next_tab_id: 1,
+            next_download_id,
             config,
             current_workspace: "Default".into(),
             window_size: initial_size,
@@ -109,6 +132,8 @@ impl BrowserApp {
             first_page_logged: false,
             sidebar_hover_expanded: false,
             is_fullscreen: false,
+            collapse_generation: 0,
+            active_little_arc_url: None,
         };
 
         #[cfg(target_os = "macos")]
@@ -176,7 +201,7 @@ impl BrowserApp {
             if self.sidebar_hover_expanded {
                 ARC_BORDER
             } else {
-                -sidebar_w - 50.0
+                -sidebar_w - 16.0
             }
         } else {
             ARC_BORDER
@@ -206,6 +231,20 @@ impl BrowserApp {
         }
     }
 
+    pub fn animate_sidebar_bounds(&self, bounds: Rect, duration: f64) {
+        #[cfg(target_os = "macos")]
+        {
+            use wry::WebViewExtMacOS;
+            let sidebar_view = self.sidebar_webview.webview();
+            let ptr = (&*sidebar_view) as *const _ as *mut std::ffi::c_void;
+            let (x, y) = bounds.position.to_logical::<f64>(1.0).into();
+            let (w, h) = bounds.size.to_logical::<f64>(1.0).into();
+            crate::macos_menu::animate_view_frame(ptr, x, y, w, h, duration);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = self.sidebar_webview.set_bounds(bounds);
+    }
+
     pub fn create_tab(&mut self, url: &str, select: bool) -> usize {
         let id = self.next_tab_id;
         self.next_tab_id += 1;
@@ -231,6 +270,13 @@ impl BrowserApp {
 
         if select {
             self.select_tab(id);
+            if normalized == "eclipse://newtab" {
+                if let Some(tab) = self.tabs.iter().find(|t| t.id == id) {
+                    tab.evaluate_script(
+                        "setTimeout(function(){ var s = document.getElementById('search-box'); if(s){ s.focus(); s.select(); } }, 30);",
+                    );
+                }
+            }
         } else {
             if let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) {
                 tab.set_visible(false);
@@ -345,15 +391,27 @@ impl BrowserApp {
         }
 
         if was_active {
-            let next_id = self
-                .tabs
-                .get(position)
+            let next_id = self.tabs[position..]
+                .iter()
+                .find(|tab| !tab.is_pinned && tab.workspace == closed_workspace)
                 .map(|tab| tab.id)
                 .or_else(|| {
-                    position
-                        .checked_sub(1)
-                        .and_then(|index| self.tabs.get(index))
+                    self.tabs[..position]
+                        .iter()
+                        .rev()
+                        .find(|tab| !tab.is_pinned && tab.workspace == closed_workspace)
                         .map(|tab| tab.id)
+                })
+                .or_else(|| {
+                    self.tabs
+                        .get(position)
+                        .map(|tab| tab.id)
+                        .or_else(|| {
+                            position
+                                .checked_sub(1)
+                                .and_then(|index| self.tabs.get(index))
+                                .map(|tab| tab.id)
+                        })
                 })
                 .unwrap_or(self.tabs[0].id);
             self.select_tab(next_id);
@@ -376,13 +434,30 @@ impl BrowserApp {
     }
 
     pub fn switch_workspace(&mut self, workspace: String) {
-        self.current_workspace = workspace.clone();
+        let normalized_ws = if workspace == "Work" {
+            "Default".to_string()
+        } else {
+            workspace
+        };
+        self.current_workspace = normalized_ws.clone();
+
+        // Apply per-space profile settings (theme, accent, adblock, custom UA)
+        let profile = self.config.profile_for_workspace(&normalized_ws);
+        self.config.theme = profile.theme.clone();
+        self.config.accent_color = profile.accent_color.clone();
+        self.config.adblock_enabled = profile.adblock_enabled;
+        if !profile.custom_user_agent.trim().is_empty() {
+            self.config.custom_user_agent = profile.custom_user_agent.clone();
+        }
+        self.config.save();
 
         let active_in_ws = self
             .tabs
             .iter()
             .find(|tab| tab.id == self.active_tab_id)
-            .map(|tab| tab.workspace == workspace)
+            .map(|tab| {
+                !tab.is_pinned && tab.favorite_index.is_none() && tab.workspace == normalized_ws
+            })
             .unwrap_or(false);
 
         if active_in_ws {
@@ -393,7 +468,9 @@ impl BrowserApp {
         let candidate_id = self
             .tabs
             .iter()
-            .filter(|tab| tab.workspace == workspace)
+            .filter(|tab| {
+                !tab.is_pinned && tab.favorite_index.is_none() && tab.workspace == normalized_ws
+            })
             .max_by_key(|tab| tab.last_active)
             .map(|tab| tab.id);
 
@@ -434,14 +511,12 @@ impl BrowserApp {
                 .map(|h| h.trim_start_matches("www.").to_string())
         });
 
-        // 1. Look for an existing tab explicitly linked to this favorite index
         let mut target_tab_id = self
             .tabs
             .iter()
             .find(|t| t.favorite_index == Some(index))
             .map(|t| t.id);
 
-        // 2. Fallback: look for any pinned tab matching the favorite URL/host
         if target_tab_id.is_none()
             && let Some(ref host) = fav_host
         {
@@ -471,7 +546,6 @@ impl BrowserApp {
             }
             self.select_tab(id);
         } else {
-            // Check if current active tab is an unpinned blank newtab that can be converted
             let active_is_empty_newtab = self
                 .tabs
                 .iter()
@@ -501,6 +575,131 @@ impl BrowserApp {
         }
     }
 
+    pub fn reorder_tab(&mut self, from_id: usize, to_id: usize, before: bool) {
+        if from_id == to_id {
+            return;
+        }
+        let Some(from_pos) = self.tabs.iter().position(|t| t.id == from_id) else {
+            return;
+        };
+        let Some(_to_pos) = self.tabs.iter().position(|t| t.id == to_id) else {
+            return;
+        };
+        let moving_tab = self.tabs.remove(from_pos);
+        let new_to_pos = self
+            .tabs
+            .iter()
+            .position(|t| t.id == to_id)
+            .unwrap_or(self.tabs.len());
+        let insert_idx = if before {
+            new_to_pos
+        } else {
+            (new_to_pos + 1).min(self.tabs.len())
+        };
+        self.tabs.insert(insert_idx, moving_tab);
+        self.broadcast_state();
+    }
+
+    pub fn reorder_favorite(&mut self, from_index: usize, to_index: usize) {
+        let len = self.config.favorites.len();
+        if from_index >= len || to_index >= len || from_index == to_index {
+            return;
+        }
+        let item = self.config.favorites.remove(from_index);
+        self.config.favorites.insert(to_index, item);
+        self.config.save();
+        self.reconcile_favorite_tabs();
+        self.broadcast_state();
+    }
+
+    pub fn tidy_tabs(&mut self) {
+        let ws = self.current_workspace.clone();
+        let active_id = self.active_tab_id;
+
+        // 1. Deduplicate identical unpinned URLs in the current workspace
+        let mut seen_urls = std::collections::HashSet::new();
+        let mut duplicate_ids = Vec::new();
+
+        // First mark active tab's URL as seen so we never close the active tab
+        if let Some(active_tab) = self
+            .tabs
+            .iter()
+            .find(|t| t.id == active_id && !t.is_pinned && t.favorite_index.is_none() && t.workspace == ws)
+        {
+            if active_tab.url != "eclipse://newtab" {
+                seen_urls.insert(active_tab.url.clone());
+            }
+        }
+
+        for tab in &self.tabs {
+            if tab.is_pinned || tab.favorite_index.is_some() || tab.workspace != ws {
+                continue;
+            }
+            if tab.id == active_id {
+                continue;
+            }
+            if tab.url == "eclipse://newtab" {
+                duplicate_ids.push(tab.id);
+                continue;
+            }
+            if !seen_urls.insert(tab.url.clone()) {
+                duplicate_ids.push(tab.id);
+            }
+        }
+
+        let removed_count = duplicate_ids.len();
+        if !duplicate_ids.is_empty() {
+            self.tabs.retain(|t| !duplicate_ids.contains(&t.id));
+        }
+
+        // Ensure at least 1 tab remains
+        if !self.tabs.iter().any(|t| !t.is_pinned && t.workspace == ws) {
+            self.create_tab("eclipse://newtab", true);
+        }
+
+        // 2. Categorize each unpinned tab in current workspace into a semantic group
+        let mut groups_set = std::collections::HashSet::new();
+        for tab in &mut self.tabs {
+            if tab.is_pinned || tab.favorite_index.is_some() || tab.workspace != ws {
+                continue;
+            }
+            let group_name = categorize_tab_group(&tab.url, &tab.title);
+            groups_set.insert(group_name.clone());
+            tab.group = Some(group_name);
+        }
+
+        // 3. Sort unpinned tabs in the current workspace by group, then title
+        let mut ws_indices = Vec::new();
+        let mut ws_tabs = Vec::new();
+        for (idx, tab) in self.tabs.iter().enumerate() {
+            if !tab.is_pinned && tab.favorite_index.is_none() && tab.workspace == ws {
+                ws_indices.push(idx);
+            }
+        }
+        for &idx in ws_indices.iter().rev() {
+            ws_tabs.push(self.tabs.remove(idx));
+        }
+        ws_tabs.sort_by(|a, b| {
+            let ga = a.group.as_deref().unwrap_or("Other");
+            let gb = b.group.as_deref().unwrap_or("Other");
+            ga.cmp(gb)
+                .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+        });
+        for tab in ws_tabs {
+            self.tabs.push(tab);
+        }
+
+        let group_count = groups_set.len().max(1);
+        if removed_count > 0 {
+            self.show_toast(&format!(
+                "Tidied tabs into {group_count} group(s) • Closed {removed_count} duplicate(s)"
+            ));
+        } else {
+            self.show_toast(&format!("Tidied tabs into {group_count} group(s)"));
+        }
+        self.broadcast_state();
+    }
+
     pub fn focus_omnibar(&mut self) {
         if self.config.sidebar_collapsed {
             self.config.sidebar_collapsed = false;
@@ -526,6 +725,19 @@ impl BrowserApp {
             .evaluate_script("window.openPreferencesDrawer && window.openPreferencesDrawer();");
     }
 
+    pub fn open_downloads_panel(&mut self) {
+        if self.config.sidebar_collapsed {
+            self.config.sidebar_collapsed = false;
+            self.config.save();
+            self.update_layout();
+            self.flush_state();
+        }
+        let _ = self.sidebar_webview.focus();
+        let _ = self
+            .sidebar_webview
+            .evaluate_script("window.openDownloadsDrawer && window.openDownloadsDrawer();");
+    }
+
     pub fn open_settings_tab(&mut self) {
         if let Some(existing_id) = self
             .tabs
@@ -539,8 +751,79 @@ impl BrowserApp {
         }
     }
 
+    pub fn open_notes_tab(&mut self) {
+        if let Some(existing_id) = self
+            .tabs
+            .iter()
+            .find(|tab| tab.url == "eclipse://notes" && tab.workspace == self.current_workspace)
+            .map(|tab| tab.id)
+        {
+            self.select_tab(existing_id);
+        } else {
+            self.create_tab("eclipse://notes", true);
+        }
+    }
+
+    pub fn open_easel_tab(&mut self) {
+        if let Some(existing_id) = self
+            .tabs
+            .iter()
+            .find(|tab| tab.url == "eclipse://easel" && tab.workspace == self.current_workspace)
+            .map(|tab| tab.id)
+        {
+            self.select_tab(existing_id);
+        } else {
+            self.create_tab("eclipse://easel", true);
+        }
+    }
+
+    pub fn open_little_arc(&mut self, url: &str) {
+        let normalized = if url.trim().is_empty() {
+            "https://duckduckgo.com".to_string()
+        } else {
+            normalize_url(url, &self.config)
+        };
+        self.active_little_arc_url = Some(normalized.clone());
+        let encoded = serde_json::to_string(&normalized).unwrap_or_else(|_| "\"\"".into());
+        if let Some(tab) = self.tabs.iter().find(|t| t.id == self.active_tab_id) {
+            tab.evaluate_script(&format!(
+                "window.__eclipseLittleArc && window.__eclipseLittleArc('open', {encoded});"
+            ));
+        }
+        let _ = self.sidebar_webview.evaluate_script(&format!(
+            "window.onLittleArcUpdated && window.onLittleArcUpdated({encoded});"
+        ));
+        self.broadcast_state();
+    }
+
+    pub fn promote_little_arc(&mut self, url: &str) {
+        self.active_little_arc_url = None;
+        if let Some(tab) = self.tabs.iter().find(|t| t.id == self.active_tab_id) {
+            tab.evaluate_script(
+                "window.__eclipseLittleArc && window.__eclipseLittleArc('close');",
+            );
+        }
+        let target = if url.trim().is_empty() {
+            "eclipse://newtab".to_string()
+        } else {
+            normalize_url(url, &self.config)
+        };
+        self.create_tab(&target, true);
+    }
+
+    pub fn close_little_arc(&mut self) {
+        self.active_little_arc_url = None;
+        if let Some(tab) = self.tabs.iter().find(|t| t.id == self.active_tab_id) {
+            tab.evaluate_script(
+                "window.__eclipseLittleArc && window.__eclipseLittleArc('close');",
+            );
+        }
+        self.broadcast_state();
+    }
+
     pub fn toggle_sidebar(&mut self) {
         self.sidebar_hover_expanded = false;
+        self.collapse_generation += 1;
         #[cfg(target_os = "macos")]
         crate::macos_menu::set_hover_expanded(false, self.sidebar_width());
         self.config.sidebar_collapsed = !self.config.sidebar_collapsed;
@@ -549,83 +832,71 @@ impl BrowserApp {
             let _ = self
                 .sidebar_webview
                 .evaluate_script("window.popoutSidebar && window.popoutSidebar(false);");
-            self.update_layout_animated(0.28);
-            let proxy = self.proxy.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(300));
-                let _ = proxy.send_event(UserEvent::FinishSidebarCollapse);
-            });
+            self.update_layout_animated(0.22);
             if let Some(tab) = self.tabs.iter().find(|tab| tab.id == self.active_tab_id) {
                 tab.focus();
             }
         } else {
             let _ = self.sidebar_webview.set_visible(true);
             let _ = self.sidebar_webview.evaluate_script(
-                "document.body.classList.remove('floating-popout', 'sliding-out');",
+                "document.body.classList.remove('floating-popout', 'sliding-out', 'is-collapsed-state');",
             );
-            self.update_layout_animated(0.28);
+            self.update_layout_animated(0.22);
         }
     }
 
     pub fn hover_expand_sidebar(&mut self) {
         if self.config.sidebar_collapsed && !self.sidebar_hover_expanded {
+            self.collapse_generation += 1;
             self.sidebar_hover_expanded = true;
             #[cfg(target_os = "macos")]
             crate::macos_menu::set_hover_expanded(true, self.sidebar_width());
-            let sidebar_bounds = self.sidebar_bounds();
-            let _ = self.sidebar_webview.set_bounds(sidebar_bounds);
             let _ = self.sidebar_webview.set_visible(true);
             self.bring_sidebar_to_front();
             let _ = self
                 .sidebar_webview
                 .evaluate_script("window.popoutSidebar && window.popoutSidebar(true);");
+            self.animate_sidebar_bounds(self.sidebar_bounds(), 0.20);
             self.flush_state();
         }
     }
 
     pub fn hover_collapse_sidebar(&mut self) {
         if self.sidebar_hover_expanded {
+            self.collapse_generation += 1;
             self.sidebar_hover_expanded = false;
             #[cfg(target_os = "macos")]
             crate::macos_menu::set_hover_expanded(false, self.sidebar_width());
             let _ = self
                 .sidebar_webview
                 .evaluate_script("window.popoutSidebar && window.popoutSidebar(false);");
+            self.animate_sidebar_bounds(self.sidebar_bounds(), 0.20);
             self.flush_state();
-
-            let proxy = self.proxy.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(215));
-                let _ = proxy.send_event(UserEvent::FinishSidebarCollapse);
-            });
         }
     }
 
-    pub fn finish_sidebar_collapse(&mut self) {
-        if self.config.sidebar_collapsed && !self.sidebar_hover_expanded {
-            let _ = self.sidebar_webview.set_bounds(self.sidebar_bounds());
-            let _ = self.sidebar_webview.set_visible(false);
-            let _ = self.sidebar_webview.evaluate_script(
-                "document.body.classList.remove('floating-popout', 'sliding-out');",
-            );
-        }
-    }
+    pub fn finish_sidebar_collapse(&mut self, _generation: u64) {}
 
     pub fn set_fullscreen(&mut self, fullscreen: bool) {
         if self.is_fullscreen == fullscreen {
             return;
         }
         self.is_fullscreen = fullscreen;
+        if fullscreen {
+            self.sidebar_hover_expanded = false;
+            #[cfg(target_os = "macos")]
+            crate::macos_menu::set_hover_expanded(false, self.sidebar_width());
+        }
         let _ = self.sidebar_webview.set_bounds(self.sidebar_bounds());
-        let _ = self
-            .sidebar_webview
-            .set_visible(!fullscreen && !self.config.sidebar_collapsed);
+        let _ = self.sidebar_webview.set_visible(!fullscreen);
+        if !fullscreen {
+            self.bring_sidebar_to_front();
+        }
         let bounds = self.content_bounds();
         for tab in &mut self.tabs {
-            if tab.id == self.active_tab_id {
-                tab.set_bounds(bounds);
-            }
+            tab.set_bounds(bounds);
         }
+        self.broadcast_state();
     }
 
     pub fn open_command_bar(&mut self) {
@@ -649,7 +920,7 @@ impl BrowserApp {
                     .collect();
                 let tabs_json = serde_json::to_string(&open_tabs).unwrap_or_else(|_| "[]".into());
                 tab.evaluate_script(&format!(
-                    "window.__eclipseCommandBar && window.__eclipseCommandBar('open', {tabs_json});"
+                    "if (window.__eclipseCommandBar) {{ window.__eclipseCommandBar('open', {tabs_json}); }}"
                 ));
             }
             tab.focus();
@@ -770,6 +1041,10 @@ impl BrowserApp {
                     match cmd.as_str() {
                         "open_settings" => self.open_settings(),
                         "clean_memory" => self.handle_maintenance_tick(),
+                        "tidy_tabs" => self.tidy_tabs(),
+                        "open_notes" => self.open_notes_tab(),
+                        "open_easel" => self.open_easel_tab(),
+                        "open_downloads" => self.open_downloads_panel(),
                         _ => {}
                     }
                 } else if let Some(url) = url {
@@ -791,6 +1066,9 @@ impl BrowserApp {
             IpcCommand::TogglePin { id } => {
                 if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
                     tab.is_pinned = !tab.is_pinned;
+                    if !tab.is_pinned {
+                        tab.favorite_index = None;
+                    }
                 }
                 self.broadcast_state();
             }
@@ -804,12 +1082,29 @@ impl BrowserApp {
                     self.broadcast_state();
                 }
             }
-            IpcCommand::UpdateConfig { config } => {
+            IpcCommand::UpdateConfig { mut config } => {
                 let custom_css_changed = self.config.custom_css != config.custom_css;
+                let favorites_changed = self.config.favorites != config.favorites;
                 let layout_changed = self.config.sidebar_collapsed != config.sidebar_collapsed
                     || (self.config.sidebar_width - config.sidebar_width).abs() > f64::EPSILON;
+
+                // Also update the active space profile's theme/accent/adblock so per-space profiles stay synced
+                let ws = self.current_workspace.clone();
+                if let Some(sp) = config
+                    .space_profiles
+                    .iter_mut()
+                    .find(|p| p.workspace.eq_ignore_ascii_case(&ws))
+                {
+                    sp.theme = config.theme.clone();
+                    sp.accent_color = config.accent_color.clone();
+                    sp.adblock_enabled = config.adblock_enabled;
+                }
+
                 self.config = config;
                 self.config.save();
+                if favorites_changed {
+                    self.reconcile_favorite_tabs();
+                }
 
                 let config_snapshot = self.config.clone();
                 let active_url = self.active_url();
@@ -831,6 +1126,12 @@ impl BrowserApp {
             }
             IpcCommand::InstallExtension { path } => {
                 self.install_extension_from_path(&path);
+            }
+            IpcCommand::InstallFromWebStore { input } => {
+                match self.install_from_web_store(&input) {
+                    Ok(_) => self.show_toast("Extension installed"),
+                    Err(err) => self.show_toast(&err),
+                }
             }
             IpcCommand::ToggleExtension { id, enabled } => {
                 self.toggle_extension(&id, enabled);
@@ -871,6 +1172,16 @@ impl BrowserApp {
             IpcCommand::DeleteFavorite { index } => {
                 if index < self.config.favorites.len() {
                     self.config.favorites.remove(index);
+                    for tab in &mut self.tabs {
+                        if let Some(fav_idx) = tab.favorite_index {
+                            if fav_idx == index {
+                                tab.favorite_index = None;
+                                tab.is_pinned = false;
+                            } else if fav_idx > index {
+                                tab.favorite_index = Some(fav_idx - 1);
+                            }
+                        }
+                    }
                     self.config.save();
                     let config_snapshot = self.config.clone();
                     let active_url = self.active_url();
@@ -879,6 +1190,185 @@ impl BrowserApp {
                     }
                     self.broadcast_state();
                 }
+            }
+            IpcCommand::ReorderTab {
+                from_id,
+                to_id,
+                before,
+            } => {
+                self.reorder_tab(from_id, to_id, before);
+            }
+            IpcCommand::ReorderFavorite {
+                from_index,
+                to_index,
+            } => {
+                self.reorder_favorite(from_index, to_index);
+            }
+            IpcCommand::TidyTabs => {
+                self.tidy_tabs();
+            }
+            IpcCommand::OpenDownload { id } => {
+                if let Some(dl) = self.config.downloads.iter().find(|d| d.id == id) {
+                    if !dl.path.is_empty() {
+                        let _ = std::process::Command::new("open").arg(&dl.path).spawn();
+                    } else if let Some(dir) = downloads_dir() {
+                        let candidate = dir.join(&dl.file_name);
+                        let _ = std::process::Command::new("open").arg(candidate).spawn();
+                    }
+                }
+            }
+            IpcCommand::RevealDownload { id } => {
+                if let Some(dl) = self.config.downloads.iter().find(|d| d.id == id) {
+                    let path_to_reveal = if !dl.path.is_empty() {
+                        std::path::PathBuf::from(&dl.path)
+                    } else if let Some(dir) = downloads_dir() {
+                        dir.join(&dl.file_name)
+                    } else {
+                        return;
+                    };
+                    let _ = std::process::Command::new("open")
+                        .arg("-R")
+                        .arg(path_to_reveal)
+                        .spawn();
+                }
+            }
+            IpcCommand::OpenDownloadsFolder => {
+                if let Some(dir) = downloads_dir() {
+                    let _ = std::process::Command::new("open").arg(dir).spawn();
+                }
+            }
+            IpcCommand::ClearDownloads => {
+                self.config
+                    .downloads
+                    .retain(|d| d.status == "downloading");
+                self.config.save();
+                self.broadcast_state();
+            }
+            IpcCommand::SaveNote {
+                id,
+                title,
+                content,
+                workspace,
+            } => {
+                let now = now_unix_secs();
+                let ws = workspace.unwrap_or_else(|| self.current_workspace.clone());
+                let note_id = id.unwrap_or_else(|| format!("note_{now}"));
+                if let Some(existing) = self.config.notes.iter_mut().find(|n| n.id == note_id) {
+                    existing.title = title;
+                    existing.content = content;
+                    existing.updated_at = now;
+                } else {
+                    self.config.notes.insert(
+                        0,
+                        NoteItem {
+                            id: note_id,
+                            title,
+                            content,
+                            workspace: ws,
+                            updated_at: now,
+                        },
+                    );
+                }
+                self.config.save();
+                let cfg = self.config.clone();
+                let active_url = self.active_url();
+                for tab in &self.tabs {
+                    tab.sync_config(&cfg, Some(&active_url));
+                }
+                self.broadcast_state();
+            }
+            IpcCommand::DeleteNote { id } => {
+                self.config.notes.retain(|n| n.id != id);
+                self.config.save();
+                let cfg = self.config.clone();
+                let active_url = self.active_url();
+                for tab in &self.tabs {
+                    tab.sync_config(&cfg, Some(&active_url));
+                }
+                self.broadcast_state();
+            }
+            IpcCommand::OpenNotesTab => {
+                self.open_notes_tab();
+            }
+            IpcCommand::SaveEasel {
+                id,
+                title,
+                elements_json,
+                workspace,
+            } => {
+                let now = now_unix_secs();
+                let ws = workspace.unwrap_or_else(|| self.current_workspace.clone());
+                let easel_id = id.unwrap_or_else(|| format!("easel_{now}"));
+                if let Some(existing) = self.config.easels.iter_mut().find(|e| e.id == easel_id) {
+                    existing.title = title;
+                    existing.elements_json = elements_json;
+                    existing.updated_at = now;
+                } else {
+                    self.config.easels.insert(
+                        0,
+                        EaselItem {
+                            id: easel_id,
+                            title,
+                            elements_json,
+                            workspace: ws,
+                            updated_at: now,
+                        },
+                    );
+                }
+                self.config.save();
+                let cfg = self.config.clone();
+                let active_url = self.active_url();
+                for tab in &self.tabs {
+                    tab.sync_config(&cfg, Some(&active_url));
+                }
+                self.broadcast_state();
+            }
+            IpcCommand::DeleteEasel { id } => {
+                self.config.easels.retain(|e| e.id != id);
+                self.config.save();
+                let cfg = self.config.clone();
+                let active_url = self.active_url();
+                for tab in &self.tabs {
+                    tab.sync_config(&cfg, Some(&active_url));
+                }
+                self.broadcast_state();
+            }
+            IpcCommand::OpenEaselTab { id: _ } => {
+                self.open_easel_tab();
+            }
+            IpcCommand::UpdateSpaceProfile { profile } => {
+                if let Some(existing) = self
+                    .config
+                    .space_profiles
+                    .iter_mut()
+                    .find(|p| p.workspace.eq_ignore_ascii_case(&profile.workspace))
+                {
+                    *existing = profile.clone();
+                } else {
+                    self.config.space_profiles.push(profile.clone());
+                }
+                if self.current_workspace.eq_ignore_ascii_case(&profile.workspace) {
+                    self.config.theme = profile.theme;
+                    self.config.accent_color = profile.accent_color;
+                    self.config.adblock_enabled = profile.adblock_enabled;
+                    self.config.custom_user_agent = profile.custom_user_agent;
+                }
+                self.config.save();
+                let cfg = self.config.clone();
+                let active_url = self.active_url();
+                for tab in &self.tabs {
+                    tab.sync_config(&cfg, Some(&active_url));
+                }
+                self.broadcast_state();
+            }
+            IpcCommand::OpenLittleArc { url } => {
+                self.open_little_arc(&url);
+            }
+            IpcCommand::PromoteLittleArc { url } => {
+                self.promote_little_arc(&url);
+            }
+            IpcCommand::CloseLittleArc => {
+                self.close_little_arc();
             }
             IpcCommand::UpdateScroll { x, y } => {
                 let target_id = source_tab_id.unwrap_or(self.active_tab_id);
@@ -952,24 +1442,77 @@ impl BrowserApp {
         }
     }
 
+    pub fn reconcile_favorite_tabs(&mut self) {
+        let fav_hosts: Vec<Option<String>> = self
+            .config
+            .favorites
+            .iter()
+            .map(|f| {
+                url::Url::parse(&f.url).ok().and_then(|u| {
+                    u.host_str()
+                        .map(|h| h.trim_start_matches("www.").to_ascii_lowercase())
+                })
+            })
+            .collect();
+
+        for tab in &mut self.tabs {
+            if let Some(idx) = tab.favorite_index {
+                let tab_host = url::Url::parse(&tab.url).ok().and_then(|u| {
+                    u.host_str()
+                        .map(|h| h.trim_start_matches("www.").to_ascii_lowercase())
+                });
+                if idx < fav_hosts.len() && fav_hosts[idx].is_some() && fav_hosts[idx] == tab_host {
+                    continue;
+                }
+                if let Some(ref th) = tab_host
+                    && let Some(new_idx) = fav_hosts.iter().position(|fh| fh.as_ref() == Some(th))
+                {
+                    tab.favorite_index = Some(new_idx);
+                } else {
+                    tab.favorite_index = None;
+                    tab.is_pinned = false;
+                }
+            }
+        }
+    }
+
     pub fn toggle_site_adblock(&mut self, domain: &str, enabled: bool) {
-        let domain_clean = domain.trim().to_lowercase();
-        if domain_clean.is_empty() {
+        let raw = domain.trim().to_lowercase();
+        if raw.is_empty() {
             return;
         }
-        if enabled {
-            self.config
-                .adblock_disabled_domains
-                .retain(|d| d.to_lowercase() != domain_clean);
+        let domain_clean = if raw.contains("://") {
+            url::Url::parse(&raw)
+                .ok()
+                .and_then(|u| u.host_str().map(|h| h.to_lowercase()))
+                .unwrap_or(raw)
         } else {
-            if !self
-                .config
-                .adblock_disabled_domains
-                .iter()
-                .any(|d| d.to_lowercase() == domain_clean)
-            {
-                self.config.adblock_disabled_domains.push(domain_clean);
-            }
+            raw.split('/')
+                .next()
+                .unwrap_or("")
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+        if domain_clean.is_empty() || domain_clean == "localhost" {
+            return;
+        }
+        let domain_root = domain_clean.trim_start_matches("www.");
+        if enabled {
+            self.config.adblock_disabled_domains.retain(|d| {
+                let dl = d.trim().to_lowercase();
+                let dl_root = dl.trim_start_matches("www.");
+                dl != domain_clean
+                    && dl_root != domain_root
+                    && !domain_clean.ends_with(&format!(".{dl}"))
+            });
+        } else if !self.config.adblock_disabled_domains.iter().any(|d| {
+            let dl = d.trim().to_lowercase();
+            dl == domain_clean || domain_clean.ends_with(&format!(".{dl}"))
+        }) {
+            self.config.adblock_disabled_domains.push(domain_clean);
         }
         self.config.save();
 
@@ -1004,9 +1547,7 @@ impl BrowserApp {
     }
 
     pub fn delete_extension(&mut self, id: &str) {
-        self.config
-            .installed_extensions
-            .retain(|e| e.id != id);
+        self.config.installed_extensions.retain(|e| e.id != id);
         self.config.save();
         let cfg = self.config.clone();
         let active_url = self.active_url();
@@ -1027,9 +1568,15 @@ impl BrowserApp {
 
         if let Ok(content) = std::fs::read_to_string(&manifest_path) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                let name = json["name"].as_str().unwrap_or("Custom Extension").to_string();
+                let name = json["name"]
+                    .as_str()
+                    .unwrap_or("Custom Extension")
+                    .to_string();
                 let version = json["version"].as_str().unwrap_or("1.0.0").to_string();
-                let description = json["description"].as_str().unwrap_or("Loaded unpacked Chrome extension").to_string();
+                let description = json["description"]
+                    .as_str()
+                    .unwrap_or("Loaded unpacked Chrome extension")
+                    .to_string();
                 let base_dir = manifest_path.parent().unwrap_or(p);
 
                 let mut matches = Vec::new();
@@ -1072,10 +1619,16 @@ impl BrowserApp {
                     matches.push("<all_urls>".into());
                 }
 
-                let id = format!("ext_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+                let id = format!(
+                    "ext_{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0)
+                );
                 let ext = crate::config::ExtensionConfig {
                     id,
-                    name,
+                    name: name.clone(),
                     version,
                     description,
                     enabled: true,
@@ -1084,6 +1637,9 @@ impl BrowserApp {
                     content_scripts: scripts,
                     content_css: styles,
                 };
+                self.config
+                    .installed_extensions
+                    .retain(|e| e.name != name && e.path.as_deref() != Some(path_str));
                 self.config.installed_extensions.push(ext);
                 self.config.save();
                 let cfg = self.config.clone();
@@ -1094,6 +1650,77 @@ impl BrowserApp {
                 self.broadcast_state();
             }
         }
+    }
+
+    pub fn install_from_web_store(&mut self, input: &str) -> Result<String, String> {
+        let ext_id = extract_chrome_extension_id(input).ok_or_else(|| {
+            "Invalid Chrome Web Store URL or ID. Expected 32-character extension ID.".to_string()
+        })?;
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        let ext_dir = std::path::PathBuf::from(home)
+            .join(".config")
+            .join("eclipse-browser")
+            .join("extensions")
+            .join(&ext_id);
+        let _ = std::fs::create_dir_all(&ext_dir);
+
+        let crx_path = ext_dir.join("download.crx");
+        let zip_path = ext_dir.join("download.zip");
+
+        let download_url = format!(
+            "https://clients2.google.com/service/update2/crx?response=redirect&prodversion=130.0&acceptformat=crx2,crx3&x=id%3D{}%26uc",
+            ext_id
+        );
+
+        let status = std::process::Command::new("curl")
+            .arg("-s")
+            .arg("-L")
+            .arg("--connect-timeout")
+            .arg("10")
+            .arg("--max-time")
+            .arg("30")
+            .arg(&download_url)
+            .arg("-o")
+            .arg(&crx_path)
+            .status()
+            .map_err(|e| format!("Failed to download extension: {e}"))?;
+
+        if !status.success() || !crx_path.exists() {
+            return Err("Failed to download CRX from Chrome Web Store.".into());
+        }
+
+        let bytes = std::fs::read(&crx_path).map_err(|e| format!("Failed to read CRX: {e}"))?;
+        let zip_magic = [0x50, 0x4B, 0x03, 0x04];
+        let zip_offset = bytes
+            .windows(4)
+            .position(|w| w == zip_magic)
+            .ok_or_else(|| {
+                "Downloaded file is not a valid Chrome Web Extension archive.".to_string()
+            })?;
+
+        std::fs::write(&zip_path, &bytes[zip_offset..])
+            .map_err(|e| format!("Failed to create zip archive: {e}"))?;
+
+        let _ = std::fs::remove_file(&crx_path);
+
+        let unzip_status = std::process::Command::new("/usr/bin/unzip")
+            .arg("-q")
+            .arg("-o")
+            .arg(&zip_path)
+            .arg("-d")
+            .arg(&ext_dir)
+            .status()
+            .map_err(|e| format!("Failed to extract extension: {e}"))?;
+
+        let _ = std::fs::remove_file(&zip_path);
+
+        if !unzip_status.success() || !ext_dir.join("manifest.json").exists() {
+            return Err("Failed to unpack extension manifest.".into());
+        }
+
+        self.install_extension_from_path(&ext_dir.to_string_lossy());
+        Ok(ext_id)
     }
 
     pub fn handle_page_started(&mut self, tab_id: usize, url: String) {
@@ -1113,12 +1740,12 @@ impl BrowserApp {
             tab.url = canonical.clone();
             tab.is_loading = !canonical.starts_with("eclipse://");
             tab.is_audible = false;
-            // A new document gets a new site icon; don't carry the previous
-            // site's favicon until the bridge finds a declared one.
             tab.favicon_url = get_favicon_url(&canonical);
             tab.favicon = get_default_favicon(&canonical);
             if canonical.starts_with("eclipse://") {
                 tab.title = title_for_url(&canonical);
+            } else {
+                tab.set_loading_indicator(true);
             }
             if tab.id == self.active_tab_id {
                 tab.last_active = Instant::now();
@@ -1145,6 +1772,7 @@ impl BrowserApp {
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
             tab.url = canonical.clone();
             tab.is_loading = false;
+            tab.set_loading_indicator(false);
             tab.favicon = get_default_favicon(&canonical);
             if tab.favicon_url.is_none() {
                 tab.favicon_url = get_favicon_url(&canonical);
@@ -1208,23 +1836,103 @@ impl BrowserApp {
         }
     }
 
-    pub fn handle_download_started(&mut self, file_name: String) {
-        eprintln!("[DEBUG_DOWNLOAD] started: {file_name}");
+    pub fn handle_download_started(&mut self, file_name: String, url: String, path: String) {
+        let id = self.next_download_id;
+        self.next_download_id += 1;
+        let item = DownloadItem {
+            id,
+            file_name: file_name.clone(),
+            url,
+            path,
+            status: "downloading".into(),
+            timestamp: now_unix_secs(),
+        };
+        self.config.downloads.insert(0, item);
+        if self.config.downloads.len() > 50 {
+            self.config.downloads.truncate(50);
+        }
+        self.config.save();
         self.show_toast(&format!("Downloading {file_name}…"));
+        self.broadcast_state();
     }
 
-    pub fn handle_download_completed(&mut self, file_name: String, success: bool) {
+    pub fn handle_download_completed(
+        &mut self,
+        file_name: String,
+        path: Option<String>,
+        success: bool,
+    ) {
+        if let Some(item) = self
+            .config
+            .downloads
+            .iter_mut()
+            .find(|d| d.file_name == file_name && d.status == "downloading")
+        {
+            item.status = if success {
+                "completed".into()
+            } else {
+                "failed".into()
+            };
+            if let Some(p) = path {
+                item.path = p;
+            }
+        } else {
+            let id = self.next_download_id;
+            self.next_download_id += 1;
+            self.config.downloads.insert(
+                0,
+                DownloadItem {
+                    id,
+                    file_name: file_name.clone(),
+                    url: String::new(),
+                    path: path.unwrap_or_default(),
+                    status: if success {
+                        "completed".into()
+                    } else {
+                        "failed".into()
+                    },
+                    timestamp: now_unix_secs(),
+                },
+            );
+        }
+        self.config.save();
         if success {
             self.show_toast(&format!("Downloaded {file_name}"));
         } else {
             self.show_toast(&format!("Download failed: {file_name}"));
         }
+        self.broadcast_state();
     }
 
     pub fn handle_menu_action(&mut self, action: &str) {
         match action {
             "new_tab" => {
+                // Cmd+T ALWAYS creates and switches to a fresh tab reliably!
+                self.create_tab("eclipse://newtab", true);
+            }
+            "command_bar" => {
                 self.open_command_bar();
+            }
+            "little_arc" => {
+                let url = self.active_url();
+                let target = if url.is_empty() || url.starts_with("eclipse://") {
+                    "https://duckduckgo.com"
+                } else {
+                    &url
+                };
+                self.open_little_arc(target);
+            }
+            "open_notes" => {
+                self.open_notes_tab();
+            }
+            "open_easel" => {
+                self.open_easel_tab();
+            }
+            "tidy_tabs" => {
+                self.tidy_tabs();
+            }
+            "open_downloads" => {
+                self.open_downloads_panel();
             }
             "close_tab" => self.close_tab(self.active_tab_id),
             "reopen_closed_tab" => self.reopen_closed_tab(),
@@ -1357,21 +2065,24 @@ impl BrowserApp {
     }
 
     pub fn update_layout_animated(&mut self, duration: f64) {
-        let sidebar_bounds = self.sidebar_bounds();
-        let _ = self.sidebar_webview.set_bounds(sidebar_bounds);
-
-        if self.config.sidebar_collapsed {
-            if self.sidebar_hover_expanded {
-                let _ = self.sidebar_webview.set_visible(true);
-                self.bring_sidebar_to_front();
-            }
-        } else {
+        if !self.is_fullscreen {
             let _ = self.sidebar_webview.set_visible(true);
+            self.bring_sidebar_to_front();
+        }
+        let sidebar_bounds = self.sidebar_bounds();
+        if duration > 0.001 {
+            self.animate_sidebar_bounds(sidebar_bounds, duration);
+        } else {
+            let _ = self.sidebar_webview.set_bounds(sidebar_bounds);
         }
 
         let content_bounds = self.content_bounds();
-        if let Some(tab) = self.tabs.iter().find(|tab| tab.id == self.active_tab_id) {
-            tab.animate_bounds(content_bounds, duration);
+        for tab in &self.tabs {
+            if tab.id == self.active_tab_id {
+                tab.animate_bounds(content_bounds, duration);
+            } else if duration <= 0.001 {
+                tab.set_bounds(content_bounds);
+            }
         }
         self.broadcast_state();
     }
@@ -1381,9 +2092,6 @@ impl BrowserApp {
         self.update_layout();
     }
 
-    /// Mark the chrome as needing a repaint. Actual IPC is coalesced to one
-    /// update per display frame in `pump_state`, so a chatty page cannot flood
-    /// the sidebar with JSON serialisation work.
     pub fn broadcast_state(&mut self) {
         self.state_dirty = true;
     }
@@ -1428,6 +2136,11 @@ impl BrowserApp {
             memory_mb,
             config: self.config.clone(),
             favorites: self.config.favorites.clone(),
+            downloads: self.config.downloads.clone(),
+            notes: self.config.notes.clone(),
+            easels: self.config.easels.clone(),
+            space_profiles: self.config.space_profiles.clone(),
+            active_little_arc_url: self.active_little_arc_url.clone(),
         };
 
         if let Ok(json) = serde_json::to_string(&ui_state) {
@@ -1435,7 +2148,7 @@ impl BrowserApp {
             let _ = self.sidebar_webview.evaluate_script(&script);
 
             if let Some(tab) = active_tab
-                && tab.url == "eclipse://newtab"
+                && tab.url.starts_with("eclipse://")
             {
                 tab.evaluate_script(&format!(
                     "window.onEclipseStateUpdated && window.onEclipseStateUpdated({json});"
@@ -1482,8 +2195,6 @@ impl BrowserApp {
         let _ = self.sidebar_webview.evaluate_script(&script);
     }
 
-    /// Smoke-test probe: proves the sidebar bootstrap and the first state push
-    /// actually reached the UI. Only runs when ECLIPSE_PERF is set.
     fn probe_sidebar(&self) {
         let script = r#"JSON.stringify({
             tokenBridge: !!window.__eclipseIpc,
@@ -1507,6 +2218,85 @@ impl BrowserApp {
                 eprintln!("[perf] sidebar probe: {result}");
             });
     }
+}
+
+pub fn categorize_tab_group(url: &str, title: &str) -> String {
+    if url.starts_with("eclipse://") {
+        return "Eclipse Workspace".into();
+    }
+    let lower_url = url.to_lowercase();
+    let lower_title = title.to_lowercase();
+
+    if lower_url.contains("github.com")
+        || lower_url.contains("gitlab.com")
+        || lower_url.contains("stackoverflow.com")
+        || lower_url.contains("crates.io")
+        || lower_url.contains("docs.rs")
+        || lower_url.contains("localhost")
+        || lower_url.contains("127.0.0.1")
+        || lower_url.contains("vercel.com")
+        || lower_title.contains("pull request")
+    {
+        return "Development".into();
+    }
+    if lower_url.contains("youtube.com")
+        || lower_url.contains("youtu.be")
+        || lower_url.contains("netflix.com")
+        || lower_url.contains("spotify.com")
+        || lower_url.contains("twitch.tv")
+        || lower_url.contains("vimeo.com")
+    {
+        return "Media & Stream".into();
+    }
+    if lower_url.contains("mail.google.com")
+        || lower_url.contains("outlook.")
+        || lower_url.contains("docs.google.com")
+        || lower_url.contains("notion.so")
+        || lower_url.contains("linear.app")
+        || lower_url.contains("figma.com")
+        || lower_url.contains("remotasks.com")
+    {
+        return "Work & Productivity".into();
+    }
+    if lower_url.contains("discord.com")
+        || lower_url.contains("reddit.com")
+        || lower_url.contains("instagram.com")
+        || lower_url.contains("x.com")
+        || lower_url.contains("twitter.com")
+        || lower_url.contains("linkedin.com")
+    {
+        return "Social & Community".into();
+    }
+    if lower_url.contains("duckduckgo.com")
+        || lower_url.contains("google.com/search")
+        || lower_url.contains("wikipedia.org")
+        || lower_url.contains("arxiv.org")
+        || lower_url.contains("chatgpt.com")
+        || lower_url.contains("claude.ai")
+    {
+        return "Research & Search".into();
+    }
+    if let Ok(parsed) = url::Url::parse(url)
+        && let Some(host) = parsed.host_str()
+    {
+        let clean = host.trim_start_matches("www.");
+        if let Some(first) = clean.split('.').next()
+            && !first.is_empty()
+        {
+            let mut chars = first.chars();
+            if let Some(c) = chars.next() {
+                return format!("{}{}", c.to_uppercase(), chars.as_str());
+            }
+        }
+    }
+    "General".into()
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn parse_ipc(raw: &str) -> Option<(String, IpcCommand)> {
@@ -1576,6 +2366,10 @@ fn build_sidebar_bridge_script(token: &str) -> String {
 pub fn title_for_url(url: &str) -> String {
     if url == "eclipse://settings" {
         "Preferences".into()
+    } else if url == "eclipse://notes" {
+        "Eclipse Notes".into()
+    } else if url == "eclipse://easel" {
+        "Eclipse Easel".into()
     } else if url.starts_with("eclipse://") {
         "New Tab".into()
     } else {
@@ -1597,10 +2391,16 @@ pub fn normalize_url(input: &str, config: &BrowserConfig) -> String {
         return "https://www.youtube.com".to_string();
     }
     if lower.starts_with("https://youtube.com/") {
-        return format!("https://www.youtube.com{}", &trimmed["https://youtube.com".len()..]);
+        return format!(
+            "https://www.youtube.com{}",
+            &trimmed["https://youtube.com".len()..]
+        );
     }
     if lower.starts_with("http://youtube.com/") {
-        return format!("https://www.youtube.com{}", &trimmed["http://youtube.com".len()..]);
+        return format!(
+            "https://www.youtube.com{}",
+            &trimmed["http://youtube.com".len()..]
+        );
     }
     if lower.starts_with("http://") || lower.starts_with("https://") {
         return trimmed.to_string();
@@ -1620,9 +2420,14 @@ pub fn normalize_url(input: &str, config: &BrowserConfig) -> String {
             return "https://www.youtube.com".to_string();
         }
         if lower.starts_with("youtube.com/") {
-            return format!("https://www.youtube.com{}", &trimmed["youtube.com".len()..]);
+            return format!(
+                "https://www.youtube.com{}",
+                &trimmed["youtube.com".len()..]
+            );
         }
-        if trimmed.contains('.') && !lower.starts_with("file:") && !lower.starts_with("javascript:")
+        if trimmed.contains('.')
+            && !lower.starts_with("file:")
+            && !lower.starts_with("javascript:")
         {
             return format!("https://{trimmed}");
         }
@@ -1653,6 +2458,21 @@ pub fn get_process_memory_mb() -> f64 {
     45.0
 }
 
+pub fn extract_chrome_extension_id(input: &str) -> Option<String> {
+    let is_ext_id = |s: &str| s.len() == 32 && s.bytes().all(|b| b.is_ascii_lowercase());
+    let cleaned = input.trim();
+    if is_ext_id(cleaned) {
+        return Some(cleaned.to_string());
+    }
+    for part in cleaned.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let p = part.trim();
+        if is_ext_id(p) {
+            return Some(p.to_string());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1679,12 +2499,44 @@ mod tests {
             normalize_url("eclipse://localhost/newtab", &config()),
             "eclipse://newtab"
         );
+        assert_eq!(
+            normalize_url("eclipse://notes", &config()),
+            "eclipse://notes"
+        );
+        assert_eq!(
+            normalize_url("eclipse://easel", &config()),
+            "eclipse://easel"
+        );
         assert!(normalize_url("hello world", &config()).starts_with("https://duckduckgo.com/?q="));
         assert!(
             normalize_url("javascript:alert(1)", &config()).starts_with("https://duckduckgo.com")
         );
         assert!(
             normalize_url("file:///etc/passwd", &config()).starts_with("https://duckduckgo.com")
+        );
+    }
+
+    #[test]
+    fn test_tidy_tabs_categorization() {
+        assert_eq!(
+            categorize_tab_group("https://github.com/rust-lang/rust", "Rust Repo"),
+            "Development"
+        );
+        assert_eq!(
+            categorize_tab_group("https://www.youtube.com/watch?v=123", "Video"),
+            "Media & Stream"
+        );
+        assert_eq!(
+            categorize_tab_group("https://mail.google.com/mail/u/0", "Inbox"),
+            "Work & Productivity"
+        );
+        assert_eq!(
+            categorize_tab_group("https://discord.com/channels/@me", "Discord"),
+            "Social & Community"
+        );
+        assert_eq!(
+            categorize_tab_group("https://duckduckgo.com/?q=test", "Search"),
+            "Research & Search"
         );
     }
 
@@ -1696,7 +2548,6 @@ mod tests {
             ..Default::default()
         };
 
-        // When collapsed, content stays full width regardless of hover overlay
         let (content_x, content_w) = if cfg.sidebar_collapsed {
             (ARC_BORDER, 1200.0 - (ARC_BORDER * 2.0))
         } else {
@@ -1709,7 +2560,6 @@ mod tests {
         assert_eq!(content_x, 8.0);
         assert_eq!(content_w, 1184.0);
 
-        // When pinned/docked (not collapsed), content starts after sidebar
         cfg.sidebar_collapsed = false;
         let (content_x, content_w) = if cfg.sidebar_collapsed {
             (ARC_BORDER, 1200.0 - (ARC_BORDER * 2.0))
@@ -1722,5 +2572,26 @@ mod tests {
         };
         assert_eq!(content_x, 248.0);
         assert_eq!(content_w, 944.0);
+    }
+
+    #[test]
+    fn test_extract_chrome_extension_id() {
+        assert_eq!(
+            extract_chrome_extension_id("cjpalhdlnbpafiamejdnhcphjbkeiagm"),
+            Some("cjpalhdlnbpafiamejdnhcphjbkeiagm".to_string())
+        );
+        assert_eq!(
+            extract_chrome_extension_id(
+                "https://chromewebstore.google.com/detail/ublock-origin/cjpalhdlnbpafiamejdnhcphjbkeiagm"
+            ),
+            Some("cjpalhdlnbpafiamejdnhcphjbkeiagm".to_string())
+        );
+        assert_eq!(
+            extract_chrome_extension_id(
+                "https://chrome.google.com/webstore/detail/sponsorblock-for-youtube/mnjggcdmjocbbbhaepdhchncahnbgone?hl=en"
+            ),
+            Some("mnjggcdmjocbbbhaepdhchncahnbgone".to_string())
+        );
+        assert_eq!(extract_chrome_extension_id("invalid-id"), None);
     }
 }

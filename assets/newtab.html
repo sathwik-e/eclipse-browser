@@ -9,6 +9,7 @@
 :root {
   --bg-deep: #090A0F;
   --accent: #5E9EFF;
+  --accent-glow: rgba(94, 158, 255, 0.38);
   --text-primary: rgba(255, 255, 255, 0.94);
   --text-secondary: rgba(255, 255, 255, 0.56);
   --text-tertiary: rgba(255, 255, 255, 0.36);
@@ -25,15 +26,80 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", -system-ui, sans-serif;
-  background-color: var(--bg-deep);
+  background: radial-gradient(circle at 50% 14%, #141929 0%, #0b0d16 48%, var(--bg-deep) 85%);
   color: var(--text-primary);
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 24px;
+  position: relative;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Ambient Eclipse Corona Glow */
+.eclipse-halo {
+  position: absolute;
+  top: -130px;
+  width: 480px;
+  height: 480px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(94, 158, 255, 0.18) 0%, rgba(139, 92, 246, 0.12) 40%, transparent 70%);
+  filter: blur(50px);
+  pointer-events: none;
+  animation: pulseCorona 7s ease-in-out infinite alternate;
+}
+
+@keyframes pulseCorona {
+  0% { transform: scale(0.95); opacity: 0.72; }
+  100% { transform: scale(1.12); opacity: 1; }
+}
+
+/* Hero Celestial Eclipse Emblem */
+.eclipse-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 22px;
+  z-index: 10;
+}
+
+.eclipse-emblem {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.eclipse-emblem .eclipse-corona {
+  width: 44px;
+  height: 44px;
+}
+
+.eclipse-emblem .eclipse-star {
+  width: 30px;
+  height: 30px;
+}
+
+.eclipse-emblem .eclipse-moon {
+  width: 31px;
+  height: 31px;
+}
+
+.eclipse-emblem .eclipse-diamond {
+  width: 7px;
+  height: 7px;
+}
+
+body.is-navigating .eclipse-emblem {
+  transform: scale(1.18);
+  transition: transform 0.35s var(--ease-spring);
 }
 
 /* Cosmic Centered Search Bar */
@@ -177,7 +243,7 @@ body {
   border-radius: 50%;
   pointer-events: none;
   border: 1px solid rgba(147, 197, 253, 0.9);
-  box-shadow: 0 0 10px rgba(56, 189, 248, 0.8), inset 0 0 6px rgba(37, 99, 235, 0.6);
+  box-shadow: 0 0 10px rgba(56, 189, 253, 0.8), inset 0 0 6px rgba(37, 99, 235, 0.6);
   animation: coronaFlare 2.2s ease-in-out infinite;
   z-index: 0;
 }
@@ -341,6 +407,39 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
+/* Quick Arc Feature Pills below search bar */
+.arc-quick-deck {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  z-index: 10;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.quick-pill {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  padding: 7px 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s var(--ease-spring);
+}
+
+.quick-pill:hover {
+  background: rgba(94, 158, 255, 0.14);
+  border-color: rgba(94, 158, 255, 0.45);
+  color: #FFFFFF;
+  transform: translateY(-1.5px);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -353,13 +452,24 @@ body {
 </head>
 <body>
 
+<div class="eclipse-halo"></div>
+
+<div class="eclipse-hero" id="eclipse-hero">
+  <div class="eclipse-emblem" title="Celestial Eclipse">
+    <div class="eclipse-corona"></div>
+    <div class="eclipse-star"></div>
+    <div class="eclipse-moon"></div>
+    <div class="eclipse-diamond"></div>
+  </div>
+</div>
+
 <div class="command-bar-card" id="command-card">
   <div class="command-bar-header">
     <svg class="command-bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
       <circle cx="11" cy="11" r="7"/>
       <path d="m20 20-3.5-3.5"/>
     </svg>
-    <input type="text" class="command-bar-input" id="search-box" placeholder="Search the cosmos..." autofocus spellcheck="false" autocomplete="off" />
+    <input type="text" class="command-bar-input" id="search-box" placeholder="Search the cosmos or enter URL..." autofocus spellcheck="false" autocomplete="off" />
     <div class="command-bar-badge" id="command-badge" title="Press Enter to search or open">
       <span>↵ Return</span>
     </div>
@@ -373,6 +483,13 @@ body {
     </div>
   </div>
   <div class="command-bar-results" id="command-bar-results" style="display: none;"></div>
+</div>
+
+<div class="arc-quick-deck">
+  <button class="quick-pill" onclick="postIpc({ action: 'open_notes_tab' })">📝 Notes</button>
+  <button class="quick-pill" onclick="postIpc({ action: 'open_easel_tab' })">🎨 Easel</button>
+  <button class="quick-pill" onclick="postIpc({ action: 'tidy_tabs' })">✨ Tidy Tabs</button>
+  <button class="quick-pill" onclick="postIpc({ action: 'command_bar_open_url', command: 'open_downloads' })">⬇️ Downloads</button>
 </div>
 
 <script>
@@ -394,6 +511,7 @@ function setLoading(isLoading) {
   const badge = document.getElementById('command-badge');
   const loader = document.getElementById('search-loader');
   if (!card) return;
+  document.body.classList.toggle('is-navigating', !!isLoading);
   if (isLoading) {
     card.classList.add('is-loading');
     if (badge) badge.style.display = 'none';
@@ -412,17 +530,15 @@ function getCommandItems() {
   const qLower = query.toLowerCase();
   let items = [];
 
-  // 1. Search Google / DuckDuckGo
   items.push({
     id: null,
     title: `Search for "${query}"`,
-    url: `https://duckduckgo.com/?q=${encodeURIComponent(query)}`,
+    url: query,
     icon: 'search',
     is_open: false,
     is_search: true
   });
 
-  // 2. Direct URL option if domain-like or protocol
   if (query.includes('.') || query.startsWith('http://') || query.startsWith('https://') || query.startsWith('localhost')) {
     let directUrl = query;
     if (!/^https?:\/\//i.test(directUrl)) directUrl = 'https://' + directUrl;
@@ -435,7 +551,6 @@ function getCommandItems() {
     });
   }
 
-  // 3. Filter open tabs
   if (openTabs && openTabs.length > 0) {
     openTabs
       .filter(t => t.url !== 'eclipse://newtab' && (
@@ -459,6 +574,8 @@ function getCommandItems() {
 function cleanUrl(url) {
   if (!url || url.startsWith('eclipse://newtab')) return 'New Tab';
   if (url.startsWith('eclipse://settings')) return 'Preferences';
+  if (url.startsWith('eclipse://notes')) return 'Eclipse Notes';
+  if (url.startsWith('eclipse://easel')) return 'Eclipse Easel';
   try {
     const u = new URL(url);
     return u.hostname.replace(/^www\./, '');

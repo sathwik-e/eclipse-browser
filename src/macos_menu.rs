@@ -14,6 +14,7 @@ unsafe extern "C" {
     fn eclipse_bring_view_to_front(view_ptr: *mut std::ffi::c_void);
     fn eclipse_configure_window(window_ptr: *mut std::ffi::c_void);
     fn eclipse_style_webview_card(view_ptr: *mut std::ffi::c_void);
+    fn eclipse_style_sidebar_view(view_ptr: *mut std::ffi::c_void);
     fn eclipse_enable_swipe_gestures(view_ptr: *mut std::ffi::c_void);
     fn eclipse_animate_view_frame(
         view_ptr: *mut std::ffi::c_void,
@@ -126,6 +127,14 @@ pub fn style_webview_card(view_ptr: *mut std::ffi::c_void) {
     }
 }
 
+pub fn style_sidebar_view(view_ptr: *mut std::ffi::c_void) {
+    if !view_ptr.is_null() {
+        unsafe {
+            eclipse_style_sidebar_view(view_ptr);
+        }
+    }
+}
+
 pub fn animate_view_frame(
     view_ptr: *mut std::ffi::c_void,
     x: f64,
@@ -164,4 +173,3 @@ pub fn set_native_adblocker_enabled(view_ptr: *mut std::ffi::c_void, enabled: bo
         }
     }
 }
-

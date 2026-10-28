@@ -43,6 +43,7 @@ pub struct Tab {
     pub scroll_y: f64,
     pub pending_scroll_restore: Option<(f64, f64)>,
     pub favorite_index: Option<usize>,
+    pub group: Option<String>,
 }
 
 impl Tab {
@@ -58,6 +59,10 @@ impl Tab {
         let is_eclipse_url = url.starts_with("eclipse://");
         let title = if is_eclipse_url && url.contains("settings") {
             "Preferences".to_string()
+        } else if is_eclipse_url && url.contains("notes") {
+            "Eclipse Notes".to_string()
+        } else if is_eclipse_url && url.contains("easel") {
+            "Eclipse Easel".to_string()
         } else if is_eclipse_url {
             "New Tab".to_string()
         } else {
@@ -83,6 +88,7 @@ impl Tab {
             scroll_y: 0.0,
             pending_scroll_restore: None,
             favorite_index: None,
+            group: None,
         };
 
         let webview = tab.build_webview(window, proxy, bounds, config);
@@ -105,15 +111,23 @@ impl Tab {
         let proxy_download_started = proxy.clone();
         let proxy_download_finished = proxy.clone();
 
-        let is_adblock_active = is_adblock_active_for_url(&self.url, config);
+        let space_profile = config.profile_for_workspace(&self.workspace);
+        let is_adblock_active =
+            space_profile.adblock_enabled && is_adblock_active_for_url(&self.url, config);
+        let active_ua = if !space_profile.custom_user_agent.trim().is_empty() {
+            space_profile.custom_user_agent.trim()
+        } else {
+            config.active_user_agent()
+        };
+
         let init_script = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            build_config_seed_script(config, Some(&self.url)),
+            build_config_seed_script(config, Some(&self.url), &self.workspace),
             build_bridge_script(&self.token),
             build_drm_script(config.drm_fairplay_enabled),
             build_shields_script(&self.token, is_adblock_active),
             build_custom_css_script(&config.custom_css),
-            build_extension_support_script(&self.url, config),
+            build_extension_support_script(&self.url, config, &self.workspace),
         );
 
         let target_url = tab_webview_url(&self.url);
@@ -122,7 +136,7 @@ impl Tab {
         let webview = WebViewBuilder::new()
             .with_id(&webview_id)
             .with_bounds(bounds)
-            .with_user_agent(config.active_user_agent())
+            .with_user_agent(active_ua)
             .with_autoplay(config.autoplay_enabled)
             .with_background_color(PAGE_BACKGROUND)
             .with_back_forward_navigation_gestures(true)
@@ -142,8 +156,6 @@ impl Tab {
                     .unwrap_or_default();
 
                 let Some(clean_name) = resolve_download_name(suggested, &url) else {
-                    // Not a legitimate downloadable file (web page, stream, host, etc.).
-                    // Cancel the download immediately without writing to disk or notifying.
                     return false;
                 };
 
@@ -153,8 +165,11 @@ impl Tab {
                     *path = target;
                 }
 
+                let final_path = path.to_string_lossy().to_string();
                 let _ = proxy_download_started.send_event(UserEvent::DownloadStarted {
                     file_name: clean_name,
+                    url: url.clone(),
+                    path: final_path,
                 });
                 true
             })
@@ -165,10 +180,13 @@ impl Tab {
                     .and_then(|s| s.to_str())
                     .unwrap_or_default();
 
-                // Only emit completion notification for legitimate downloads
+                let resolved_path = path.as_ref().map(|p| p.to_string_lossy().to_string());
                 if let Some(file_name) = resolve_download_name(suggested, &url) {
-                    let _ = proxy_download_finished
-                        .send_event(UserEvent::DownloadCompleted { file_name, success });
+                    let _ = proxy_download_finished.send_event(UserEvent::DownloadCompleted {
+                        file_name,
+                        path: resolved_path,
+                        success,
+                    });
                 }
             })
             .with_on_page_load_handler(move |event, url| {
@@ -258,12 +276,19 @@ impl Tab {
         }
     }
 
+    pub fn set_loading_indicator(&self, is_loading: bool) {
+        let flag = if is_loading { "true" } else { "false" };
+        self.evaluate_script(&format!(
+            "window.__eclipseSetLoading && window.__eclipseSetLoading({flag});"
+        ));
+    }
+
     pub fn load_url(&mut self, url: &str) {
         let canonical = canonicalize_eclipse_url(url);
         self.url = canonical.clone();
         self.favicon = get_default_favicon(&canonical);
         self.favicon_url = get_favicon_url(&canonical);
-        self.is_hibernated = false;
+        self.is_loading = !canonical.starts_with("eclipse://");
         self.is_audible = false;
         self.scroll_x = 0.0;
         self.scroll_y = 0.0;
@@ -271,18 +296,23 @@ impl Tab {
         self.last_active = Instant::now();
 
         if let Some(ref wv) = self.webview {
+            self.is_hibernated = false;
+            if self.is_loading {
+                self.set_loading_indicator(true);
+            }
             let _ = wv.load_url(&tab_webview_url(&canonical));
         }
     }
 
     pub fn reload(&self) {
         if let Some(ref wv) = self.webview {
+            self.set_loading_indicator(true);
             let _ = wv.reload();
         }
     }
 
     pub fn stop_loading(&mut self) {
-        self.evaluate_script("window.stop();");
+        self.evaluate_script("window.stop(); window.__eclipseSetLoading && window.__eclipseSetLoading(false);");
         self.is_loading = false;
     }
 
@@ -353,7 +383,9 @@ impl Tab {
         let Ok(json) = serde_json::to_string(config) else {
             return;
         };
-        let is_adblock_active = is_adblock_active_for_url(&self.url, config);
+        let space_profile = config.profile_for_workspace(&self.workspace);
+        let is_adblock_active =
+            space_profile.adblock_enabled && is_adblock_active_for_url(&self.url, config);
         let act_url = active_url.unwrap_or(&self.url);
         let script = format!(
             r##"(function () {{
@@ -443,6 +475,7 @@ impl Tab {
             zoom: self.zoom,
             workspace: self.workspace.clone(),
             favorite_index: self.favorite_index,
+            group: self.group.clone(),
         }
     }
 }
@@ -451,6 +484,8 @@ pub fn tab_webview_url(url: &str) -> String {
     match url {
         "eclipse://newtab" | "" => "eclipse://localhost/newtab".to_string(),
         "eclipse://settings" => "eclipse://localhost/settings".to_string(),
+        "eclipse://notes" => "eclipse://localhost/notes".to_string(),
+        "eclipse://easel" => "eclipse://localhost/easel".to_string(),
         other => other.to_string(),
     }
 }
@@ -459,6 +494,12 @@ pub fn canonicalize_eclipse_url(url: &str) -> String {
     if url.starts_with("eclipse://") {
         if url.contains("settings") {
             return "eclipse://settings".to_string();
+        }
+        if url.contains("notes") {
+            return "eclipse://notes".to_string();
+        }
+        if url.contains("easel") {
+            return "eclipse://easel".to_string();
         }
         if url.contains("sidebar") {
             return "eclipse://sidebar".to_string();
@@ -477,10 +518,41 @@ pub fn is_adblock_active_for_url(url: &str, config: &BrowserConfig) -> bool {
             let host_clean = host.to_lowercase();
             for domain in &config.adblock_disabled_domains {
                 let d_clean = domain.trim().to_lowercase();
-                if !d_clean.is_empty() && (host_clean == d_clean || host_clean.ends_with(&format!(".{d_clean}"))) {
+                if !d_clean.is_empty()
+                    && (host_clean == d_clean || host_clean.ends_with(&format!(".{d_clean}")))
+                {
                     return false;
                 }
             }
+        }
+    }
+    true
+}
+
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == text;
+    }
+    let mut rem = text;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            if !rem.starts_with(part) {
+                return false;
+            }
+            rem = &rem[part.len()..];
+        } else if i == parts.len() - 1 && !pattern.ends_with('*') {
+            return rem.ends_with(part);
+        } else if let Some(pos) = rem.find(part) {
+            rem = &rem[pos + part.len()..];
+        } else {
+            return false;
         }
     }
     true
@@ -491,19 +563,54 @@ fn extension_matches_url(pattern: &str, url: &str) -> bool {
     if p.is_empty() {
         return false;
     }
-    if p == "<all_urls>" || p == "*" || p == "*/*" {
+    if p == "<all_urls>" || p == "*" || p == "*/*" || p == "*://*/*" {
         return url.starts_with("http://") || url.starts_with("https://");
     }
-    if let Some(host_part) = p.strip_prefix("*://*.").and_then(|s| s.strip_suffix("/*")) {
-        return url.contains(host_part);
+    if let Some((scheme_pat, rest)) = p.split_once("://") {
+        let Ok(parsed) = Url::parse(url) else {
+            return false;
+        };
+        let scheme = parsed.scheme();
+        let scheme_ok = match scheme_pat {
+            "*" | "http*" => scheme == "http" || scheme == "https",
+            other => scheme.eq_ignore_ascii_case(other),
+        };
+        if !scheme_ok {
+            return false;
+        }
+        let (host_pat, path_pat) = match rest.find('/') {
+            Some(idx) => (&rest[..idx], &rest[idx..]),
+            None => (rest, "/*"),
+        };
+        let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+        let host_pat_lower = host_pat.to_ascii_lowercase();
+        let host_ok = if host_pat_lower == "*" {
+            !host.is_empty()
+        } else if let Some(domain) = host_pat_lower.strip_prefix("*.") {
+            host == domain || host.ends_with(&format!(".{domain}"))
+        } else {
+            host == host_pat_lower
+        };
+        if !host_ok {
+            return false;
+        }
+        let full_path = match parsed.query() {
+            Some(q) => format!("{}?{q}", parsed.path()),
+            None => parsed.path().to_string(),
+        };
+        return wildcard_match(path_pat, &full_path) || wildcard_match(path_pat, parsed.path());
     }
-    if let Some(host_part) = p.strip_prefix("*://").and_then(|s| s.strip_suffix("/*")) {
-        return url.contains(host_part);
+    if p.contains('*') {
+        return wildcard_match(p, url);
     }
     url.contains(p)
 }
 
-pub fn build_extension_support_script(url: &str, config: &BrowserConfig) -> String {
+pub fn build_extension_support_script(
+    url: &str,
+    config: &BrowserConfig,
+    workspace: &str,
+) -> String {
     if !config.webextensions_enabled {
         return String::new();
     }
@@ -515,7 +622,10 @@ pub fn build_extension_support_script(url: &str, config: &BrowserConfig) -> Stri
         if !ext.enabled {
             continue;
         }
-        let matches = ext.matches.iter().any(|pattern| extension_matches_url(pattern, url));
+        let matches = ext
+            .matches
+            .iter()
+            .any(|pattern| extension_matches_url(pattern, url));
         if matches {
             for script in &ext.content_scripts {
                 if !script.trim().is_empty() {
@@ -535,9 +645,15 @@ pub fn build_extension_support_script(url: &str, config: &BrowserConfig) -> Stri
         return String::new();
     }
 
-    let encoded_custom_js = serde_json::to_string(&config.custom_js).unwrap_or_else(|_| "\"\"".into());
-    let encoded_ext_scripts = serde_json::to_string(&ext_scripts).unwrap_or_else(|_| "[]".into());
-    let encoded_ext_styles = serde_json::to_string(&ext_styles).unwrap_or_else(|_| "[]".into());
+    let encoded_custom_js =
+        serde_json::to_string(&config.custom_js).unwrap_or_else(|_| "\"\"".into());
+    let encoded_ext_scripts =
+        serde_json::to_string(&ext_scripts).unwrap_or_else(|_| "[]".into());
+    let encoded_ext_styles =
+        serde_json::to_string(&ext_styles).unwrap_or_else(|_| "[]".into());
+    let storage_key = format!("__eclipse_ext_storage_{workspace}");
+    let encoded_storage_key =
+        serde_json::to_string(&storage_key).unwrap_or_else(|_| "\"__eclipse_ext_storage\"".into());
 
     format!(
         r##"(function () {{
@@ -545,9 +661,10 @@ pub fn build_extension_support_script(url: &str, config: &BrowserConfig) -> Stri
             try {{
                 if (!window.chrome) window.chrome = {{}};
                 if (!window.chrome.runtime) {{
+                    var storageKey = {encoded_storage_key};
                     var storageMap = {{}};
                     try {{
-                        storageMap = JSON.parse(localStorage.getItem('__eclipse_ext_storage') || '{{}}');
+                        storageMap = JSON.parse(localStorage.getItem(storageKey) || '{{}}');
                     }} catch (_) {{}}
 
                     var runtime = {{
@@ -613,7 +730,7 @@ pub fn build_extension_support_script(url: &str, config: &BrowserConfig) -> Stri
                                 if (items && typeof items === 'object') {{
                                     Object.assign(storageMap, items);
                                     try {{
-                                        localStorage.setItem('__eclipse_ext_storage', JSON.stringify(storageMap));
+                                        localStorage.setItem(storageKey, JSON.stringify(storageMap));
                                     }} catch (_) {{}}
                                 }}
                                 if (typeof cb === 'function') cb();
@@ -623,7 +740,7 @@ pub fn build_extension_support_script(url: &str, config: &BrowserConfig) -> Stri
                                 var arr = Array.isArray(keys) ? keys : [keys];
                                 arr.forEach(function(k) {{ delete storageMap[k]; }});
                                 try {{
-                                    localStorage.setItem('__eclipse_ext_storage', JSON.stringify(storageMap));
+                                    localStorage.setItem(storageKey, JSON.stringify(storageMap));
                                 }} catch (_) {{}}
                                 if (typeof cb === 'function') cb();
                                 return Promise.resolve();
@@ -631,7 +748,7 @@ pub fn build_extension_support_script(url: &str, config: &BrowserConfig) -> Stri
                             clear: function(cb) {{
                                 storageMap = {{}};
                                 try {{
-                                    localStorage.removeItem('__eclipse_ext_storage');
+                                    localStorage.removeItem(storageKey);
                                 }} catch (_) {{}}
                                 if (typeof cb === 'function') cb();
                                 return Promise.resolve();
@@ -755,12 +872,18 @@ pub fn build_custom_css_script(css: &str) -> String {
     )
 }
 
-fn build_config_seed_script(config: &BrowserConfig, active_url: Option<&str>) -> String {
+fn build_config_seed_script(
+    config: &BrowserConfig,
+    active_url: Option<&str>,
+    workspace: &str,
+) -> String {
     let json = serde_json::to_string(config).unwrap_or_else(|_| "{}".into());
     let act_url = js_string(active_url.unwrap_or(""));
+    let ws_js = js_string(workspace);
     format!(
         r##"(function () {{
             try {{
+                window.__ECLIPSE_SPACE__ = {ws_js};
                 if (location.protocol === 'eclipse:') {{
                     window.__ECLIPSE_CONFIG__ = {json};
                     window.__ECLIPSE_ACTIVE_URL__ = {act_url};
@@ -854,9 +977,6 @@ pub fn get_default_favicon(url: &str) -> String {
     "globe".into()
 }
 
-/// Ask the site itself for its icon instead of leaking every visited host to a
-/// third-party favicon service. Pages that declare a better icon override this
-/// through the injected bridge.
 pub fn get_favicon_url(url: &str) -> Option<String> {
     if url.starts_with("eclipse://") {
         return None;
@@ -876,7 +996,7 @@ fn js_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
 }
 
-fn downloads_dir() -> Option<PathBuf> {
+pub fn downloads_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
     let dir = home.join("Downloads");
     fs::create_dir_all(&dir).ok()?;
@@ -944,17 +1064,13 @@ const TOP_LEVEL_DOMAINS: &[&str] = &[
 ];
 
 const LEGITIMATE_DOWNLOAD_EXTENSIONS: &[&str] = &[
-    // Archives & images
     "zip", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "7z", "rar", "z", "lz", "lzma", "cab",
-    "iso", "img", "bin", "dmg", "pkg", "toast", "vcd", // Executables & Installers
-    "exe", "msi", "msix", "appx", "deb", "rpm", "apk", "aab", "ipa", "jar", "war", "crx", "xpi",
-    "torrent", // Documents & data
-    "pdf", "epub", "mobi", "azw", "azw3", "csv", "tsv", "xlsx", "xls", "docx", "doc", "pptx",
-    "ppt", "odt", "ods", "odp", "rtf", "tex", "sqlite", "sqlite3", "db", "sql", "parquet", "patch",
-    "diff", "txt", // Media files
-    "mp3", "wav", "flac", "aac", "ogg", "m4a", "wma", "opus", "aiff", "mp4", "mkv", "avi", "mov",
-    "wmv", "flv", "webm", "m4v", // Graphics & 3D
-    "psd", "ai", "blend", "stl", "obj", "fbx", "step", "iges",
+    "iso", "img", "bin", "dmg", "pkg", "toast", "vcd", "exe", "msi", "msix", "appx", "deb", "rpm",
+    "apk", "aab", "ipa", "jar", "war", "crx", "xpi", "torrent", "pdf", "epub", "mobi", "azw",
+    "azw3", "csv", "tsv", "xlsx", "xls", "docx", "doc", "pptx", "ppt", "odt", "ods", "odp", "rtf",
+    "tex", "sqlite", "sqlite3", "db", "sql", "parquet", "patch", "diff", "txt", "mp3", "wav",
+    "flac", "aac", "ogg", "m4a", "wma", "opus", "aiff", "mp4", "mkv", "avi", "mov", "wmv", "flv",
+    "webm", "m4v", "psd", "ai", "blend", "stl", "obj", "fbx", "step", "iges",
 ];
 
 #[allow(dead_code)]
@@ -963,12 +1079,10 @@ pub fn is_legitimate_download(suggested_name: &str, url_str: &str) -> bool {
 }
 
 pub fn resolve_download_name(suggested_name: &str, url_str: &str) -> Option<String> {
-    // 1. Try to extract from suggested_name (WebKit's suggested destination filename)
     if let Some(candidate) = extract_valid_download_name(suggested_name) {
         return Some(candidate);
     }
 
-    // 2. Fall back to inspecting URL path's last segment
     if let Ok(parsed) = Url::parse(url_str)
         && let Some(segment) = parsed
             .path_segments()
@@ -1003,17 +1117,14 @@ fn extract_valid_download_name(candidate: &str) -> Option<String> {
         return None;
     }
 
-    // Reject web markup and scripts
     if NON_DOWNLOADABLE_EXTENSIONS.contains(&ext.as_str()) {
         return None;
     }
 
-    // Reject domain TLDs masquerading as extensions (e.g. "www.youtube.com")
     if TOP_LEVEL_DOMAINS.contains(&ext.as_str()) {
         return None;
     }
 
-    // Reject stems that are themselves domain names (e.g. "youtube.com")
     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
         let stem_lower = stem.to_ascii_lowercase();
         for tld in TOP_LEVEL_DOMAINS {
@@ -1027,7 +1138,6 @@ fn extract_valid_download_name(candidate: &str) -> Option<String> {
         return Some(clean);
     }
 
-    // Accept other valid file extensions (2-6 alphanumeric chars, not a TLD)
     if ext.len() >= 2 && ext.len() <= 6 && ext.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Some(clean);
     }
@@ -1084,6 +1194,14 @@ mod tests {
             "eclipse://settings"
         );
         assert_eq!(
+            canonicalize_eclipse_url("eclipse://localhost/notes"),
+            "eclipse://notes"
+        );
+        assert_eq!(
+            canonicalize_eclipse_url("eclipse://localhost/easel"),
+            "eclipse://easel"
+        );
+        assert_eq!(
             canonicalize_eclipse_url("https://example.com"),
             "https://example.com"
         );
@@ -1098,6 +1216,14 @@ mod tests {
         assert_eq!(
             tab_webview_url("eclipse://settings"),
             "eclipse://localhost/settings"
+        );
+        assert_eq!(
+            tab_webview_url("eclipse://notes"),
+            "eclipse://localhost/notes"
+        );
+        assert_eq!(
+            tab_webview_url("eclipse://easel"),
+            "eclipse://localhost/easel"
         );
         assert_eq!(
             tab_webview_url("https://example.com"),
@@ -1124,7 +1250,6 @@ mod tests {
 
     #[test]
     fn download_validation_rejects_pages_and_accepts_files() {
-        // Disallow web pages, streams, hosts, and TLDs
         assert!(!is_legitimate_download(
             "www.youtube.com",
             "https://www.youtube.com/"
@@ -1151,7 +1276,6 @@ mod tests {
         ));
         assert!(!is_legitimate_download("", "https://example.com/"));
 
-        // Allow legitimate downloads
         assert!(is_legitimate_download(
             "report.pdf",
             "https://example.com/files/report.pdf"
@@ -1169,7 +1293,6 @@ mod tests {
             "https://example.com/export?format=csv"
         ));
 
-        // Names are resolved cleanly
         assert_eq!(
             resolve_download_name(
                 "report%20final.pdf",
@@ -1191,22 +1314,39 @@ mod tests {
         cfg.adblock_enabled = true;
         cfg.adblock_disabled_domains = vec!["net77.cc".into(), "youtube.com".into()];
 
-        // Site in allowlist is not adblocked
         assert!(!is_adblock_active_for_url("https://net77.cc/home", &cfg));
         assert!(!is_adblock_active_for_url("https://sub.net77.cc/video", &cfg));
-        assert!(!is_adblock_active_for_url("https://www.youtube.com/watch?v=123", &cfg));
+        assert!(!is_adblock_active_for_url(
+            "https://www.youtube.com/watch?v=123",
+            &cfg
+        ));
 
-        // Other sites are adblocked
         assert!(is_adblock_active_for_url("https://github.com", &cfg));
         assert!(is_adblock_active_for_url("https://apple.com", &cfg));
 
-        // When adblock is globally disabled, all sites return false
         cfg.adblock_enabled = false;
         assert!(!is_adblock_active_for_url("https://github.com", &cfg));
 
-        // Extension URL matching
-        assert!(extension_matches_url("*://*.youtube.com/*", "https://www.youtube.com/watch?v=abc"));
+        assert!(extension_matches_url(
+            "*://*.youtube.com/*",
+            "https://www.youtube.com/watch?v=abc"
+        ));
+        assert!(extension_matches_url(
+            "https://*.youtube.com/*",
+            "https://www.youtube.com/watch?v=abc"
+        ));
+        assert!(extension_matches_url(
+            "https://*.youtube.com/watch*",
+            "https://youtube.com/watch?v=abc"
+        ));
         assert!(extension_matches_url("<all_urls>", "https://example.org"));
-        assert!(!extension_matches_url("*://*.youtube.com/*", "https://vimeo.com/123"));
+        assert!(!extension_matches_url(
+            "*://*.youtube.com/*",
+            "https://vimeo.com/123"
+        ));
+        assert!(!extension_matches_url(
+            "https://*.youtube.com/*",
+            "http://www.youtube.com/watch?v=abc"
+        ));
     }
 }

@@ -78,8 +78,8 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
   border-right: none;
   border-radius: 10px;
   -webkit-font-smoothing: antialiased;
@@ -255,8 +255,8 @@ body {
   height: 32px;
   background: var(--bg-card);
   border: 0.5px solid var(--border-hairline);
-  border-radius: 8px;
-  padding: 0 28px 0 28px;
+  border-radius: 9px;
+  padding: 0 50px 0 28px;
   color: var(--text-main);
   font-size: 12px;
   font-family: inherit;
@@ -289,7 +289,7 @@ body {
 
 .omnibar-go {
   position: absolute;
-  right: 5px;
+  right: 28px;
   width: 20px;
   height: 20px;
   border-radius: 5px;
@@ -297,10 +297,11 @@ body {
   border: none;
   color: var(--text-dim);
   cursor: pointer;
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   transition: color 0.14s ease;
+  z-index: 3;
 }
 
 .omnibar-go:hover {
@@ -309,21 +310,23 @@ body {
 
 .omnibar-tune {
   position: absolute;
-  right: 6px;
+  right: 5px;
   width: 22px;
   height: 22px;
   border-radius: 6px;
   background: transparent;
   border: none;
-  color: var(--text-dim);
+  color: var(--text-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.15s ease;
+  z-index: 5;
 }
 
-.omnibar-tune:hover {
+.omnibar-tune:hover,
+.omnibar-tune.active {
   color: var(--accent);
   background: var(--bg-card-hover);
   transform: scale(1.08);
@@ -386,8 +389,8 @@ body {
 }
 
 @keyframes favoriteLoadingPulse {
-  0% { transform: scale(0.92); opacity: 0.6; filter: drop-shadow(0 0 4px var(--accent)); }
-  100% { transform: scale(1.08); opacity: 1; filter: drop-shadow(0 0 12px var(--accent)); }
+  0% { transform: scale(0.93); opacity: 0.65; }
+  100% { transform: scale(1.06); opacity: 1; }
 }
 
 .pinned-item svg {
@@ -802,24 +805,22 @@ body {
 @keyframes starLuminescence {
   0%, 100% {
     transform: scale(0.95);
-    filter: brightness(1) drop-shadow(0 0 4px rgba(56, 189, 248, 0.7));
+    opacity: 0.85;
   }
   50% {
     transform: scale(1.08);
-    filter: brightness(1.35) drop-shadow(0 0 12px rgba(56, 189, 248, 1));
+    opacity: 1;
   }
 }
 
 @keyframes coronaFlare {
   0%, 100% {
-    transform: scale(0.85);
-    opacity: 0.3;
-    box-shadow: 0 0 4px rgba(37, 99, 235, 0.4);
+    transform: scale(0.88);
+    opacity: 0.35;
   }
   46%, 54% {
-    transform: scale(1.38);
+    transform: scale(1.32);
     opacity: 1;
-    box-shadow: 0 0 14px rgba(147, 197, 253, 0.95), 0 0 22px rgba(56, 189, 248, 0.8), inset 0 0 7px rgba(96, 165, 250, 0.9);
   }
 }
 
@@ -840,13 +841,121 @@ body {
 
 .omnibar-loader {
   position: absolute;
-  right: 6px;
+  right: 28px;
   width: 20px;
   height: 20px;
   display: none;
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  z-index: 3;
+}
+
+.tab-group-header {
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.55px;
+  color: var(--accent);
+  padding: 8px 9px 3px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  opacity: 0.9;
+}
+
+.tab-card.dragging,
+.pinned-item.dragging {
+  opacity: 0.42 !important;
+  transform: scale(0.96) !important;
+}
+
+.tab-card.drag-over-top {
+  box-shadow: inset 0 2px 0 0 var(--accent) !important;
+}
+
+.tab-card.drag-over-bottom {
+  box-shadow: inset 0 -2px 0 0 var(--accent) !important;
+}
+
+.pinned-item.drag-over {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-subtle) !important;
+}
+
+.arc-tidy-btn {
+  height: 33px;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: rgba(94, 158, 255, 0.11);
+  border: 1px solid rgba(94, 158, 255, 0.26);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s var(--ease-spring);
+}
+
+.arc-tidy-btn:hover {
+  background: rgba(94, 158, 255, 0.22);
+  border-color: var(--accent);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.space-pills-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 6px 10px;
+  flex-shrink: 0;
+}
+
+.space-pill-btn {
+  flex: 1;
+  height: 24px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.space-pill-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main);
+}
+
+.space-pill-btn.active {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--text-main);
+}
+
+.btn-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #090A0F;
+  font-size: 9px;
+  font-weight: 700;
+  display: none;
+  align-items: center;
+  justify-content: center;
 }
 
 #btn-reload.is-loading svg {
@@ -900,8 +1009,8 @@ body {
 }
 
 @keyframes audioPulse {
-  from { transform: scale(0.95); opacity: 0.8; }
-  to { transform: scale(1.15); opacity: 1; filter: drop-shadow(0 0 4px var(--accent)); }
+  from { transform: scale(0.95); opacity: 0.78; }
+  to { transform: scale(1.14); opacity: 1; }
 }
 
 .tab-action-btn {
@@ -1035,60 +1144,25 @@ body {
 /* =========================================================
    Arc-Style Fluid Popout Floating Sidebar
    ========================================================= */
-body.is-collapsed-state:not(.floating-popout) {
-  opacity: 0 !important;
-  visibility: hidden !important;
-  pointer-events: none !important;
-  transform: translateX(-105%) !important;
-  box-shadow: none !important;
+body.is-collapsed-state {
+  transform: translate3d(0, 0, 0);
+  opacity: 1;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.10);
 }
 
-body.floating-popout {
-  opacity: 1 !important;
-  visibility: visible !important;
-  pointer-events: auto !important;
-  box-shadow: 14px 0 52px rgba(0, 0, 0, 0.78), 0 0 1px rgba(255, 255, 255, 0.16);
-  border-right: 1px solid rgba(255, 255, 255, 0.15);
-  background: var(--bg-sidebar);
-  backdrop-filter: blur(36px) saturate(190%);
-  -webkit-backdrop-filter: blur(36px) saturate(190%);
-  animation: sidebarPopoutIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
-  will-change: transform, opacity;
+body.is-collapsed-state.floating-popout {
+  transform: translate3d(0, 0, 0);
+  opacity: 1;
+  pointer-events: auto;
+  border: 1px solid rgba(255, 255, 255, 0.18);
 }
 
-body.floating-popout.sliding-out {
-  animation: sidebarPopoutOut 0.20s cubic-bezier(0.32, 0.72, 0, 1) forwards !important;
-  box-shadow: none !important;
-  pointer-events: none !important;
-  will-change: transform, opacity;
-}
-
-@keyframes sidebarPopoutIn {
-  from {
-    transform: translateX(-100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
-@keyframes sidebarPopoutOut {
-  0% {
-    transform: translateX(0);
-    opacity: 1;
-  }
-  99% {
-    transform: translateX(-105%);
-    opacity: 0;
-    visibility: visible;
-  }
-  100% {
-    transform: translateX(-105%);
-    opacity: 0;
-    visibility: hidden;
-  }
+body:not(.is-collapsed-state) {
+  transform: translate3d(0, 0, 0);
+  opacity: 1;
+  pointer-events: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 #btn-collapse.is-collapsed svg {
@@ -1622,7 +1696,8 @@ body.floating-popout.sliding-out {
   transform: translateY(4px);
 }
 
-body.collapsed #toast-container {
+body.collapsed #toast-container,
+body.is-collapsed-state:not(.floating-popout) #toast-container {
   display: none;
 }
 
@@ -1641,6 +1716,15 @@ body.collapsed #toast-container {
 }
 
 @media (prefers-reduced-transparency: reduce) {
+  body,
+  .drawer,
+  .modal-backdrop,
+  .site-controls-popover {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
 /* Arc-Style Floating Command Bar */
 .arc-cmd-overlay {
   position: absolute;
@@ -1810,7 +1894,7 @@ body.collapsed #toast-container {
 </style>
 <style id="sidebar-custom-css"></style>
 </head>
-<body>
+<body class="is-collapsed-state">
 
 <!-- Arc-Style Floating Command Bar Overlay -->
 <div id="arc-command-bar" class="arc-cmd-overlay" style="display: none;">
@@ -1940,6 +2024,20 @@ body.collapsed #toast-container {
 
   <div class="site-popover-divider"></div>
 
+  <div class="site-popover-item">
+    <div class="site-popover-item-info">
+      <div class="site-popover-item-title">Space Profile</div>
+      <div class="site-popover-item-desc" id="site-popover-profile">Work Profile</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;">
+      <button type="button" class="btn-small" onclick="sendCommand({ action: 'zoom_out' })" title="Zoom Out (⌘-)">−</button>
+      <button type="button" class="btn-small" id="site-popover-zoom" onclick="sendCommand({ action: 'zoom_reset' })" title="Reset Zoom (⌘0)">100%</button>
+      <button type="button" class="btn-small" onclick="sendCommand({ action: 'zoom_in' })" title="Zoom In (⌘+)">+</button>
+    </div>
+  </div>
+
+  <div class="site-popover-divider"></div>
+
   <div class="site-popover-actions">
     <button type="button" class="site-popover-btn" id="btn-site-clear-data" title="Clear site cache &amp; reload">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1966,8 +2064,8 @@ body.collapsed #toast-container {
 <div class="workspaces-row" id="workspaces-row" style="display:none;"></div>
 <button id="btn-add-favorite" style="display:none;"></button>
 
-<!-- Workspace & Tabs: Briefcase Work Header + Divider + New Tab + Tab List -->
-<div class="arc-space-row" id="space-selector-btn" title="Current Space (Click to Switch)">
+<!-- Workspace & Per-Space Profile Header -->
+<div class="arc-space-row" id="space-selector-btn" title="Current Space &amp; Profile (Click to Switch)">
   <span class="arc-space-icon">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
@@ -1975,27 +2073,52 @@ body.collapsed #toast-container {
     </svg>
   </span>
   <span class="arc-space-title" id="workspace-label">Work</span>
+  <span id="workspace-profile-badge" style="font-size:10px;color:var(--accent);background:var(--accent-subtle);padding:2px 6px;border-radius:5px;font-weight:600;">Work Profile</span>
+</div>
+
+<!-- Per-Space Quick Switcher Pills -->
+<div class="space-pills-bar" id="space-pills-bar">
+  <button type="button" class="space-pill-btn active" data-space="Default" title="Work Space Profile">Work</button>
+  <button type="button" class="space-pill-btn" data-space="Media" title="Media Space Profile">Media</button>
+  <button type="button" class="space-pill-btn" data-space="Dev" title="Dev Space Profile">Dev</button>
+  <button type="button" class="space-pill-btn" data-space="Personal" title="Personal Space Profile">Personal</button>
 </div>
 
 <div class="arc-workspace-divider"></div>
 
-<div class="arc-newtab-row">
-  <button class="arc-newtab-btn" id="btn-header-newtab" title="New Tab (⌘T)">
+<div class="arc-newtab-row" style="display:flex;gap:6px;align-items:center;">
+  <button class="arc-newtab-btn" id="btn-header-newtab" title="New Tab (⌘T)" style="flex:1;">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
     <span>New Tab</span>
   </button>
+  <button type="button" class="arc-tidy-btn" id="btn-tidy-tabs" title="Tidy Tabs: Auto-group &amp; deduplicate open tabs (⇧⌘Y)">
+    <span>✨ Tidy</span>
+  </button>
 </div>
 
-<!-- Tab List -->
+<!-- Tab List (supports drag-and-drop & Tidy Tabs groups) -->
 <div class="tab-list" id="tab-container"></div>
 
-<!-- Bottom Footer Row: Settings and Utility on Left, Plus on Right -->
+<!-- Bottom Footer Row: Settings, Downloads, Notes, Easel, Little Arc, Archive, Plus -->
 <div class="arc-bottom-bar">
   <div class="bottom-left-actions">
     <button class="btn-icon" id="btn-settings" title="Preferences (⌘,)">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
-    <button class="btn-icon" id="btn-archive" title="Archive / Reopen Closed Tab (⇧⌘T)">
+    <button class="btn-icon" id="btn-downloads" title="Downloads Panel (⌘J)" style="position:relative;">
+      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <span class="btn-badge" id="downloads-badge">0</span>
+    </button>
+    <button class="btn-icon" id="btn-notes" title="Notes (⇧⌘N)">
+      <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+    </button>
+    <button class="btn-icon" id="btn-easel" title="Easels Canvas Board (⇧⌘E)">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+    </button>
+    <button class="btn-icon" id="btn-little-arc" title="Little Arc Quick Preview (⌥⌘N)">
+      <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg>
+    </button>
+    <button class="btn-icon" id="btn-archive" title="Reopen Closed Tab (⇧⌘T)">
       <svg viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
     </button>
   </div>
@@ -2007,6 +2130,44 @@ body.collapsed #toast-container {
   <button class="btn-icon" id="btn-new-tab" title="New Tab (⌘T)">
     <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
   </button>
+</div>
+
+<!-- Downloads Panel Drawer -->
+<div class="drawer" id="downloads-drawer">
+  <div class="drawer-header">
+    <div class="drawer-title">
+      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <span>Downloads</span>
+    </div>
+    <div style="display:flex;gap:4px;">
+      <button class="btn-small" id="btn-open-downloads-folder" title="Open ~/Downloads in Finder">Folder</button>
+      <button class="btn-small danger" id="btn-clear-downloads" title="Clear download history">Clear</button>
+      <button class="btn-icon" id="btn-close-downloads" title="Close">
+        <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
+  <div id="downloads-list-container" style="display:flex;flex-direction:column;gap:8px;flex:1;overflow-y:auto;"></div>
+</div>
+
+<!-- Quick Notes Drawer -->
+<div class="drawer" id="notes-drawer">
+  <div class="drawer-header">
+    <div class="drawer-title">
+      <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span>Quick Notes</span>
+    </div>
+    <div style="display:flex;gap:4px;">
+      <button class="btn-small primary" id="btn-new-quick-note">+ New</button>
+      <button class="btn-small" id="btn-open-full-notes" title="Open Full Notes Tab">Full View</button>
+      <button class="btn-icon" id="btn-close-notes" title="Close">
+        <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
+  <input type="text" id="quick-note-title" class="modal-input" placeholder="Note Title..." style="margin-bottom:8px;" />
+  <textarea id="quick-note-body" class="css-editor" style="flex:1;height:auto;font-family:inherit;font-size:12.5px;line-height:1.55;" placeholder="Jot down notes for this Space..."></textarea>
+  <div id="quick-notes-list" style="display:flex;flex-direction:column;gap:5px;margin-top:10px;max-height:150px;overflow-y:auto;"></div>
 </div>
 
 <!-- Preferences & Shortcuts Drawer -->
@@ -2079,12 +2240,19 @@ body.collapsed #toast-container {
   </div>
 
   <div class="drawer-section">
-    <div class="section-label"><span>Chrome Extensions</span></div>
+    <div class="section-label" style="display:flex; justify-content:space-between; align-items:center;">
+      <span>Chrome Extensions</span>
+      <button class="btn-small primary" onclick="sendCommand({ action: 'new_tab', url: 'https://chromewebstore.google.com' });">Web Store</button>
+    </div>
     <div class="toggle-row">
-      <span>Chrome Extensions Engine</span>
+      <span>Chrome Extensions Runtime</span>
       <div class="toggle-switch on" id="toggle-extensions" role="switch" aria-checked="true"><div class="toggle-knob"></div></div>
     </div>
-    <div id="drawer-extensions-container" style="display:flex; flex-direction:column; gap:6px; margin-top:6px;"></div>
+    <div style="display:flex; gap:6px; margin-top:8px;">
+      <input type="text" id="drawer-webstore-input" placeholder="Paste Web Store URL or ID" style="flex:1; background:rgba(255,255,255,0.06); border:0.5px solid var(--border-hairline); border-radius:6px; color:#fff; font-size:11px; padding:5px 8px; outline:none;" />
+      <button class="btn-small" onclick="installFromWebStoreDrawer()">Install</button>
+    </div>
+    <div id="drawer-extensions-container" style="display:flex; flex-direction:column; gap:6px; margin-top:8px;"></div>
   </div>
 
   <div class="drawer-section">
@@ -2298,12 +2466,23 @@ const sitePopoverAdblockSub = document.getElementById('site-popover-adblock-sub'
 
 function getActiveDomain() {
   try {
-    if (!activeUrl) return '';
+    if (!activeUrl || activeUrl.startsWith('eclipse://')) return '';
     const u = new URL(activeUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
     return u.hostname || '';
   } catch (_) {
     return '';
   }
+}
+
+function isDomainAllowlisted(domain) {
+  if (!domain) return false;
+  const domLower = domain.toLowerCase();
+  const disabledDomains = (currentConfig && currentConfig.adblock_disabled_domains) || [];
+  return disabledDomains.some(d => {
+    const dl = d.trim().toLowerCase();
+    return dl && (domLower === dl || domLower.endsWith('.' + dl));
+  });
 }
 
 function updateSiteControlsUI() {
@@ -2334,8 +2513,7 @@ function updateSiteControlsUI() {
     sitePopoverStatus.style.color = isSecure ? '#34D399' : 'rgba(255, 255, 255, 0.45)';
   }
 
-  const disabledDomains = (currentConfig && currentConfig.adblock_disabled_domains) || [];
-  const isSiteDisabled = disabledDomains.some(d => d.toLowerCase() === domain.toLowerCase());
+  const isSiteDisabled = isDomainAllowlisted(domain);
   const globalAdblock = currentConfig && currentConfig.adblock_enabled !== false;
   const isActive = globalAdblock && !isSiteDisabled;
 
@@ -2434,7 +2612,7 @@ const drawer = document.getElementById('settings-drawer');
 let wasCollapsedWhenOpened = false;
 
 window.openPreferencesDrawer = function() {
-  if (document.body.classList.contains('collapsed')) {
+  if (document.body.classList.contains('is-collapsed-state')) {
     wasCollapsedWhenOpened = true;
     sendCommand({ action: 'open_settings' });
     return;
@@ -2600,9 +2778,7 @@ if (toggleSiteAdblock) {
   toggleSiteAdblock.addEventListener('click', () => {
     const domain = getActiveDomain();
     if (!domain || domain.startsWith('eclipse')) return;
-    const disabledDomains = (currentConfig && currentConfig.adblock_disabled_domains) || [];
-    const isDomainDisabled = disabledDomains.some(d => d.toLowerCase() === domain.toLowerCase());
-    const nextState = isDomainDisabled;
+    const nextState = isDomainAllowlisted(domain);
     sendCommand({ action: 'toggle_site_adblock', domain: domain, enabled: nextState });
   });
 }
@@ -2686,7 +2862,7 @@ function syncSettingsControls() {
   if (activeDomain && !activeDomain.startsWith('eclipse')) {
     if (siteAdblockRow) siteAdblockRow.style.display = 'flex';
     if (siteAdblockLabel) siteAdblockLabel.textContent = 'Block Ads on ' + activeDomain;
-    const isDomainDisabled = disabledDomains.some(d => d.toLowerCase() === activeDomain.toLowerCase());
+    const isDomainDisabled = isDomainAllowlisted(activeDomain);
     setSwitch('toggle-site-adblock', currentConfig.adblock_enabled !== false && !isDomainDisabled);
   } else {
     if (siteAdblockRow) siteAdblockRow.style.display = 'none';
@@ -2697,7 +2873,7 @@ function syncSettingsControls() {
     if (disabledDomains.length > 0) {
       disabledListEl.style.display = 'block';
       disabledListEl.innerHTML = '<div style="font-weight:600;margin-bottom:3px;color:rgba(255,255,255,0.7);">Ad blocker paused on:</div>' +
-        disabledDomains.map(d => `<span style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;margin-right:4px;margin-bottom:3px;display:inline-block;">${d} <span onclick="event.stopPropagation(); reenableSiteAdblock('${d}')" style="cursor:pointer;color:#F87171;font-weight:bold;margin-left:2px;">&times;</span></span>`).join('');
+        disabledDomains.map(d => `<span style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;margin-right:4px;margin-bottom:3px;display:inline-block;">${escapeHtml(d)} <span onclick="event.stopPropagation(); reenableSiteAdblock('${escapeHtml(d)}')" style="cursor:pointer;color:#F87171;font-weight:bold;margin-left:2px;">&times;</span></span>`).join('');
     } else {
       disabledListEl.style.display = 'none';
       disabledListEl.innerHTML = '';
@@ -2705,16 +2881,24 @@ function syncSettingsControls() {
   }
 
   const extContainer = document.getElementById('drawer-extensions-container');
-  if (extContainer && currentConfig.installed_extensions) {
-    extContainer.innerHTML = currentConfig.installed_extensions.map(ext => `
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:7px;">
-        <div style="display:flex;flex-direction:column;gap:1px;min-width:0;flex:1;">
-          <div style="font-size:12px;font-weight:500;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${ext.name}</div>
-          <div style="font-size:10px;color:rgba(255,255,255,0.45);">${ext.version} &bull; ${ext.description || 'Extension'}</div>
+  if (extContainer) {
+    const extensions = currentConfig.installed_extensions || [];
+    if (extensions.length === 0) {
+      extContainer.innerHTML = '<div style="font-size:11px; color:rgba(255,255,255,0.45); padding:4px 0;">No extensions installed. Click "Web Store" above to add any Chrome extension.</div>';
+    } else {
+      extContainer.innerHTML = extensions.map(ext => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:7px;">
+          <div style="display:flex;flex-direction:column;gap:1px;min-width:0;flex:1;">
+            <div style="font-size:12px;font-weight:500;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(ext.name)}</div>
+            <div style="font-size:10px;color:rgba(255,255,255,0.45);">${escapeHtml(ext.version)} &bull; ${escapeHtml(ext.description || 'Extension')}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <div class="toggle-switch ${ext.enabled ? 'on' : ''}" onclick="toggleExtension('${escapeHtml(ext.id)}', ${!ext.enabled})" style="transform:scale(0.85);"><div class="toggle-knob"></div></div>
+            <span onclick="event.stopPropagation(); deleteExtension('${escapeHtml(ext.id)}')" style="cursor:pointer;color:#F87171;font-size:14px;padding:0 4px;" title="Remove extension">&times;</span>
+          </div>
         </div>
-        <div class="toggle-switch ${ext.enabled ? 'on' : ''}" onclick="toggleExtension('${ext.id}', ${!ext.enabled})" style="transform:scale(0.85);margin-left:8px;"><div class="toggle-knob"></div></div>
-      </div>
-    `).join('');
+      `).join('');
+    }
   }
 
   const shieldBtn = document.getElementById('btn-shield');
@@ -2774,12 +2958,25 @@ window.updateBrowserState = function(state) {
   if (state.favorites) {
     currentConfig.favorites = state.favorites;
   }
-
-  if (!document.body.classList.contains('sliding-out')) {
-    const isPopout = !!state.sidebar_collapsed && !!state.sidebar_hover_expanded;
-    document.body.classList.toggle('floating-popout', isPopout);
+  if (state.downloads) {
+    currentConfig.downloads = state.downloads;
   }
+  if (state.notes) {
+    currentConfig.notes = state.notes;
+  }
+  if (state.easels) {
+    currentConfig.easels = state.easels;
+  }
+  if (state.space_profiles) {
+    currentConfig.space_profiles = state.space_profiles;
+  }
+
   document.body.classList.toggle('is-collapsed-state', !!state.sidebar_collapsed);
+  if (state.sidebar_collapsed) {
+    document.body.classList.toggle('floating-popout', !!state.sidebar_hover_expanded);
+  } else {
+    document.body.classList.remove('floating-popout');
+  }
 
   const btnCollapse = document.getElementById('btn-collapse');
   if (btnCollapse) {
@@ -2800,10 +2997,30 @@ window.updateBrowserState = function(state) {
   const omnibarGo = document.getElementById('omnibar-go');
   const btnReload = document.getElementById('btn-reload');
   if (omnibarLoader) omnibarLoader.style.display = isCurrentlyLoading ? 'flex' : 'none';
-  if (omnibarGo) omnibarGo.style.display = isCurrentlyLoading ? 'none' : 'flex';
+  if (omnibarGo) {
+    omnibarGo.style.display = (!isCurrentlyLoading && document.activeElement === omnibar) ? 'flex' : 'none';
+  }
   if (btnReload) {
     btnReload.classList.toggle('is-loading', isCurrentlyLoading);
     btnReload.title = isCurrentlyLoading ? 'Stop Loading (⌘.)' : 'Reload (⌘R)';
+  }
+
+  // Update Downloads badge
+  const dls = currentConfig.downloads || [];
+  const dlBadge = document.getElementById('downloads-badge');
+  if (dlBadge) {
+    if (dls.length > 0) {
+      dlBadge.style.display = 'inline-flex';
+      dlBadge.textContent = String(dls.length);
+    } else {
+      dlBadge.style.display = 'none';
+    }
+  }
+  if (downloadsDrawerOpen) {
+    renderDownloadsDrawer();
+  }
+  if (notesDrawerOpen) {
+    renderQuickNotesDrawer();
   }
 
   if (document.activeElement !== omnibar) {
@@ -2812,18 +3029,39 @@ window.updateBrowserState = function(state) {
       nextValue = '';
     } else if (state.active_url.startsWith('eclipse://settings')) {
       nextValue = 'eclipse://settings';
+    } else if (state.active_url.startsWith('eclipse://notes')) {
+      nextValue = 'eclipse://notes';
+    } else if (state.active_url.startsWith('eclipse://easel')) {
+      nextValue = 'eclipse://easel';
     } else {
       nextValue = state.active_url.replace(/^https?:\/\//, '').replace(/\/$/, '');
     }
     if (omnibar.value !== nextValue) omnibar.value = nextValue;
   }
 
+  // Update Space Profile & Zoom in Site Controls Popover if visible
+  const activeTabObj = currentTabs.find(t => t.id === activeTabId);
+  const zoomBtn = document.getElementById('site-popover-zoom');
+  if (zoomBtn && activeTabObj) {
+    zoomBtn.textContent = Math.round((activeTabObj.zoom || 1) * 100) + '%';
+  }
+  const profEl = document.getElementById('site-popover-profile');
+  const profBadge = document.getElementById('workspace-profile-badge');
+  const profiles = currentConfig.space_profiles || [];
+  const activeProfile = profiles.find(p => (p.workspace || '').toLowerCase() === (currentWorkspace || 'Default').toLowerCase()) || {
+    profile_name: (WORKSPACE_NAMES[currentWorkspace] || currentWorkspace) + ' Profile'
+  };
+  if (profEl) profEl.textContent = activeProfile.profile_name || 'Work Profile';
+  if (profBadge) profBadge.textContent = activeProfile.profile_name || 'Work Profile';
+
+  document.querySelectorAll('.space-pill-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.space === currentWorkspace);
+  });
+
   if (typeof state.memory_mb === 'number') {
     window.updateMemoryUsage(state.memory_mb);
   }
 
-  // Config applies to many controls; only touch the DOM when it really
-  // changed. Memory and loading ticks no longer re-render the whole drawer.
   const configKey = JSON.stringify(currentConfig);
   if (configKey !== lastConfigKey) {
     lastConfigKey = configKey;
@@ -2861,6 +3099,9 @@ function matchesHost(urlA, urlB) {
   }
 }
 
+let draggedFavIndex = null;
+let draggedTabId = null;
+
 function renderPinned() {
   const container = document.getElementById('pinned-container');
   if (!container) return;
@@ -2868,78 +3109,116 @@ function renderPinned() {
     ? currentConfig.favorites
     : [];
 
-  const pinnedTabs = currentTabs.filter(t => t.is_pinned);
-  const signature = 'favs:' + JSON.stringify(favs) + '|tabs:' + pinnedTabs.map(t => `${t.id}:${t.url}:${t.favorite_index}:${t.id === activeTabId}`).join(',') + '|act:' + activeTabId;
-
-  if (signature === lastPinnedSignature) return;
-  lastPinnedSignature = signature;
-  container.innerHTML = '';
-  container.style.display = 'grid';
-
-  // 1. Render all favorite squircle tiles
-  favs.forEach((fav, idx) => {
-    const tile = document.createElement('div');
-    tile.className = 'pinned-item';
-
-    // Check if this favorite has an open tab or is currently active
-    const tabForFav = currentTabs.find(t => {
-      if (t.favorite_index === idx) return true;
-      if (t.is_pinned && matchesHost(t.url, fav.url)) return true;
-      return false;
-    });
-
-    const isTileActive = (tabForFav && tabForFav.id === activeTabId) || (!tabForFav && activeUrl && matchesHost(activeUrl, fav.url));
-    if (isTileActive) {
-      tile.classList.add('active');
-    }
-    if (tabForFav && tabForFav.is_loading) {
-      tile.classList.add('loading');
-    }
-
-    tile.title = `${fav.title} (${cleanUrl(fav.url)})`;
-    const favType = fav.icon || fav.title.toLowerCase();
-    tile.innerHTML = `
-      ${getFaviconSvg(favType)}
-      <button class="pinned-badge-btn" title="Remove Shortcut">&times;</button>
-    `;
-    tile.addEventListener('click', (e) => {
-      if (e.target.closest('.pinned-badge-btn')) {
-        e.stopPropagation();
-        favs.splice(idx, 1);
-        renderPinned();
-        saveConfigChanges();
-        return;
-      }
-      sendCommand({ action: 'open_favorite', index: idx });
-    });
-    tile.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      openShortcutModal(idx);
-    });
-    container.appendChild(tile);
+  const extraPinnedTabs = currentTabs.filter(t => {
+    if (!t.is_pinned) return false;
+    if (t.favorite_index !== null && t.favorite_index !== undefined) return false;
+    if (favs.some(f => matchesHost(f.url, t.url))) return false;
+    return true;
   });
 
-  // 2. Render any additionally pinned tabs that are not part of favorites
-  pinnedTabs.forEach(tab => {
-    if (tab.favorite_index !== null && tab.favorite_index !== undefined) return;
-    if (favs.some(f => matchesHost(f.url, tab.url))) return;
-    const item = document.createElement('div');
-    item.className = 'pinned-item' + (tab.id === activeTabId ? ' active' : '') + (tab.is_loading ? ' loading' : '');
-    item.title = `${tab.title || cleanUrl(tab.url)} (Pinned Tab)`;
-    item.innerHTML = `
-      ${getFaviconHtml(tab)}
-      <button class="pinned-badge-btn" title="Unpin Tab">&times;</button>
-    `;
-    item.addEventListener('click', (e) => {
-      if (e.target.closest('.pinned-badge-btn')) {
-        e.stopPropagation();
-        sendCommand({ action: 'toggle_pin', id: tab.id });
-      } else {
-        sendCommand({ action: 'select_tab', id: tab.id });
-      }
+  const structureSig = 'favs:' + JSON.stringify(favs) + '|extra:' + extraPinnedTabs.map(t => `${t.id}:${t.favicon}:${t.favicon_url || ''}`).join(',');
+
+  if (structureSig !== lastPinnedSignature) {
+    lastPinnedSignature = structureSig;
+    container.innerHTML = '';
+    container.style.display = 'grid';
+
+    favs.forEach((fav, idx) => {
+      const tile = document.createElement('div');
+      tile.className = 'pinned-item';
+      tile.draggable = true;
+      tile.dataset.favIndex = String(idx);
+      tile.title = `${fav.title} (${cleanUrl(fav.url)}) — Drag to reorder`;
+      const favType = fav.icon || fav.title.toLowerCase();
+      tile.innerHTML = `
+        ${getFaviconSvg(favType)}
+        <button class="pinned-badge-btn" title="Remove Shortcut">&times;</button>
+      `;
+      tile.addEventListener('dragstart', (e) => {
+        draggedFavIndex = idx;
+        tile.classList.add('dragging');
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+      });
+      tile.addEventListener('dragend', () => {
+        draggedFavIndex = null;
+        tile.classList.remove('dragging');
+        container.querySelectorAll('.pinned-item').forEach(el => el.classList.remove('drag-over'));
+      });
+      tile.addEventListener('dragover', (e) => {
+        if (draggedFavIndex === null || draggedFavIndex === idx) return;
+        e.preventDefault();
+        tile.classList.add('drag-over');
+      });
+      tile.addEventListener('dragleave', () => {
+        tile.classList.remove('drag-over');
+      });
+      tile.addEventListener('drop', (e) => {
+        e.preventDefault();
+        tile.classList.remove('drag-over');
+        if (draggedFavIndex !== null && draggedFavIndex !== idx) {
+          sendCommand({ action: 'reorder_favorite', from_index: draggedFavIndex, to_index: idx });
+        }
+        draggedFavIndex = null;
+      });
+      tile.addEventListener('click', (e) => {
+        if (e.target.closest('.pinned-badge-btn')) {
+          e.stopPropagation();
+          sendCommand({ action: 'delete_favorite', index: idx });
+          return;
+        }
+        sendCommand({ action: 'open_favorite', index: idx });
+      });
+      tile.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        openFavoriteModal(idx);
+      });
+      container.appendChild(tile);
     });
-    container.appendChild(item);
-  });
+
+    extraPinnedTabs.forEach(tab => {
+      const item = document.createElement('div');
+      item.className = 'pinned-item';
+      item.dataset.pinnedTabId = String(tab.id);
+      item.title = `${tab.title || cleanUrl(tab.url)} (Pinned Tab)`;
+      item.innerHTML = `
+        ${getFaviconHtml(tab)}
+        <button class="pinned-badge-btn" title="Unpin Tab">&times;</button>
+      `;
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.pinned-badge-btn')) {
+          e.stopPropagation();
+          sendCommand({ action: 'toggle_pin', id: tab.id });
+        } else {
+          sendCommand({ action: 'select_tab', id: tab.id });
+        }
+      });
+      container.appendChild(item);
+    });
+  }
+
+  const children = container.children;
+  for (let i = 0; i < children.length; i++) {
+    const el = children[i];
+    if (el.dataset.favIndex !== undefined) {
+      const idx = parseInt(el.dataset.favIndex, 10);
+      const fav = favs[idx];
+      if (!fav) continue;
+      const tabForFav = currentTabs.find(t => {
+        if (t.favorite_index === idx) return true;
+        if (t.is_pinned && matchesHost(t.url, fav.url)) return true;
+        return false;
+      });
+      const isTileActive = Boolean((tabForFav && tabForFav.id === activeTabId) || (!tabForFav && activeUrl && matchesHost(activeUrl, fav.url)));
+      const isTileLoading = Boolean(tabForFav && tabForFav.is_loading);
+      el.classList.toggle('active', isTileActive);
+      el.classList.toggle('loading', isTileLoading);
+    } else if (el.dataset.pinnedTabId !== undefined) {
+      const tid = parseInt(el.dataset.pinnedTabId, 10);
+      const tab = currentTabs.find(t => t.id === tid);
+      el.classList.toggle('active', tid === activeTabId);
+      el.classList.toggle('loading', Boolean(tab && tab.is_loading));
+    }
+  }
 }
 
 function getFaviconUrlFromHref(url) {
@@ -2952,12 +3231,15 @@ function getFaviconUrlFromHref(url) {
   return null;
 }
 
-// Keyed, incremental DOM reconciliation for Vertical Tabs
+// Vertical Tabs with Drag-and-Drop Reordering and Tidy Tabs Group Headers
 function renderTabs() {
   const container = document.getElementById('tab-container');
   const filtered = currentTabs.filter(t => !t.is_pinned && t.favorite_index == null && (t.workspace || 'Default') === currentWorkspace);
   const badge = document.getElementById('tab-count-badge');
   if (badge) badge.textContent = filtered.length;
+
+  // Remove old group headers before reconciling tab cards
+  Array.from(container.querySelectorAll('.tab-group-header')).forEach(h => h.remove());
 
   const existingById = new Map();
   Array.from(container.children).forEach(el => {
@@ -2974,15 +3256,64 @@ function renderTabs() {
     }
   }
 
-  filtered.forEach((tab, index) => {
+  let lastGroup = null;
+  let domCursor = 0;
+
+  filtered.forEach((tab) => {
+    if (tab.group && tab.group !== lastGroup) {
+      lastGroup = tab.group;
+      const header = document.createElement('div');
+      header.className = 'tab-group-header';
+      header.innerHTML = `<span>${escapeHtml(tab.group)}</span>`;
+      const refNode = container.children[domCursor] || null;
+      container.insertBefore(header, refNode);
+      domCursor++;
+    }
+
     const isActive = tab.id === activeTabId;
-    const sig = `${tab.title}|${tab.url}|${tab.favicon}|${tab.favicon_url || ''}|${tab.is_loading}|${tab.is_hibernated}|${tab.is_pinned}|${tab.is_audible}`;
+    const sig = `${tab.title}|${tab.url}|${tab.favicon}|${tab.favicon_url || ''}|${tab.is_loading}|${tab.is_hibernated}|${tab.is_pinned}|${tab.is_audible}|${tab.group || ''}`;
     let card = existingById.get(tab.id);
 
     if (!card) {
       card = document.createElement('div');
+      card.draggable = true;
       card.dataset.tabId = String(tab.id);
       card.className = 'tab-card' + (isActive ? ' active' : '') + (tab.is_loading ? ' loading' : '');
+
+      card.addEventListener('dragstart', (e) => {
+        draggedTabId = parseInt(card.dataset.tabId, 10);
+        card.classList.add('dragging');
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+      });
+      card.addEventListener('dragend', () => {
+        draggedTabId = null;
+        card.classList.remove('dragging');
+        container.querySelectorAll('.tab-card').forEach(c => c.classList.remove('drag-over-top', 'drag-over-bottom'));
+      });
+      card.addEventListener('dragover', (e) => {
+        const targetId = parseInt(card.dataset.tabId, 10);
+        if (!draggedTabId || draggedTabId === targetId) return;
+        e.preventDefault();
+        const rect = card.getBoundingClientRect();
+        const before = (e.clientY - rect.top) < rect.height / 2;
+        card.classList.toggle('drag-over-top', before);
+        card.classList.toggle('drag-over-bottom', !before);
+      });
+      card.addEventListener('dragleave', () => {
+        card.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+      card.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const targetId = parseInt(card.dataset.tabId, 10);
+        const rect = card.getBoundingClientRect();
+        const before = (e.clientY - rect.top) < rect.height / 2;
+        card.classList.remove('drag-over-top', 'drag-over-bottom');
+        if (draggedTabId && draggedTabId !== targetId) {
+          sendCommand({ action: 'reorder_tab', from_id: draggedTabId, to_id: targetId, before });
+        }
+        draggedTabId = null;
+      });
+
       card.addEventListener('click', (e) => {
         const id = parseInt(card.dataset.tabId, 10);
         if (e.target.closest('.close')) {
@@ -3032,16 +3363,19 @@ function renderTabs() {
       `;
     }
 
-    const currentChildAtIndex = container.children[index];
+    const currentChildAtIndex = container.children[domCursor];
     if (currentChildAtIndex !== card) {
       container.insertBefore(card, currentChildAtIndex || null);
     }
+    domCursor++;
   });
 }
 
 function cleanUrl(url) {
   if (!url || url.startsWith('eclipse://newtab')) return 'New Tab';
   if (url.startsWith('eclipse://settings')) return 'Preferences';
+  if (url.startsWith('eclipse://notes')) return 'Eclipse Notes';
+  if (url.startsWith('eclipse://easel')) return 'Eclipse Easel';
   try {
     const u = new URL(url);
     return u.hostname.replace(/^www\./, '');
@@ -3104,18 +3438,220 @@ function getFaviconSvg(type) {
   }
 }
 
+// ==================== Downloads Drawer, Quick Notes Drawer, Tidy Tabs & Space Pills ====================
+let downloadsDrawerOpen = false;
+let notesDrawerOpen = false;
+let activeQuickNoteId = null;
+let quickNoteSaveTimer = null;
+
+window.openDownloadsDrawer = function() {
+  downloadsDrawerOpen = true;
+  notesDrawerOpen = false;
+  const nd = document.getElementById('notes-drawer');
+  if (nd) nd.style.display = 'none';
+  const dd = document.getElementById('downloads-drawer');
+  if (dd) {
+    renderDownloadsDrawer();
+    dd.style.display = 'flex';
+  }
+};
+
+function closeDownloadsDrawer() {
+  downloadsDrawerOpen = false;
+  const dd = document.getElementById('downloads-drawer');
+  if (dd) dd.style.display = 'none';
+}
+
+function renderDownloadsDrawer() {
+  const list = document.getElementById('downloads-list-container');
+  if (!list) return;
+  const dls = (currentConfig && currentConfig.downloads) || [];
+  if (dls.length === 0) {
+    list.innerHTML = '<div style="font-size:11.5px;color:var(--text-dim);text-align:center;padding:28px 12px;">No downloads yet. Files you download will appear here with instant Finder access.</div>';
+    return;
+  }
+  list.innerHTML = dls.map(d => {
+    const statusColor = d.status === 'completed' ? '#34D399' : (d.status === 'failed' ? '#F87171' : '#5E9EFF');
+    const statusLabel = d.status === 'completed' ? 'Completed' : (d.status === 'failed' ? 'Failed' : 'Downloading…');
+    return `
+      <div class="fav-manager-item" style="flex-direction:column;align-items:stretch;gap:6px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <div class="fav-manager-title" style="flex:1;">${escapeHtml(d.file_name)}</div>
+          <span style="font-size:10px;font-weight:600;color:${statusColor};">${statusLabel}</span>
+        </div>
+        <div style="display:flex;gap:6px;justify-content:flex-end;">
+          <button class="btn-small" onclick="sendCommand({ action: 'open_download', id: ${d.id} })">Open</button>
+          <button class="btn-small" onclick="sendCommand({ action: 'reveal_download', id: ${d.id} })">Show in Finder</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+window.openNotesDrawer = function() {
+  notesDrawerOpen = true;
+  downloadsDrawerOpen = false;
+  const dd = document.getElementById('downloads-drawer');
+  if (dd) dd.style.display = 'none';
+  const nd = document.getElementById('notes-drawer');
+  if (nd) {
+    renderQuickNotesDrawer(true);
+    nd.style.display = 'flex';
+  }
+};
+
+function closeNotesDrawer() {
+  notesDrawerOpen = false;
+  const nd = document.getElementById('notes-drawer');
+  if (nd) nd.style.display = 'none';
+}
+
+function renderQuickNotesDrawer(selectFirst = false) {
+  const notes = (currentConfig && currentConfig.notes) || [];
+  const titleInput = document.getElementById('quick-note-title');
+  const bodyInput = document.getElementById('quick-note-body');
+  const listEl = document.getElementById('quick-notes-list');
+  if (!listEl) return;
+
+  if ((selectFirst || !activeQuickNoteId) && notes.length > 0) {
+    activeQuickNoteId = notes[0].id;
+    if (titleInput && document.activeElement !== titleInput) titleInput.value = notes[0].title || '';
+    if (bodyInput && document.activeElement !== bodyInput) bodyInput.value = notes[0].content || '';
+  }
+
+  listEl.innerHTML = '';
+  notes.forEach(n => {
+    const row = document.createElement('div');
+    row.className = 'fav-manager-item';
+    row.style.cursor = 'pointer';
+    if (n.id === activeQuickNoteId) {
+      row.style.borderColor = 'var(--accent)';
+    }
+    row.innerHTML = `
+      <div class="fav-manager-info">
+        <div class="fav-manager-title">${escapeHtml(n.title || 'Untitled Note')}</div>
+        <div class="fav-manager-url">${escapeHtml((n.content || '').slice(0, 60))}</div>
+      </div>
+    `;
+    row.addEventListener('click', () => {
+      activeQuickNoteId = n.id;
+      if (titleInput) titleInput.value = n.title || '';
+      if (bodyInput) bodyInput.value = n.content || '';
+      renderQuickNotesDrawer(false);
+    });
+    listEl.appendChild(row);
+  });
+}
+
+function scheduleQuickNoteSave() {
+  if (quickNoteSaveTimer) clearTimeout(quickNoteSaveTimer);
+  quickNoteSaveTimer = setTimeout(() => {
+    const titleInput = document.getElementById('quick-note-title');
+    const bodyInput = document.getElementById('quick-note-body');
+    if (!titleInput || !bodyInput) return;
+    if (!activeQuickNoteId) activeQuickNoteId = 'note_' + Date.now();
+    sendCommand({
+      action: 'save_note',
+      id: activeQuickNoteId,
+      title: titleInput.value.trim() || 'Untitled Note',
+      content: bodyInput.value,
+      workspace: currentWorkspace
+    });
+  }, 240);
+}
+
+const btnTidyTabs = document.getElementById('btn-tidy-tabs');
+if (btnTidyTabs) btnTidyTabs.addEventListener('click', () => sendCommand({ action: 'tidy_tabs' }));
+
+const btnDownloads = document.getElementById('btn-downloads');
+if (btnDownloads) btnDownloads.addEventListener('click', () => window.openDownloadsDrawer());
+const btnCloseDownloads = document.getElementById('btn-close-downloads');
+if (btnCloseDownloads) btnCloseDownloads.addEventListener('click', closeDownloadsDrawer);
+const btnOpenDlFolder = document.getElementById('btn-open-downloads-folder');
+if (btnOpenDlFolder) btnOpenDlFolder.addEventListener('click', () => sendCommand({ action: 'open_downloads_folder' }));
+const btnClearDownloads = document.getElementById('btn-clear-downloads');
+if (btnClearDownloads) btnClearDownloads.addEventListener('click', () => sendCommand({ action: 'clear_downloads' }));
+
+const btnNotes = document.getElementById('btn-notes');
+if (btnNotes) btnNotes.addEventListener('click', () => window.openNotesDrawer());
+const btnCloseNotes = document.getElementById('btn-close-notes');
+if (btnCloseNotes) btnCloseNotes.addEventListener('click', closeNotesDrawer);
+const btnOpenFullNotes = document.getElementById('btn-open-full-notes');
+if (btnOpenFullNotes) {
+  btnOpenFullNotes.addEventListener('click', () => {
+    closeNotesDrawer();
+    sendCommand({ action: 'open_notes_tab' });
+  });
+}
+const btnNewQuickNote = document.getElementById('btn-new-quick-note');
+if (btnNewQuickNote) {
+  btnNewQuickNote.addEventListener('click', () => {
+    activeQuickNoteId = 'note_' + Date.now();
+    const titleInput = document.getElementById('quick-note-title');
+    const bodyInput = document.getElementById('quick-note-body');
+    if (titleInput) { titleInput.value = 'New Note'; titleInput.focus(); titleInput.select(); }
+    if (bodyInput) bodyInput.value = '';
+    scheduleQuickNoteSave();
+  });
+}
+const qnTitle = document.getElementById('quick-note-title');
+if (qnTitle) qnTitle.addEventListener('input', scheduleQuickNoteSave);
+const qnBody = document.getElementById('quick-note-body');
+if (qnBody) qnBody.addEventListener('input', scheduleQuickNoteSave);
+
+const btnEasel = document.getElementById('btn-easel');
+if (btnEasel) btnEasel.addEventListener('click', () => sendCommand({ action: 'open_easel_tab' }));
+
+const btnLittleArc = document.getElementById('btn-little-arc');
+if (btnLittleArc) {
+  btnLittleArc.addEventListener('click', () => {
+    const target = (activeUrl && !activeUrl.startsWith('eclipse://')) ? activeUrl : 'https://duckduckgo.com';
+    sendCommand({ action: 'open_little_arc', url: target });
+  });
+}
+
+document.querySelectorAll('.space-pill-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const space = btn.dataset.space || 'Default';
+    sendCommand({ action: 'set_workspace', workspace: space });
+  });
+});
+
+omnibar.addEventListener('focus', () => {
+  const omnibarGo = document.getElementById('omnibar-go');
+  if (omnibarGo && !(lastState && lastState.is_loading)) {
+    omnibarGo.style.display = 'flex';
+  }
+});
+omnibar.addEventListener('blur', () => {
+  setTimeout(() => {
+    const omnibarGo = document.getElementById('omnibar-go');
+    if (omnibarGo && document.activeElement !== omnibar) {
+      omnibarGo.style.display = 'none';
+    }
+  }, 150);
+});
 
 window.addEventListener('keydown', (e) => {
   if (!e.isTrusted) return;
   const key = (e.key || '').toLowerCase();
-  // Only Command-based shortcuts are browser shortcuts. Ctrl+W must remain a
-  // text-editing shortcut in macOS inputs, not close the tab.
   const meta = e.metaKey && !e.ctrlKey;
   const shift = e.shiftKey;
+
+  if (e.key === 'Escape') {
+    if (downloadsDrawerOpen) { closeDownloadsDrawer(); e.preventDefault(); return; }
+    if (notesDrawerOpen) { closeNotesDrawer(); e.preventDefault(); return; }
+  }
 
   if (e.ctrlKey && !e.metaKey && key === 'tab') {
     e.preventDefault();
     sendCommand({ action: shift ? 'select_prev_tab' : 'select_next_tab' });
+    return;
+  }
+  if (meta && e.altKey && key === 'n') {
+    e.preventDefault();
+    const target = (activeUrl && !activeUrl.startsWith('eclipse://')) ? activeUrl : 'https://duckduckgo.com';
+    sendCommand({ action: 'open_little_arc', url: target });
     return;
   }
   if (!meta || e.altKey) return;
@@ -3128,7 +3664,17 @@ window.addEventListener('keydown', (e) => {
   if (key === 't' && shift) {
     sendCommand({ action: 'reopen_closed_tab' });
   } else if (key === 't') {
+    sendCommand({ action: 'new_tab', url: 'eclipse://newtab' });
+  } else if (key === 'k') {
     window.openCommandBar();
+  } else if (key === 'j') {
+    window.openDownloadsDrawer();
+  } else if (key === 'y' && shift) {
+    sendCommand({ action: 'tidy_tabs' });
+  } else if (key === 'n' && shift) {
+    sendCommand({ action: 'open_notes_tab' });
+  } else if (key === 'e' && shift) {
+    sendCommand({ action: 'open_easel_tab' });
   } else if (key === 'w' && shift) {
     sendCommand({ action: 'window_close' });
   } else if (key === 'w') {
@@ -3179,11 +3725,9 @@ let hoverDebounceTimer = null;
 window.popoutSidebar = function (show) {
   cancelHoverCollapse();
   if (show) {
-    document.body.classList.remove('sliding-out');
     document.body.classList.add('floating-popout');
   } else {
-    document.body.classList.add('floating-popout');
-    document.body.classList.add('sliding-out');
+    document.body.classList.remove('floating-popout');
   }
 };
 
@@ -3192,25 +3736,21 @@ function cancelHoverCollapse() {
     clearTimeout(hoverDebounceTimer);
     hoverDebounceTimer = null;
   }
-  document.body.classList.remove('sliding-out');
 }
 
-document.addEventListener('mouseleave', () => {
-  if (lastState && lastState.sidebar_collapsed && lastState.sidebar_hover_expanded) {
-    if (hoverDebounceTimer) clearTimeout(hoverDebounceTimer);
-    hoverDebounceTimer = setTimeout(() => {
-      sendCommand({ action: 'hover_collapse_sidebar' });
-    }, 40);
-  }
-});
+window.installFromWebStoreDrawer = function() {
+  const input = document.getElementById('drawer-webstore-input');
+  if (!input) return;
+  const val = input.value.trim();
+  if (!val) return;
+  sendCommand({ action: 'install_from_web_store', input: val });
+  input.value = '';
+};
 
 document.addEventListener('mouseenter', () => {
   cancelHoverCollapse();
-});
-
-window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && drawerOpen) {
-    closeSettingsDrawer();
+  if (lastState && lastState.sidebar_collapsed && lastState.sidebar_hover_expanded) {
+    document.body.classList.add('floating-popout');
   }
 });
 
@@ -3235,12 +3775,11 @@ function renderCommandSuggestions(query) {
   const q = (query || '').trim();
 
   if (q) {
-    // 1. Search Google query
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+    // 1. Search query (delegated to Rust normalize_url so configured search engine is respected)
     cmdItemsList.push({
-      title: `Search Google for "${q}"`,
+      title: `Search for "${q}"`,
       sub: 'Search in new tab',
-      url: searchUrl,
+      url: q,
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="#5E9EFF" stroke-width="2.2" width="14" height="14"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
     });
 
@@ -3353,7 +3892,7 @@ function executeCommandItem(item) {
   } else if (item.action === 'open_settings') {
     window.openPreferencesDrawer();
   } else if (item.action === 'clean_memory') {
-    if (typeof cleanMemoryNow === 'function') cleanMemoryNow();
+    sendCommand({ action: 'clean_memory' });
   } else if (item.url) {
     sendCommand({ action: 'new_tab', url: item.url });
   }
@@ -3385,14 +3924,8 @@ if (cmdInput) {
       if (cmdItemsList.length > 0 && cmdItemsList[cmdActiveIndex]) {
         executeCommandItem(cmdItemsList[cmdActiveIndex]);
       } else if (val) {
-        let target = val;
-        if (!val.includes('.') && !val.startsWith('http://') && !val.startsWith('https://')) {
-          target = `https://www.google.com/search?q=${encodeURIComponent(val)}`;
-        } else if (!/^https?:\/\//i.test(val)) {
-          target = 'https://' + val;
-        }
         closeCommandBar();
-        sendCommand({ action: 'new_tab', url: target });
+        sendCommand({ action: 'new_tab', url: val });
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();

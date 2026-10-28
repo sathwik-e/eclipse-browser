@@ -105,14 +105,26 @@ void eclipse_install_menu(EclipseMenuCallback callback) {
 
         EclipseAddItem(fileMenu, @"New Tab", @selector(performEclipseAction:), @"t",
                        NSEventModifierFlagCommand, gMenuTarget, @"new_tab");
+        EclipseAddItem(fileMenu, @"New Little Arc Window", @selector(performEclipseAction:), @"n",
+                       NSEventModifierFlagCommand | NSEventModifierFlagOption, gMenuTarget, @"little_arc");
+        EclipseAddItem(fileMenu, @"New Note", @selector(performEclipseAction:), @"n",
+                       NSEventModifierFlagCommand | NSEventModifierFlagShift, gMenuTarget, @"open_notes");
+        EclipseAddItem(fileMenu, @"New Easel", @selector(performEclipseAction:), @"e",
+                       NSEventModifierFlagCommand | NSEventModifierFlagShift, gMenuTarget, @"open_easel");
+        EclipseAddItem(fileMenu, @"Tidy Tabs", @selector(performEclipseAction:), @"y",
+                       NSEventModifierFlagCommand | NSEventModifierFlagShift, gMenuTarget, @"tidy_tabs");
         EclipseAddItem(fileMenu, @"Close Tab", @selector(performEclipseAction:), @"w",
                        NSEventModifierFlagCommand, gMenuTarget, @"close_tab");
         EclipseAddItem(fileMenu, @"Reopen Closed Tab", @selector(performEclipseAction:), @"t",
                        NSEventModifierFlagCommand | NSEventModifierFlagShift, gMenuTarget,
                        @"reopen_closed_tab");
         [fileMenu addItem:[NSMenuItem separatorItem]];
+        EclipseAddItem(fileMenu, @"Command Bar…", @selector(performEclipseAction:), @"k",
+                       NSEventModifierFlagCommand, gMenuTarget, @"command_bar");
         EclipseAddItem(fileMenu, @"Open Location…", @selector(performEclipseAction:), @"l",
                        NSEventModifierFlagCommand, gMenuTarget, @"focus_omnibar");
+        EclipseAddItem(fileMenu, @"Downloads", @selector(performEclipseAction:), @"j",
+                       NSEventModifierFlagCommand, gMenuTarget, @"open_downloads");
         EclipseAddItem(fileMenu, @"Bookmark Tab", @selector(performEclipseAction:), @"d",
                        NSEventModifierFlagCommand, gMenuTarget, @"favorite_tab");
         [fileMenu addItem:[NSMenuItem separatorItem]];
@@ -255,6 +267,10 @@ void eclipse_bring_view_to_front(void *viewPtr) {
         NSView *view = (__bridge NSView *)viewPtr;
         NSView *superview = [view superview];
         if (superview != nil) {
+            NSArray *subviews = [superview subviews];
+            if ([subviews count] > 0 && [subviews lastObject] == view) {
+                return;
+            }
             [superview addSubview:view positioned:NSWindowAbove relativeTo:nil];
         }
     }
@@ -270,6 +286,7 @@ void eclipse_configure_window(void *windowPtr) {
 
         NSView *contentView = [window contentView];
         if (contentView != nil) {
+            contentView.wantsLayer = YES;
             NSTrackingArea *trackingArea = [[NSTrackingArea alloc]
                 initWithRect:NSZeroRect
                 options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect
@@ -346,116 +363,49 @@ void eclipse_compile_content_rule_list_if_needed(void) {
     NSString *json = @"["
         "  {"
         "    \"trigger\": {"
-        "      \"url-filter\": \".*\","
-        "      \"if-domain\": ["
-        "        \"*doubleclick.net\","
-        "        \"*googlesyndication.com\","
-        "        \"*googleadservices.com\","
-        "        \"*pagead2.googlesyndication.com\","
-        "        \"*adservice.google.com\","
-        "        \"*googleads.g.doubleclick.net\","
-        "        \"*securepubads.g.doubleclick.net\","
-        "        \"*ad.doubleclick.net\","
-        "        \"*stats.g.doubleclick.net\","
-        "        \"*adnxs.com\","
-        "        \"*criteo.com\","
-        "        \"*criteo.net\","
-        "        \"*rubiconproject.com\","
-        "        \"*pubmatic.com\","
-        "        \"*openx.net\","
-        "        \"*casalemedia.com\","
-        "        \"*smartadserver.com\","
-        "        \"*advertising.com\","
-        "        \"*bidswitch.net\","
-        "        \"*contextweb.com\","
-        "        \"*serving-sys.com\","
-        "        \"*flashtalking.com\","
-        "        \"*sovrn.com\","
-        "        \"*lijit.com\","
-        "        \"*spotxchange.com\","
-        "        \"*springserve.com\","
-        "        \"*triplelift.com\","
-        "        \"*teads.tv\","
-        "        \"*inmobi.com\","
-        "        \"*adtech.de\","
-        "        \"*media.net\","
-        "        \"*amazon-adsystem.com\","
-        "        \"*a-ad.adroll.com\","
-        "        \"*adroll.com\","
-        "        \"*quantserve.com\","
-        "        \"*scorecardresearch.com\","
-        "        \"*outbrain.com\","
-        "        \"*taboola.com\","
-        "        \"*revcontent.com\","
-        "        \"*mgid.com\","
-        "        \"*zemanta.com\","
-        "        \"*zergnet.com\","
-        "        \"*moatads.com\","
-        "        \"*iasds01.com\","
-        "        \"*popads.net\","
-        "        \"*popcash.net\","
-        "        \"*propellerads.com\","
-        "        \"*exoclick.com\","
-        "        \"*trafficjunky.com\","
-        "        \"*juicyads.com\","
-        "        \"*ad-delivery.net\","
-        "        \"*adsafeprotected.com\","
-        "        \"*yieldmo.com\","
-        "        \"*sharethrough.com\","
-        "        \"*exponential.com\","
-        "        \"*undertone.com\","
-        "        \"*conversantmedia.com\","
-        "        \"*unrulymedia.com\","
-        "        \"*adsystem.com\","
-        "        \"*adtarget.me\","
-        "        \"*adblade.com\","
-        "        \"*nativeads.com\","
-        "        \"*adsterra.com\","
-        "        \"*buysellads.com\","
-        "        \"*mediavine.com\","
-        "        \"*adthrive.com\","
-        "        \"*shemedia.com\","
-        "        \"*carbonads.net\","
-        "        \"*google-analytics.com\","
-        "        \"*googletagmanager.com\","
-        "        \"*hotjar.com\","
-        "        \"*clarity.ms\","
-        "        \"*mouseflow.com\","
-        "        \"*fullstory.com\","
-        "        \"*segment.io\","
-        "        \"*segment.com\","
-        "        \"*mixpanel.com\","
-        "        \"*amplitude.com\","
-        "        \"*optimizely.com\","
-        "        \"*statcounter.com\","
-        "        \"*newrelic.com\","
-        "        \"*crazyegg.com\""
-        "      ]"
+        "      \"url-filter\": \"^https?://([a-z0-9.-]+\\\\.)?(doubleclick\\\\.net|googlesyndication\\\\.com|googleadservices\\\\.com|adservice\\\\.google\\\\.com|2mdn\\\\.net|adnxs\\\\.com|criteo\\\\.com|criteo\\\\.net|rubiconproject\\\\.com|pubmatic\\\\.com|openx\\\\.net|casalemedia\\\\.com|smartadserver\\\\.com)[/:?#]\""
         "    },"
         "    \"action\": { \"type\": \"block\" }"
         "  },"
         "  {"
-        "    \"trigger\": { \"url-filter\": \".*youtube\\\\.com/youtubei/v1/player/ad_break.*\" },"
+        "    \"trigger\": {"
+        "      \"url-filter\": \"^https?://([a-z0-9.-]+\\\\.)?(advertising\\\\.com|bidswitch\\\\.net|contextweb\\\\.com|serving-sys\\\\.com|flashtalking\\\\.com|sovrn\\\\.com|lijit\\\\.com|spotxchange\\\\.com|springserve\\\\.com|triplelift\\\\.com|teads\\\\.tv|inmobi\\\\.com|adtech\\\\.de|media\\\\.net|amazon-adsystem\\\\.com)[/:?#]\""
+        "    },"
         "    \"action\": { \"type\": \"block\" }"
         "  },"
         "  {"
-        "    \"trigger\": { \"url-filter\": \".*youtube\\\\.com/pagead/.*\" },"
+        "    \"trigger\": {"
+        "      \"url-filter\": \"^https?://([a-z0-9.-]+\\\\.)?(adroll\\\\.com|quantserve\\\\.com|scorecardresearch\\\\.com|outbrain\\\\.com|taboola\\\\.com|revcontent\\\\.com|mgid\\\\.com|zemanta\\\\.com|zergnet\\\\.com|moatads\\\\.com|iasds01\\\\.com|adsafeprotected\\\\.com|yieldmo\\\\.com|sharethrough\\\\.com)[/:?#]\""
+        "    },"
         "    \"action\": { \"type\": \"block\" }"
         "  },"
         "  {"
-        "    \"trigger\": { \"url-filter\": \".*youtube\\\\.com/api/stats/ads.*\" },"
+        "    \"trigger\": {"
+        "      \"url-filter\": \"^https?://([a-z0-9.-]+\\\\.)?(popads\\\\.net|popcash\\\\.net|propellerads\\\\.com|exoclick\\\\.com|trafficjunky\\\\.com|juicyads\\\\.com|ad-delivery\\\\.net|exponential\\\\.com|undertone\\\\.com|conversantmedia\\\\.com|unrulymedia\\\\.com|adblade\\\\.com|nativeads\\\\.com|adsterra\\\\.com)[/:?#]\""
+        "    },"
         "    \"action\": { \"type\": \"block\" }"
         "  },"
         "  {"
-        "    \"trigger\": { \"url-filter\": \".*\" },"
+        "    \"trigger\": {"
+        "      \"url-filter\": \"^https?://([a-z0-9.-]+\\\\.)?(buysellads\\\\.com|mediavine\\\\.com|adthrive\\\\.com|shemedia\\\\.com|carbonads\\\\.net|google-analytics\\\\.com|googletagmanager\\\\.com|hotjar\\\\.com|clarity\\\\.ms|mouseflow\\\\.com|fullstory\\\\.com|segment\\\\.io|mixpanel\\\\.com|amplitude\\\\.com|statcounter\\\\.com|crazyegg\\\\.com)[/:?#]\","
+        "      \"load-type\": [\"third-party\"]"
+        "    },"
+        "    \"action\": { \"type\": \"block\" }"
+        "  },"
+        "  {"
+        "    \"trigger\": { \"url-filter\": \"^https?://([a-z0-9.-]+\\\\.)?youtube\\\\.com/(youtubei/v1/player/ad_break|pagead/|api/stats/ads|ptracking|get_midroll_info)\" },"
+        "    \"action\": { \"type\": \"block\" }"
+        "  },"
+        "  {"
+        "    \"trigger\": { \"url-filter\": \"^https?://\" },"
         "    \"action\": {"
         "      \"type\": \"css-display-none\","
-        "      \"selector\": \".adsbygoogle, [id^=google_ads_], .ad-banner, .ad-unit, .advertisement, .ad-container, [data-ad-slot], .ytp-ad-overlay-container, .ytp-ad-message-container, ytd-ad-slot-renderer, #player-ads, .sparkles-light-cta, ytd-promoted-sparkles-web-renderer, ytd-display-ad-renderer, ytd-banner-promo-renderer, ytd-statement-banner-renderer, .trc_related_container, .outbrain, .taboola, [aria-label*=Sponsored i], [aria-label*=advertisement i]\""
+        "      \"selector\": \".adsbygoogle, [id^=google_ads_], .ad-banner, .ad-unit, .advertisement, .ad-container, [data-ad-slot], .ytp-ad-overlay-container, .ytp-ad-message-container, ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ytd-banner-promo-renderer, ytd-statement-banner-renderer, #masthead-ad, #player-ads, .sparkles-light-cta, ytd-promoted-sparkles-web-renderer, ytd-display-ad-renderer, ytd-promoted-video-renderer, ytd-compact-promoted-video-renderer, ytd-ads-engagement-panel-content-renderer, ytd-enforcement-message-view-model, .trc_related_container, .outbrain, .taboola, .ytp-ad-player-overlay, .ytp-ad-progress\""
         "    }"
         "  }"
         "]";
 
-    [store compileContentRuleListForIdentifier:@"eclipse-native-shields-v1"
+    [store compileContentRuleListForIdentifier:@"eclipse-native-shields-v3"
                        encodedContentRuleList:json
                             completionHandler:^(WKContentRuleList *list, NSError *error) {
         gIsCompilingRuleList = NO;
@@ -506,11 +456,29 @@ void eclipse_style_webview_card(void *viewPtr) {
     @autoreleasepool {
         NSView *view = (__bridge NSView *)viewPtr;
         view.wantsLayer = YES;
-        view.layer.cornerRadius = 10.0;
+        view.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
+        view.layer.cornerRadius = 12.0;
+        if (@available(macOS 10.15, *)) {
+            view.layer.cornerCurve = kCACornerCurveContinuous;
+        }
         view.layer.masksToBounds = YES;
         view.layer.borderWidth = 1.0;
-        view.layer.borderColor = [NSColor colorWithCalibratedWhite:1.0 alpha:0.12].CGColor;
+        view.layer.borderColor = [NSColor colorWithCalibratedWhite:1.0 alpha:0.13].CGColor;
         eclipse_enable_swipe_gestures(viewPtr);
+    }
+}
+
+void eclipse_style_sidebar_view(void *viewPtr) {
+    if (viewPtr == NULL) return;
+    @autoreleasepool {
+        NSView *view = (__bridge NSView *)viewPtr;
+        view.wantsLayer = YES;
+        view.layerContentsRedrawPolicy = NSViewLayerContentsRedrawOnSetNeedsDisplay;
+        view.layer.cornerRadius = 12.0;
+        if (@available(macOS 10.15, *)) {
+            view.layer.cornerCurve = kCACornerCurveContinuous;
+        }
+        view.layer.masksToBounds = YES;
     }
 }
 
@@ -520,32 +488,101 @@ void eclipse_animate_view_frame(void *viewPtr, double x, double y, double width,
         NSView *view = (__bridge NSView *)viewPtr;
         NSView *superview = [view superview];
         if (superview == nil) return;
+        view.wantsLayer = YES;
+
         CGFloat actualY = y;
         if (![superview isFlipped]) {
             actualY = superview.frame.size.height - y - height;
         }
         NSRect targetFrame = NSMakeRect(x, actualY, width, height);
+        NSRect currentFrame = view.frame;
 
         if (duration <= 0.001) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            [view.layer removeAllAnimations];
             [view setFrame:targetFrame];
+            [CATransaction commit];
             return;
         }
 
-        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-            ctx.duration = duration;
-            ctx.timingFunction = [CAMediaTimingFunction functionWithControlPoints:(float)0.16 :(float)1.0 :(float)0.3 :(float)1.0];
-            ctx.allowsImplicitAnimation = YES;
-            [[view animator] setFrame:targetFrame];
-        }];
+        BOOL sizeChanged = (fabs(currentFrame.size.width - width) > 0.5 ||
+                            fabs(currentFrame.size.height - height) > 0.5);
+
+        CAMediaTimingFunction *springCurve =
+            [CAMediaTimingFunction functionWithControlPoints:(float)0.22 :(float)1.0 :(float)0.36 :(float)1.0];
+
+        if (!sizeChanged) {
+            [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+                ctx.duration = duration;
+                ctx.timingFunction = springCurve;
+                ctx.allowsImplicitAnimation = YES;
+                [[view animator] setFrameOrigin:targetFrame.origin];
+            }];
+        } else {
+            CALayer *layer = view.layer;
+            CALayer *pres = [layer presentationLayer] ?: layer;
+            CGPoint oldPos = pres.position;
+            CGRect oldBounds = pres.bounds;
+
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            [view setFrame:targetFrame];
+            [CATransaction commit];
+
+            if (layer != nil) {
+                CABasicAnimation *posAnim = [CABasicAnimation animationWithKeyPath:@"position"];
+                posAnim.fromValue = [NSValue valueWithPoint:NSPointFromCGPoint(oldPos)];
+                posAnim.toValue = [NSValue valueWithPoint:NSPointFromCGPoint(layer.position)];
+                posAnim.duration = duration;
+                posAnim.timingFunction = springCurve;
+
+                CABasicAnimation *boundsAnim = [CABasicAnimation animationWithKeyPath:@"bounds"];
+                boundsAnim.fromValue = [NSValue valueWithRect:NSRectFromCGRect(oldBounds)];
+                boundsAnim.toValue = [NSValue valueWithRect:NSRectFromCGRect(layer.bounds)];
+                boundsAnim.duration = duration;
+                boundsAnim.timingFunction = springCurve;
+
+                [layer addAnimation:posAnim forKey:@"eclipsePositionAnim"];
+                [layer addAnimation:boundsAnim forKey:@"eclipseBoundsAnim"];
+            }
+        }
     }
 }
 
-static double gSidebarWidth = 240.0;
+static double gSidebarWidth = 232.0;
 static BOOL gIsHoverExpanded = NO;
+static CFAbsoluteTime gOutsideSince = 0.0;
 static void (*gEdgeExpandCallback)(void) = NULL;
 static void (*gEdgeCollapseCallback)(void) = NULL;
 static id gLocalMouseMonitor = nil;
 static NSTimer *gMousePollTimer = nil;
+
+static void evaluateEdgeHoverAtWindowPoint(NSPoint pt, CGFloat winH) {
+    if (gEdgeExpandCallback == NULL || gEdgeCollapseCallback == NULL) return;
+
+    if (!gIsHoverExpanded) {
+        gOutsideSince = 0.0;
+        if (pt.x >= -2.0 && pt.x <= 12.0 && pt.y >= 0.0 && pt.y <= winH) {
+            gIsHoverExpanded = YES;
+            gEdgeExpandCallback();
+        }
+    } else {
+        BOOL isOutside = (pt.x > (gSidebarWidth + 24.0) || pt.x < -20.0 || pt.y < -10.0 || pt.y > (winH + 10.0));
+        if (!isOutside) {
+            gOutsideSince = 0.0;
+        } else {
+            CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+            if (gOutsideSince <= 0.0) {
+                gOutsideSince = now;
+            } else if ((now - gOutsideSince) >= 0.075) {
+                gIsHoverExpanded = NO;
+                gOutsideSince = 0.0;
+                gEdgeCollapseCallback();
+            }
+        }
+    }
+}
 
 static void checkMousePosition(NSPoint screenPt) {
     if (gEdgeExpandCallback == NULL || gEdgeCollapseCallback == NULL) return;
@@ -554,27 +591,13 @@ static void checkMousePosition(NSPoint screenPt) {
     if ((window.styleMask & NSWindowStyleMaskFullScreen) != 0) return;
 
     NSRect windowFrame = [window frame];
-    if (!NSPointInRect(screenPt, windowFrame)) {
-        if (gIsHoverExpanded) {
-            gEdgeCollapseCallback();
-        }
-        return;
-    }
-
-    CGFloat winX = screenPt.x - windowFrame.origin.x;
-    if (!gIsHoverExpanded) {
-        if (winX >= 0.0 && winX <= 14.0) {
-            gEdgeExpandCallback();
-        }
-    } else {
-        if (winX > (gSidebarWidth + 20.0) || winX < -15.0) {
-            gEdgeCollapseCallback();
-        }
-    }
+    NSPoint pt = NSMakePoint(screenPt.x - windowFrame.origin.x, screenPt.y - windowFrame.origin.y);
+    evaluateEdgeHoverAtWindowPoint(pt, windowFrame.size.height);
 }
 
 void eclipse_set_hover_expanded(int is_expanded, double sidebar_width) {
     gIsHoverExpanded = is_expanded ? YES : NO;
+    gOutsideSince = 0.0;
     if (sidebar_width > 50.0) {
         gSidebarWidth = sidebar_width;
     }
@@ -589,23 +612,14 @@ void eclipse_install_edge_monitor(void (*expand_cb)(void), void (*collapse_cb)(v
                                                                    handler:^NSEvent *(NSEvent *event) {
             NSWindow *window = [event window];
             if (window != nil && [window isKeyWindow] && ((window.styleMask & NSWindowStyleMaskFullScreen) == 0)) {
-                NSPoint pt = [event locationInWindow];
-                if (!gIsHoverExpanded) {
-                    if (pt.x >= 0.0 && pt.x <= 14.0) {
-                        if (gEdgeExpandCallback) gEdgeExpandCallback();
-                    }
-                } else {
-                    if (pt.x > (gSidebarWidth + 20.0) || pt.x < -15.0) {
-                        if (gEdgeCollapseCallback) gEdgeCollapseCallback();
-                    }
-                }
+                evaluateEdgeHoverAtWindowPoint([event locationInWindow], window.frame.size.height);
             }
             return event;
         }];
     }
 
     if (gMousePollTimer == nil) {
-        gMousePollTimer = [NSTimer scheduledTimerWithTimeInterval:0.06
+        gMousePollTimer = [NSTimer scheduledTimerWithTimeInterval:0.032
                                                           repeats:YES
                                                             block:^(NSTimer * _Nonnull timer) {
             (void)timer;

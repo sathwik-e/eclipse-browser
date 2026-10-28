@@ -115,8 +115,8 @@ if command -v hdiutil >/dev/null 2>&1 || command -v diskutil >/dev/null 2>&1; th
     rm -rf "$DMG_STAGING"
     mkdir -p "$DMG_STAGING"
     cp -R "$BUNDLE_DIR" "$DMG_STAGING/"
-    ln -s /Applications "$DMG_STAGING/Applications"
     xattr -cr "$DMG_STAGING"
+    ln -s /Applications "$DMG_STAGING/Applications"
 
     dmg_ok=0
     if command -v hdiutil >/dev/null 2>&1; then
@@ -133,9 +133,17 @@ if command -v hdiutil >/dev/null 2>&1 || command -v diskutil >/dev/null 2>&1; th
             dmg_ok=1
         fi
     fi
+    if [ "$dmg_ok" -eq 0 ] && [ -f "scripts/make_dmg.py" ]; then
+        if python3 scripts/make_dmg.py "$DMG_STAGING" "Eclipse" "Eclipse-Installer.dmg" \
+            && [ -f "Eclipse-Installer.dmg" ]; then
+            dmg_ok=1
+        fi
+    fi
     rm -rf "$DMG_STAGING"
     if [ "$dmg_ok" -eq 1 ]; then
         xattr -cr "Eclipse-Installer.dmg"
+        cp -f "Eclipse-Installer.dmg" "new.dmg"
+        xattr -cr "new.dmg"
     else
         echo "disk image creation is unavailable in this environment; using a zip instead"
     fi

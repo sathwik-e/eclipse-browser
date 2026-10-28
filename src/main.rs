@@ -31,12 +31,15 @@ fn main() {
         .with_title("Eclipse")
         .with_inner_size(LogicalSize::new(initial_width, initial_height))
         .with_min_inner_size(LogicalSize::new(860.0, 560.0))
-        .with_transparent(true)
+        // Opaque: menu.m paints a solid window background, so per-pixel
+        // window transparency would only cost compositing work.
         .with_titlebar_transparent(true)
         .with_fullsize_content_view(true)
         .with_title_hidden(true)
         .with_titlebar_buttons_hidden(true)
         .with_movable_by_window_background(false)
+        // A native tab bar would cover the custom chrome.
+        .with_automatic_window_tabbing(false)
         .build(&event_loop)
         .expect("Failed to create native macOS window");
 
@@ -89,8 +92,6 @@ fn main() {
     }
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
-
         match event {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -101,6 +102,11 @@ fn main() {
                 ..
             } => {
                 *control_flow = ControlFlow::Exit;
+            }
+
+            // Also delivered when AppKit terminates the app (⌘Q).
+            Event::LoopDestroyed => {
+                app.shutdown();
             }
 
             Event::WindowEvent {
@@ -117,11 +123,19 @@ fn main() {
                 app.resize(logical.width, logical.height);
             }
 
-            Event::MainEventsCleared => {
-                // Coalesce chrome updates to one per display frame instead of
-                // one per page event/IPC message.
-                if let Some(deadline) = app.pump_state() {
-                    *control_flow = ControlFlow::WaitUntil(deadline);
+            // The last event of every loop iteration: run deferred work
+            // (chrome updates are coalesced to one per display frame) and
+            // sleep until the next deadline. Deciding here, and only here,
+            // keeps a WaitUntil from being overwritten by later events.
+            Event::RedrawEventsCleared => {
+                if !matches!(
+                    *control_flow,
+                    ControlFlow::Exit | ControlFlow::ExitWithCode(_)
+                ) {
+                    *control_flow = match app.pump() {
+                        Some(deadline) => ControlFlow::WaitUntil(deadline),
+                        None => ControlFlow::Wait,
+                    };
                 }
             }
 
@@ -174,6 +188,9 @@ fn main() {
                 UserEvent::WebContentTerminated { tab_id } => {
                     app.handle_web_content_terminated(tab_id);
                 }
+                UserEvent::ExtensionDownloaded { ext_id, result } => {
+                    app.handle_extension_downloaded(ext_id, result);
+                }
                 UserEvent::MenuAction(action) => {
                     app.handle_menu_action(&action);
                 }
@@ -185,9 +202,6 @@ fn main() {
                 }
                 UserEvent::HoverCollapseSidebar => {
                     app.hover_collapse_sidebar();
-                }
-                UserEvent::FinishSidebarCollapse(generation) => {
-                    app.finish_sidebar_collapse(generation);
                 }
                 UserEvent::CloseWindow => {
                     *control_flow = ControlFlow::Exit;

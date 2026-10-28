@@ -29,10 +29,11 @@ pub const MAX_ZOOM: f64 = 3.0;
 /// is always pushed.
 const UNVERSIONED: u64 = u64::MAX;
 
-/// Runs an internal page's flush hook (settings, notes and easel post their
-/// debounced edits synchronously from it). Always evaluates to `true`, so
-/// the completion callback fires even when the page has no hook.
-const FLUSH_SCRIPT: &str = "(function () { try { if (typeof window.__eclipseFlush === 'function') window.__eclipseFlush(); } catch (_) {} return true; })()";
+/// Runs an internal page's or the sidebar's flush hook (settings, notes,
+/// easel and the sidebar's quick note post their debounced edits
+/// synchronously from it). Always evaluates to `true`, so the completion
+/// callback fires even when the page has no hook.
+pub(crate) const FLUSH_SCRIPT: &str = "(function () { try { if (typeof window.__eclipseFlush === 'function') window.__eclipseFlush(); } catch (_) {} return true; })()";
 
 /// `NavState::native_adblock` values (0 until the webview is built).
 const NATIVE_ADBLOCK_OFF: u8 = 1;
@@ -107,17 +108,18 @@ impl NavState {
 
     /// Navigation policy: web pages may not open internal pages (other than
     /// the new-tab page, which holds nothing) in the tab or in frames. An
-    /// internal page may, and so may the browser itself: a load it started
-    /// (exactly that URL, once) or a main-frame back/forward navigation,
-    /// which can only return to a page this tab already showed.
-    fn allows_navigation(&self, url: &str, main_frame_back_forward: bool) -> bool {
+    /// internal page may, and so may the browser itself: a main-frame load it
+    /// started (exactly that URL, once; a subframe asking for the same URL
+    /// neither gets nor spends the grant) or a main-frame back/forward
+    /// navigation, which can only return to a page this tab already showed.
+    fn allows_navigation(&self, url: &str, context: PolicyContext) -> bool {
         if !is_eclipse_scheme(url) {
             return true;
         }
         self.current_is_internal.load(Ordering::Relaxed)
-            || main_frame_back_forward
+            || (context.main_frame && context.back_forward)
             || is_newtab_url(url)
-            || self.take_browser_target(url)
+            || (context.main_frame && self.take_browser_target(url))
     }
 
     fn set_browser_target(&self, url: Option<String>) {
@@ -157,6 +159,15 @@ impl NavState {
             .store(was_internal && !internal, Ordering::Relaxed);
         self.set_committed_url(url);
         self.epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The committed document finished loading. The browser target is left
+    /// alone: this document already cleared it when it committed, and a
+    /// browser load started since (whose policy decision may still be
+    /// pending) must keep its grant.
+    fn note_finished(&self) {
+        self.finished_epoch
+            .store(self.epoch.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 
     fn set_committed_url(&self, url: &str) {
@@ -450,7 +461,7 @@ impl Tab {
             })
             .with_navigation_handler(move |url| {
                 let context = navigation_policy_context();
-                let allowed = nav_policy.allows_navigation(&url, context.back_forward);
+                let allowed = nav_policy.allows_navigation(&url, context);
                 if allowed && context.main_frame {
                     nav_policy.prepare_main_frame_load(&url);
                 }
@@ -536,10 +547,7 @@ impl Tab {
                         UserEvent::PageStarted { tab_id, url }
                     }
                     PageLoadEvent::Finished => {
-                        nav_load.set_browser_target(None);
-                        nav_load
-                            .finished_epoch
-                            .store(nav_load.epoch.load(Ordering::Relaxed), Ordering::Relaxed);
+                        nav_load.note_finished();
                         UserEvent::PageFinished { tab_id, url }
                     }
                 };
@@ -703,9 +711,7 @@ impl Tab {
         self.nav
             .browser_load_pending
             .store(false, Ordering::Relaxed);
-        self.nav
-            .finished_epoch
-            .store(self.nav.epoch.load(Ordering::Relaxed), Ordering::Relaxed);
+        self.nav.note_finished();
     }
 
     /// The load the browser started ended without a new document (it became
@@ -2129,17 +2135,30 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    const MAIN: PolicyContext = PolicyContext {
+        main_frame: true,
+        back_forward: false,
+    };
+    const BACK: PolicyContext = PolicyContext {
+        main_frame: true,
+        back_forward: true,
+    };
+    const SUBFRAME: PolicyContext = PolicyContext {
+        main_frame: false,
+        back_forward: false,
+    };
+
     #[test]
     fn web_pages_cannot_open_internal_pages() {
         let nav = NavState::default();
-        assert!(nav.allows_navigation("https://example.com/", false));
-        assert!(nav.allows_navigation("about:blank", false));
-        assert!(nav.allows_navigation("eclipse://localhost/newtab", false));
-        assert!(!nav.allows_navigation("eclipse://localhost/settings", false));
-        assert!(!nav.allows_navigation("ECLIPSE://localhost/notes", false));
+        assert!(nav.allows_navigation("https://example.com/", MAIN));
+        assert!(nav.allows_navigation("about:blank", MAIN));
+        assert!(nav.allows_navigation("eclipse://localhost/newtab", MAIN));
+        assert!(!nav.allows_navigation("eclipse://localhost/settings", MAIN));
+        assert!(!nav.allows_navigation("ECLIPSE://localhost/notes", MAIN));
 
         nav.current_is_internal.store(true, Ordering::Relaxed);
-        assert!(nav.allows_navigation("eclipse://localhost/easel", false));
+        assert!(nav.allows_navigation("eclipse://localhost/easel", MAIN));
     }
 
     #[test]
@@ -2147,18 +2166,43 @@ mod tests {
         let nav = NavState::default();
         nav.begin_browser_load("eclipse://localhost/settings");
         // Another internal page (a racing subframe of the old document).
-        assert!(!nav.allows_navigation("eclipse://localhost/notes", false));
+        assert!(!nav.allows_navigation("eclipse://localhost/notes", MAIN));
         // The target itself, once (WebKit may add a trailing slash).
-        assert!(nav.allows_navigation("eclipse://localhost/settings/", false));
-        assert!(!nav.allows_navigation("eclipse://localhost/settings", false));
+        assert!(nav.allows_navigation("eclipse://localhost/settings/", MAIN));
+        assert!(!nav.allows_navigation("eclipse://localhost/settings", MAIN));
 
         // A grant left by a load that never committed is gone after the
         // next commit, and a web load leaves none.
         nav.begin_browser_load("eclipse://localhost/notes");
         nav.note_commit("https://example.com/");
-        assert!(!nav.allows_navigation("eclipse://localhost/notes", false));
+        assert!(!nav.allows_navigation("eclipse://localhost/notes", MAIN));
         nav.begin_browser_load("https://example.com/page");
-        assert!(!nav.allows_navigation("eclipse://localhost/notes", false));
+        assert!(!nav.allows_navigation("eclipse://localhost/notes", MAIN));
+    }
+
+    #[test]
+    fn subframes_neither_use_nor_spend_the_browser_grant() {
+        let nav = NavState::default();
+        nav.note_commit("https://example.com/");
+        nav.begin_browser_load("eclipse://localhost/settings");
+        // The website's iframe asks for the exact target first.
+        assert!(!nav.allows_navigation("eclipse://localhost/settings", SUBFRAME));
+        // The browser's own main-frame load still gets through, once.
+        assert!(nav.allows_navigation("eclipse://localhost/settings", MAIN));
+        assert!(!nav.allows_navigation("eclipse://localhost/settings", MAIN));
+        // Frames of an internal page may load internal pages.
+        nav.note_commit("eclipse://localhost/settings");
+        assert!(nav.allows_navigation("eclipse://localhost/notes", SUBFRAME));
+    }
+
+    #[test]
+    fn the_old_documents_finish_does_not_end_a_new_grant() {
+        let nav = NavState::default();
+        nav.note_commit("https://example.com/");
+        nav.begin_browser_load("eclipse://localhost/notes");
+        // The old page's didFinish arrives before the policy decision.
+        nav.note_finished();
+        assert!(nav.allows_navigation("eclipse://localhost/notes", MAIN));
     }
 
     #[test]
@@ -2166,9 +2210,9 @@ mod tests {
         let nav = NavState::default();
         nav.note_commit("https://example.com/");
         // Swipe or context-menu Back from a website to Settings.
-        assert!(nav.allows_navigation("eclipse://localhost/settings", true));
+        assert!(nav.allows_navigation("eclipse://localhost/settings", BACK));
         // Not a history navigation: still refused.
-        assert!(!nav.allows_navigation("eclipse://localhost/settings", false));
+        assert!(!nav.allows_navigation("eclipse://localhost/settings", MAIN));
     }
 
     #[test]

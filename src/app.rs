@@ -124,6 +124,8 @@ pub struct BrowserApp {
     quit_deadline: Option<Instant>,
     /// Internal tabs whose flush quitting still waits for.
     quit_waiting: HashSet<usize>,
+    /// Quitting still waits for the sidebar's flush (its quick note).
+    sidebar_flush_pending: bool,
     sidebar_crashes: Vec<Instant>,
     /// A sidebar in a crash loop is reloaded only after a pause.
     sidebar_reload_due: Option<Instant>,
@@ -260,6 +262,7 @@ impl BrowserApp {
             closing_tabs: HashMap::new(),
             quit_deadline: None,
             quit_waiting: HashSet::new(),
+            sidebar_flush_pending: false,
             sidebar_crashes: Vec::new(),
             sidebar_reload_due: None,
             download_items: HashMap::new(),
@@ -607,12 +610,28 @@ impl BrowserApp {
         }
     }
 
+    /// The sidebar's flush hook returned: its pending quick-note save has
+    /// been delivered.
+    pub fn handle_sidebar_flushed(&mut self) {
+        if std::mem::take(&mut self.sidebar_flush_pending) && self.perf {
+            eprintln!("[perf] sidebar flushed before quitting");
+        }
+    }
+
     /// ⌘Q, the window's close control and smoke tests: open internal pages
-    /// deliver their pending edits first (see `ready_to_quit`).
+    /// and the sidebar deliver their pending edits first (see
+    /// `ready_to_quit`).
     pub fn request_quit(&mut self) {
         if self.quit_deadline.is_some() {
             return;
         }
+        let proxy = self.proxy.clone();
+        self.sidebar_flush_pending = self
+            .sidebar_webview
+            .evaluate_script_with_callback(crate::tab::FLUSH_SCRIPT, move |_| {
+                let _ = proxy.send_event(UserEvent::SidebarFlushed);
+            })
+            .is_ok();
         for tab in &self.tabs {
             let id = tab.id;
             let proxy = self.proxy.clone();
@@ -630,11 +649,14 @@ impl BrowserApp {
         }
     }
 
-    /// Quitting was requested and every internal page has flushed (or the
-    /// wait timed out).
+    /// Quitting was requested and every internal page and the sidebar have
+    /// flushed (or the wait timed out).
     pub fn ready_to_quit(&self) -> bool {
-        self.quit_deadline
-            .is_some_and(|deadline| self.quit_waiting.is_empty() || Instant::now() >= deadline)
+        quit_ready(
+            self.quit_deadline,
+            !self.quit_waiting.is_empty() || self.sidebar_flush_pending,
+            Instant::now(),
+        )
     }
 
     /// After tabs were closed: Preferences' "current site" must not keep
@@ -2975,6 +2997,12 @@ fn truncate_message(message: &str, limit: usize) -> String {
     truncated
 }
 
+/// Whether the app can exit now: quitting was requested (`deadline` is set)
+/// and nothing is still flushing, or the wait for it timed out.
+fn quit_ready(deadline: Option<Instant>, flushes_pending: bool, now: Instant) -> bool {
+    deadline.is_some_and(|deadline| !flushes_pending || now >= deadline)
+}
+
 /// The "current site" after tabs closed: `current` while a tab still shows
 /// it, else the most recently active open web page, else nothing.
 fn surviving_web_url(current: &str, open: &[(&str, Instant)]) -> String {
@@ -3385,6 +3413,19 @@ mod tests {
 
     fn config() -> BrowserConfig {
         BrowserConfig::default()
+    }
+
+    #[test]
+    fn quitting_waits_for_pending_flushes_until_the_deadline() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(1);
+        // Not quitting at all.
+        assert!(!quit_ready(None, false, now));
+        // A page or the sidebar is still flushing.
+        assert!(!quit_ready(Some(deadline), true, now));
+        assert!(quit_ready(Some(deadline), false, now));
+        // The wait timed out.
+        assert!(quit_ready(Some(deadline), true, deadline));
     }
 
     #[test]

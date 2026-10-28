@@ -654,12 +654,22 @@ function flushSave() {
   setStatus('Saved');
 }
 
+// A link card's URL is committed on 'change' (Enter or blur); leaving the
+// page fires neither, so commit a URL still being typed before saving.
+function flushBeforeLeaving() {
+  const active = document.activeElement;
+  if (active && active.classList && active.classList.contains('easel-link-input')) {
+    active.dispatchEvent(new Event('change'));
+  }
+  flushSave();
+}
+
 // Eclipse calls __eclipseFlush before it closes the tab, quits or navigates
 // away; pagehide and visibilitychange cover everything else.
-window.__eclipseFlush = flushSave;
-window.addEventListener('pagehide', flushSave);
+window.__eclipseFlush = flushBeforeLeaving;
+window.addEventListener('pagehide', flushBeforeLeaving);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') flushSave();
+  if (document.visibilityState === 'hidden') flushBeforeLeaving();
 });
 
 // ---- Boards ---------------------------------------------------------------

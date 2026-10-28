@@ -4015,6 +4015,10 @@ function flushQuickNoteSave() {
   sendQuickNoteSave();
 }
 
+// Rust runs this before quitting (⌘Q or the close control, which do not blur
+// the window), so a quick-note edit still inside its debounce is saved.
+window.__eclipseFlush = flushQuickNoteSave;
+
 quickNoteTitle.addEventListener('input', scheduleQuickNoteSave);
 quickNoteBody.addEventListener('input', scheduleQuickNoteSave);
 

@@ -207,6 +207,9 @@ fn main() {
                 UserEvent::PageFlushed { tab_id } => {
                     app.handle_page_flushed(tab_id);
                 }
+                UserEvent::SidebarFlushed => {
+                    app.handle_sidebar_flushed();
+                }
                 UserEvent::ExtensionDownloaded { ext_id, result } => {
                     app.handle_extension_downloaded(ext_id, result);
                 }

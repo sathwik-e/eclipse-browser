@@ -53,6 +53,9 @@ pub enum UserEvent {
     /// An internal page finished running its flush hook (see
     /// `Tab::flush_internal_page`): every save it posted has been delivered.
     PageFlushed { tab_id: usize },
+    /// The sidebar finished running its flush hook before quitting: the
+    /// quick-note save it posted has been delivered.
+    SidebarFlushed,
     /// A Chrome Web Store download finished on its worker thread: the
     /// unpacked extension directory, or a user-facing error.
     ExtensionDownloaded {

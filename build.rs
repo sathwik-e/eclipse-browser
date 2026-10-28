@@ -1,8 +1,9 @@
 fn main() {
     println!("cargo:rerun-if-changed=src/menu.m");
 
-    #[cfg(target_os = "macos")]
-    {
+    // Build scripts are compiled for the host, so `#[cfg(target_os)]` would
+    // describe the build machine; the target comes from Cargo's environment.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()
             .file("src/menu.m")
             .flag("-fobjc-arc")

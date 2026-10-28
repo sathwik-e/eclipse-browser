@@ -388,6 +388,39 @@ impl BrowserConfig {
         }
     }
 
+    /// The config as internal eclipse:// pages may see it: extension source
+    /// code is stripped (pages only need names, ids and switches).
+    pub fn to_page_json(&self) -> String {
+        let mut page = self.clone();
+        for ext in &mut page.installed_extensions {
+            ext.content_scripts.clear();
+            ext.content_css.clear();
+        }
+        serde_json::to_string(&page).unwrap_or_else(|_| "{}".into())
+    }
+
+    /// Keys of `BrowserConfig` that `update_settings` patches may change.
+    /// Collections (favorites, notes, easels, downloads, extensions, space
+    /// profiles) have dedicated commands and are never patched wholesale.
+    pub const PATCHABLE_SETTINGS: &'static [&'static str] = &[
+        "theme",
+        "accent_color",
+        "sidebar_width",
+        "sidebar_collapsed",
+        "search_engine",
+        "user_agent",
+        "drm_fairplay_enabled",
+        "autoplay_enabled",
+        "tab_hibernation_mins",
+        "adblock_enabled",
+        "adblock_disabled_domains",
+        "webextensions_enabled",
+        "custom_js",
+        "custom_css",
+        "custom_user_agent",
+        "rounded_corners_radius",
+    ];
+
     pub fn get_search_url(&self, query: &str) -> String {
         let encoded = urlencode(query);
         match self.search_engine.as_str() {

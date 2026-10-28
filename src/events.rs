@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug)]
 pub enum UserEvent {
     Ipc(String),
-    TabIpc { tab_id: usize, msg: String },
+    /// `origin` is the URL of the frame that posted the message, as reported by
+    /// WebKit (not by the page). It decides which commands the sender may run.
+    TabIpc { tab_id: usize, msg: String, origin: String },
     PageStarted { tab_id: usize, url: String },
     PageFinished { tab_id: usize, url: String },
     TitleChanged { tab_id: usize, title: String },
@@ -15,11 +17,21 @@ pub enum UserEvent {
         path: String,
     },
     DownloadCompleted {
+        url: String,
         file_name: String,
         path: Option<String>,
         success: bool,
     },
     MenuAction(String),
+    /// A navigation in a tab failed (provisional or after commit).
+    NavigationFailed {
+        tab_id: usize,
+        code: i64,
+        description: String,
+        url: String,
+    },
+    /// The WebContent process of a tab crashed or was killed.
+    WebContentTerminated { tab_id: usize },
     TickMemory,
     HoverExpandSidebar,
     HoverCollapseSidebar,
@@ -75,6 +87,17 @@ pub enum IpcCommand {
         url: Option<String>,
         tab_id: Option<usize>,
         command: Option<String>,
+    },
+    /// Partial settings patch: only the keys the user just changed.
+    UpdateSettings {
+        settings: serde_json::Map<String, serde_json::Value>,
+    },
+    /// The sidebar's command bar was dismissed.
+    CommandBarClosed,
+    /// The sidebar has keyboard focus in a text field or an open popover, so
+    /// hover-collapse must wait.
+    SidebarInteraction {
+        active: bool,
     },
     OpenSettings,
     OpenSettingsTab,

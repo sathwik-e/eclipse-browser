@@ -146,8 +146,13 @@ impl Tab {
             .with_devtools(true)
             .with_initialization_script(&init_script)
             .with_ipc_handler(move |req| {
+                let origin = req.uri().to_string();
                 let body = req.body().clone();
-                let _ = proxy_ipc.send_event(UserEvent::TabIpc { tab_id, msg: body });
+                let _ = proxy_ipc.send_event(UserEvent::TabIpc {
+                    tab_id,
+                    msg: body,
+                    origin,
+                });
             })
             .with_download_started_handler(move |url, path| {
                 let suggested = path
@@ -183,6 +188,7 @@ impl Tab {
                 let resolved_path = path.as_ref().map(|p| p.to_string_lossy().to_string());
                 if let Some(file_name) = resolve_download_name(suggested, &url) {
                     let _ = proxy_download_finished.send_event(UserEvent::DownloadCompleted {
+                        url: url.clone(),
                         file_name,
                         path: resolved_path,
                         success,
@@ -224,6 +230,7 @@ impl Tab {
             crate::macos_menu::style_webview_card(ptr);
             crate::macos_menu::enable_swipe_gestures(ptr);
             crate::macos_menu::install_native_adblocker(ptr, is_adblock_active);
+            crate::macos_menu::register_tab_view(ptr, tab_id);
         }
 
         webview

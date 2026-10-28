@@ -939,7 +939,7 @@ impl BrowserApp {
         }
     }
 
-    pub fn handle_tab_ipc(&mut self, tab_id: usize, raw: &str) {
+    pub fn handle_tab_ipc(&mut self, tab_id: usize, raw: &str, _origin: &str) {
         let Some((token, command)) = parse_ipc(raw) else {
             return;
         };
@@ -1121,6 +1121,10 @@ impl BrowserApp {
                     self.broadcast_state();
                 }
             }
+            // Scaffold: implemented in the v1.0 fix phase.
+            IpcCommand::UpdateSettings { .. }
+            | IpcCommand::CommandBarClosed
+            | IpcCommand::SidebarInteraction { .. } => {}
             IpcCommand::ToggleSiteAdblock { domain, enabled } => {
                 self.toggle_site_adblock(&domain, enabled);
             }
@@ -1858,6 +1862,7 @@ impl BrowserApp {
 
     pub fn handle_download_completed(
         &mut self,
+        _url: String,
         file_name: String,
         path: Option<String>,
         success: bool,
@@ -1903,6 +1908,19 @@ impl BrowserApp {
         }
         self.broadcast_state();
     }
+
+    /// Scaffold: implemented in the v1.0 fix phase.
+    pub fn handle_navigation_failed(
+        &mut self,
+        _tab_id: usize,
+        _code: i64,
+        _description: String,
+        _url: String,
+    ) {
+    }
+
+    /// Scaffold: implemented in the v1.0 fix phase.
+    pub fn handle_web_content_terminated(&mut self, _tab_id: usize) {}
 
     pub fn handle_menu_action(&mut self, action: &str) {
         match action {

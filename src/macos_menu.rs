@@ -28,10 +28,19 @@ unsafe extern "C" {
     fn eclipse_set_hover_expanded(is_expanded: i32, sidebar_width: f64);
     fn eclipse_install_native_adblocker(view_ptr: *mut std::ffi::c_void, enabled: i32);
     fn eclipse_set_native_adblocker_enabled(view_ptr: *mut std::ffi::c_void, enabled: i32);
+    fn eclipse_install_navigation_hooks(callback: NavigationCallback);
+    fn eclipse_register_tab_view(view_ptr: *mut std::ffi::c_void, tab_id: u64);
+    fn eclipse_recheck_hover();
 }
+
+/// `kind`: 0 = provisional navigation failed, 1 = committed navigation failed,
+/// 2 = WebContent process terminated. Strings are UTF-8, may be null.
+type NavigationCallback =
+    extern "C" fn(tab_id: u64, kind: i32, code: i64, description: *const c_char, url: *const c_char);
 
 static MENU_PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
 static EDGE_PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
+static NAV_PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
 
 extern "C" fn handle_menu_action(action: *const c_char) {
     if action.is_null() {
@@ -171,5 +180,69 @@ pub fn set_native_adblocker_enabled(view_ptr: *mut std::ffi::c_void, enabled: bo
         unsafe {
             eclipse_set_native_adblocker_enabled(view_ptr, if enabled { 1 } else { 0 });
         }
+    }
+}
+
+fn c_string(ptr: *const c_char) -> String {
+    if ptr.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+    }
+}
+
+extern "C" fn handle_navigation_event(
+    tab_id: u64,
+    kind: i32,
+    code: i64,
+    description: *const c_char,
+    url: *const c_char,
+) {
+    let proxy = NAV_PROXY
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().cloned());
+    let Some(proxy) = proxy else {
+        return;
+    };
+    let tab_id = tab_id as usize;
+    let event = if kind == 2 {
+        UserEvent::WebContentTerminated { tab_id }
+    } else {
+        UserEvent::NavigationFailed {
+            tab_id,
+            code,
+            description: c_string(description),
+            url: c_string(url),
+        }
+    };
+    let _ = proxy.send_event(event);
+}
+
+/// Hooks WebKit navigation failures and WebContent crashes into the event loop.
+pub fn install_navigation_hooks(proxy: EventLoopProxy<UserEvent>) {
+    if let Ok(mut guard) = NAV_PROXY.lock() {
+        *guard = Some(proxy);
+    }
+    unsafe {
+        eclipse_install_navigation_hooks(handle_navigation_event);
+    }
+}
+
+/// Associates a tab's native view with its id so navigation failures can be
+/// reported for the right tab.
+pub fn register_tab_view(view_ptr: *mut std::ffi::c_void, tab_id: usize) {
+    if !view_ptr.is_null() {
+        unsafe {
+            eclipse_register_tab_view(view_ptr, tab_id as u64);
+        }
+    }
+}
+
+/// Asks the edge monitor to re-evaluate the pointer position now (for example
+/// after the sidebar stops needing to stay open) and collapse if it is outside.
+pub fn recheck_hover() {
+    unsafe {
+        eclipse_recheck_hover();
     }
 }

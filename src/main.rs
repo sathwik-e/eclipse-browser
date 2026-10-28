@@ -48,6 +48,7 @@ fn main() {
     {
         macos_menu::install(proxy.clone());
         macos_menu::install_edge_monitor(proxy.clone());
+        macos_menu::install_navigation_hooks(proxy.clone());
     }
 
     // Auto-quit hook for automated smoke tests: never active unless the
@@ -128,8 +129,12 @@ fn main() {
                 UserEvent::Ipc(msg) => {
                     app.handle_ipc(&msg);
                 }
-                UserEvent::TabIpc { tab_id, msg } => {
-                    app.handle_tab_ipc(tab_id, &msg);
+                UserEvent::TabIpc {
+                    tab_id,
+                    msg,
+                    origin,
+                } => {
+                    app.handle_tab_ipc(tab_id, &msg, &origin);
                 }
                 UserEvent::PageStarted { tab_id, url } => {
                     app.handle_page_started(tab_id, url);
@@ -151,11 +156,23 @@ fn main() {
                     app.handle_download_started(file_name, url, path);
                 }
                 UserEvent::DownloadCompleted {
+                    url,
                     file_name,
                     path,
                     success,
                 } => {
-                    app.handle_download_completed(file_name, path, success);
+                    app.handle_download_completed(url, file_name, path, success);
+                }
+                UserEvent::NavigationFailed {
+                    tab_id,
+                    code,
+                    description,
+                    url,
+                } => {
+                    app.handle_navigation_failed(tab_id, code, description, url);
+                }
+                UserEvent::WebContentTerminated { tab_id } => {
+                    app.handle_web_content_terminated(tab_id);
                 }
                 UserEvent::MenuAction(action) => {
                     app.handle_menu_action(&action);

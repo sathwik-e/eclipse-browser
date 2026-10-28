@@ -628,3 +628,19 @@ void eclipse_install_edge_monitor(void (*expand_cb)(void), void (*collapse_cb)(v
         [[NSRunLoop mainRunLoop] addTimer:gMousePollTimer forMode:NSRunLoopCommonModes];
     }
 }
+
+/* ---- v1.0 scaffold: implemented in the fix phase ------------------------ */
+
+typedef void (*EclipseNavigationCallback)(uint64_t tabId, int kind, int64_t code,
+                                          const char *description, const char *url);
+
+void eclipse_install_navigation_hooks(EclipseNavigationCallback callback) {
+    (void)callback;
+}
+
+void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
+    (void)viewPtr;
+    (void)tabId;
+}
+
+void eclipse_recheck_hover(void) {}

@@ -173,6 +173,47 @@ impl Tab {
         tab
     }
 
+    /// A tab restored from the saved session without a webview yet; selecting
+    /// it builds the webview (see `restore_if_needed`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn hibernated(
+        id: usize,
+        url: &str,
+        title: String,
+        workspace: &str,
+        is_pinned: bool,
+        zoom: f64,
+        favorite_index: Option<usize>,
+    ) -> Self {
+        Self {
+            id,
+            title,
+            url: url.to_string(),
+            favicon: get_default_favicon(url),
+            favicon_url: get_favicon_url(url),
+            is_loading: false,
+            is_pinned,
+            is_hibernated: true,
+            is_audible: false,
+            workspace: workspace.to_string(),
+            zoom: zoom.clamp(MIN_ZOOM, MAX_ZOOM),
+            token: generate_ipc_token(),
+            webview: None,
+            last_active: Instant::now(),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            pending_scroll_restore: None,
+            favorite_index,
+            group: None,
+            control_token: generate_ipc_token(),
+            nav: Arc::default(),
+            sync: SyncState::default(),
+            init_shields: false,
+            init_drm: false,
+            init_custom_css: String::new(),
+        }
+    }
+
     fn build_webview(
         &mut self,
         window: &Arc<Window>,
@@ -579,20 +620,13 @@ impl Tab {
         }
     }
 
-    /// Transitional wrapper with the pre-revision signature, kept only so the
-    /// crate builds until every caller passes a revision. Always pushes.
-    /// The integrator removes it and renames `sync_config_rev` to `sync_config`.
-    pub fn sync_config(&self, config: &BrowserConfig, active_url: Option<&str>) {
-        self.sync_config_rev(config, UNVERSIONED, active_url);
-    }
-
     /// Brings the page in line with `config` (C9). Ordinary websites never
     /// receive config or user data: they only get the shields switch and the
     /// native ad blocker, each only when its effective state changes, plus
     /// matching extension content scripts and custom JS once per document.
     /// Internal eclipse:// pages get `config.to_page_json()` through
     /// `onEclipseConfigUpdated`, once per (revision, active URL) per document.
-    pub fn sync_config_rev(&self, config: &BrowserConfig, revision: u64, active_url: Option<&str>) {
+    pub fn sync_config(&self, config: &BrowserConfig, revision: u64, active_url: Option<&str>) {
         let Some(ref _wv) = self.webview else {
             return;
         };

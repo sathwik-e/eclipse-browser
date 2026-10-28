@@ -2718,82 +2718,27 @@ fn find_download_for_completion(downloads: &[DownloadItem], url: &str, file_name
 
 /// A restored tab without a webview; `select_tab` builds it on demand.
 fn hibernated_tab(id: usize, record: SessionTab, favorite_index: Option<usize>) -> Tab {
-    Tab {
+    let title = if record.title.trim().is_empty() {
+        title_for_url(&record.url)
+    } else {
+        record.title
+    };
+    Tab::hibernated(
         id,
-        title: if record.title.trim().is_empty() {
-            title_for_url(&record.url)
-        } else {
-            record.title
-        },
-        favicon: get_default_favicon(&record.url),
-        favicon_url: get_favicon_url(&record.url),
-        url: record.url,
-        is_loading: false,
-        is_pinned: record.is_pinned || favorite_index.is_some(),
-        is_hibernated: true,
-        is_audible: false,
-        workspace: record.workspace,
-        zoom: record.zoom.clamp(crate::tab::MIN_ZOOM, crate::tab::MAX_ZOOM),
-        token: generate_ipc_token(),
-        webview: None,
-        last_active: Instant::now(),
-        scroll_x: 0.0,
-        scroll_y: 0.0,
-        pending_scroll_restore: None,
+        &record.url,
+        title,
+        &record.workspace,
+        record.is_pinned || favorite_index.is_some(),
+        record.zoom,
         favorite_index,
-        group: None,
-    }
+    )
 }
 
-/// Pushes config to one tab.
-///
-/// INTEGRATION: tab.rs (another worktree) changes `Tab::sync_config` to
-/// `sync_config(&mut self, config, revision, active_url)`, which skips the
-/// evaluate when the tab already has `revision` and the same `active_url` and
-/// never sends config to web pages. Replace the body with
-/// `tab.sync_config(config, revision, Some(active_url))` when merging.
+/// Pushes config to one tab (skipped when it already has this revision).
 fn sync_tab_config(tab: &mut Tab, config: &BrowserConfig, revision: u64, active_url: &str) {
-    let _ = revision;
-    tab.sync_config(config, Some(active_url));
+    tab.sync_config(config, revision, Some(active_url));
 }
 
-/// INTEGRATION SHIM: tab.rs (another worktree) adds the inherent methods
-/// `Tab::print` (wry `WebView::print`) and `Tab::show_error_page`, which take
-/// precedence over these. Delete this trait and its impl when merging.
-trait TabV1Shim {
-    fn print(&self);
-    fn show_error_page(&mut self, failed_url: &str, description: &str);
-}
-
-impl TabV1Shim for Tab {
-    fn print(&self) {
-        if let Some(webview) = &self.webview {
-            let _ = webview.print();
-        }
-    }
-
-    fn show_error_page(&mut self, failed_url: &str, description: &str) {
-        let escape = |s: &str| {
-            s.replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('"', "&quot;")
-                .replace('\'', "&#39;")
-        };
-        let retry = serde_json::to_string(failed_url)
-            .unwrap_or_else(|_| "\"\"".into())
-            .replace('<', "\\u003c");
-        let html = format!(
-            "<!doctype html><meta charset=utf-8><title>{url}</title><body style=\"font:15px -apple-system;padding:15vh 10vw;color:#222\"><h1 style=\"font-size:22px\">This page couldn't be opened</h1><p>{description}</p><p style=\"color:#777;word-break:break-all\">{url}</p><script>var retryUrl = {retry};</script><button onclick=\"location.href = retryUrl\">Try Again</button></body>",
-            url = escape(failed_url),
-            description = escape(description),
-        );
-        self.title = failed_url.to_string();
-        if let Some(webview) = &self.webview {
-            let _ = webview.load_html(&html);
-        }
-    }
-}
 
 /// Reads `rel` from an extension directory (`base` must be canonical). The
 /// resolved file must stay inside `base`: absolute paths, `..` and symlinks

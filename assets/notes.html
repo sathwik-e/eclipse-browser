@@ -221,6 +221,7 @@ let currentWorkspace = (typeof window.__ECLIPSE_SPACE__ === 'string' && window._
 let pending = null;            // { id, title, content } typed but not sent yet
 let saveTimer = null;
 let shown = null;              // { id, title, content } the editor was last synced to
+let saved = new Map();         // id -> { title, content } as last pushed by Rust
 const inflight = new Map();    // id -> { title, content, at } sent, not echoed yet
 const unconfirmed = new Map(); // id -> time a note was created here, not echoed yet
 const deleted = new Map();     // id -> time a note was deleted here
@@ -284,7 +285,9 @@ function flushSave() {
   const snap = pending;
   pending = null;
   const note = notes.find(n => n.id === snap.id);
-  const known = inflight.get(snap.id) || note;
+  // Compare with what Rust has (or was last sent), not the local list, which
+  // may already show the unsent text.
+  const known = inflight.get(snap.id) || saved.get(snap.id);
   if (!known || known.title !== snap.title || known.content !== snap.content) {
     sendNote(snap.id, snap.title, snap.content);
   }
@@ -293,7 +296,7 @@ function flushSave() {
     note.content = snap.content;
     note.updated_at = nowSecs();
   } else {
-    notes.unshift({ id: snap.id, title: snap.title, content: snap.content, workspace: currentWorkspace || 'Default', updated_at: nowSecs() });
+    notes.unshift({ id: snap.id, title: snap.title, content: snap.content, workspace: currentWorkspace || '', updated_at: nowSecs() });
   }
   if (snap.id === activeNoteId) shown = { id: snap.id, title: snap.title, content: snap.content };
   renderNotesList();
@@ -350,6 +353,7 @@ function loadFromConfig(cfg) {
   const now = Date.now();
   const remote = cfg.notes.map(n => Object.assign({}, n));
   const byId = new Map(remote.map(n => [n.id, n]));
+  saved = new Map(remote.map(n => [n.id, { title: n.title, content: n.content }]));
   for (const [id, sent] of inflight) {
     const r = byId.get(id);
     if ((r && r.title === sent.title && r.content === sent.content) || now - sent.at > ECHO_TTL_MS) {
@@ -378,7 +382,7 @@ function loadFromConfig(cfg) {
   }
   if (pending && !next.some(n => n.id === pending.id)) {
     // The open note was deleted elsewhere while being edited: keep the text.
-    next.unshift({ id: pending.id, title: pending.title, content: pending.content, workspace: currentWorkspace || 'Default', updated_at: nowSecs() });
+    next.unshift({ id: pending.id, title: pending.title, content: pending.content, workspace: currentWorkspace || '', updated_at: nowSecs() });
   }
   notes = next;
 
@@ -419,7 +423,7 @@ function renderNotesList() {
     const meta = document.createElement('div');
     meta.className = 'note-card-meta';
     const ws = document.createElement('span');
-    ws.textContent = n.workspace || 'Default';
+    ws.textContent = n.workspace || '';
     meta.appendChild(ws);
     card.append(title, preview, meta);
     card.addEventListener('click', () => {
@@ -432,7 +436,7 @@ function renderNotesList() {
 document.getElementById('btn-create-note').addEventListener('click', () => {
   flushSave();
   const id = newNoteId();
-  const note = { id, title: 'Untitled Note', content: '', workspace: currentWorkspace || 'Default', updated_at: nowSecs() };
+  const note = { id, title: 'Untitled Note', content: '', workspace: currentWorkspace || '', updated_at: nowSecs() };
   notes.unshift(note);
   unconfirmed.set(id, Date.now());
   activeNoteId = id;

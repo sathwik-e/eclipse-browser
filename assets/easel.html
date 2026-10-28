@@ -14,6 +14,7 @@
   --border: rgba(255, 255, 255, 0.12);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+input, textarea { user-select: text; -webkit-user-select: text; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", sans-serif;
   background-color: var(--bg);
@@ -99,6 +100,9 @@ body {
 }
 .tool-btn:hover { background: rgba(255, 255, 255, 0.11); color: #fff; transform: translateY(-1px); }
 .tool-btn.active { background: rgba(94, 158, 255, 0.2); border-color: var(--accent); color: #fff; }
+.tool-btn.danger:hover { color: #F87171; }
+.tool-btn.armed { color: #FCA5A5; border-color: #F87171; background: rgba(239, 68, 68, 0.18); }
+.tool-btn:disabled { opacity: 0.45; cursor: default; transform: none; }
 .swatch {
   width: 20px;
   height: 20px;
@@ -118,16 +122,23 @@ body {
 body.draw-mode #draw-canvas {
   pointer-events: auto;
   cursor: crosshair;
+  touch-action: none;
 }
+/* The layer spans the board but only the cards take events, so the canvas
+   underneath receives Sketch strokes. */
 #cards-layer {
   position: absolute;
   inset: 0;
   z-index: 5;
+  pointer-events: none;
 }
 .easel-card {
   position: absolute;
+  pointer-events: auto;
   min-width: 180px;
   min-height: 110px;
+  overflow: hidden;
+  resize: both;
   border-radius: 14px;
   padding: 12px 14px;
   background: rgba(30, 41, 59, 0.92);
@@ -136,8 +147,6 @@ body.draw-mode #draw-canvas {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
 }
 .easel-card-header {
   display: flex;
@@ -163,14 +172,27 @@ body.draw-mode #draw-canvas {
   background: transparent;
   border: none;
   outline: none;
-  resize: both;
+  resize: none;
+  min-height: 0;
   color: #fff;
   font-family: inherit;
   font-size: 13.5px;
   line-height: 1.45;
-  user-select: text;
-  -webkit-user-select: text;
 }
+.easel-link-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  outline: none;
+}
+.easel-link-input:focus { border-color: var(--accent); }
+.easel-link-input.invalid { border-color: #F87171; }
+.easel-link-btn:disabled { opacity: 0.45; cursor: default; }
 .easel-link-btn {
   align-self: flex-start;
   font-size: 11.5px;
@@ -191,9 +213,10 @@ body.draw-mode #draw-canvas {
     <select class="easel-select" id="easel-picker"></select>
     <input type="text" class="easel-title-input" id="easel-title" placeholder="Easel Title..." />
     <button class="tool-btn" id="btn-new-easel">+ Board</button>
+    <button class="tool-btn danger" id="btn-delete-easel" title="Delete this board">Delete</button>
   </div>
   <div class="easel-pill">
-    <span id="easel-status" style="font-size:11.5px;color:rgba(255,255,255,0.5);">Synced</span>
+    <span id="easel-status" style="font-size:11.5px;color:rgba(255,255,255,0.5);">Saved</span>
   </div>
 </div>
 
@@ -210,10 +233,20 @@ body.draw-mode #draw-canvas {
   <div class="swatch" data-accent="#34D399" data-bg="#064E3B" style="background:#34D399;"></div>
   <div class="swatch" data-accent="#F472B6" data-bg="#4C0519" style="background:#F472B6;"></div>
   <div class="swatch" data-accent="#F59E0B" data-bg="#451A03" style="background:#F59E0B;"></div>
-  <button class="tool-btn" id="btn-clear-board">Clear</button>
+  <button class="tool-btn danger" id="btn-clear-board">Clear</button>
 </div>
 
 <script>
+// Boards arrive from Rust (the init seed and onEclipseConfigUpdated) and are
+// saved one board at a time with save_easel. Pending edits are flushed before
+// anything changes which board is open, and a pushed config never replaces a
+// board that has unsent or unechoed local changes or is being edited.
+const SAVE_DEBOUNCE_MS = 400;
+const ECHO_TTL_MS = 5000;
+const CONFIRM_MS = 3000;
+const MIN_POINT_GAP = 2;
+const STROKE_WIDTH = 3;
+
 let easels = [];
 let activeEaselId = null;
 let elements = [];
@@ -221,10 +254,26 @@ let strokes = [];
 let drawMode = false;
 let activeAccent = '#5E9EFF';
 let activeBg = '#1E293B';
+// The active Space, from the init seed or the state push; null lets Rust use
+// the Space of the tab that sends the save.
+let currentWorkspace = (typeof window.__ECLIPSE_SPACE__ === 'string' && window.__ECLIPSE_SPACE__) || null;
+let dirty = false;             // the open board has edits not sent yet
 let saveTimer = null;
+let shown = null;              // { id, title, json } the open board was last synced to
+let reconcileLater = false;    // a push arrived while the user was mid-edit
+let saved = new Map();         // id -> { title, json } as last pushed by Rust
+const inflight = new Map();    // id -> { title, json, at } sent, not echoed yet
+const unconfirmed = new Map(); // id -> time a board was created here, not echoed yet
+const deleted = new Map();     // id -> time a board was deleted here
 
 const canvas = document.getElementById('draw-canvas');
 const ctx = canvas.getContext('2d');
+const layer = document.getElementById('cards-layer');
+const titleEl = document.getElementById('easel-title');
+const statusEl = document.getElementById('easel-status');
+const pickerEl = document.getElementById('easel-picker');
+const clearBtn = document.getElementById('btn-clear-board');
+const deleteBtn = document.getElementById('btn-delete-easel');
 
 function postIpc(cmd) {
   if (window.__eclipseIpc) {
@@ -234,172 +283,533 @@ function postIpc(cmd) {
   }
 }
 
+function newId(prefix) {
+  return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function nowSecs() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function setStatus(text) {
+  if (statusEl.textContent !== text) statusEl.textContent = text;
+}
+
+function capturePointer(target, pointerId) {
+  try {
+    target.setPointerCapture(pointerId);
+  } catch (_) {}
+}
+
+// ---- Canvas ---------------------------------------------------------------
+
+let dpr = 1;
+
 function resizeCanvas() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  dpr = window.devicePixelRatio || 1;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
   redrawStrokes();
+  positionCards();
 }
 window.addEventListener('resize', resizeCanvas);
 
-function redrawStrokes() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  strokes.forEach(s => {
-    if (!s.points || s.points.length < 2) return;
+// Moving the window to a display with another scale factor fires no resize.
+function watchPixelRatio() {
+  const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  mq.addEventListener('change', () => {
+    resizeCanvas();
+    watchPixelRatio();
+  }, { once: true });
+}
+
+function strokeStyle(color) {
+  ctx.strokeStyle = color || '#5E9EFF';
+  ctx.fillStyle = color || '#5E9EFF';
+  ctx.lineWidth = STROKE_WIDTH;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+}
+
+function drawStroke(s) {
+  const pts = s.points;
+  if (!Array.isArray(pts) || pts.length === 0) return;
+  strokeStyle(s.color);
+  if (pts.length === 1) {
     ctx.beginPath();
-    ctx.strokeStyle = s.color || '#5E9EFF';
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.moveTo(s.points[0][0], s.points[0][1]);
-    for (let i = 1; i < s.points.length; i++) {
-      ctx.lineTo(s.points[i][0], s.points[i][1]);
-    }
-    ctx.stroke();
-  });
+    ctx.arc(pts[0][0], pts[0][1], STROKE_WIDTH / 2, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke();
+}
+
+// Full repaint: only on load, resize, clear and board switch.
+function redrawStrokes() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  strokes.forEach(drawStroke);
 }
 
 let currentStroke = null;
-canvas.addEventListener('mousedown', (e) => {
-  if (!drawMode) return;
-  currentStroke = { color: activeAccent, points: [[e.clientX, e.clientY]] };
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (!drawMode || e.button !== 0) return;
+  e.preventDefault();
+  capturePointer(canvas, e.pointerId);
+  currentStroke = { color: activeAccent, points: [[Math.round(e.clientX), Math.round(e.clientY)]] };
   strokes.push(currentStroke);
-});
-canvas.addEventListener('mousemove', (e) => {
-  if (!drawMode || !currentStroke) return;
-  currentStroke.points.push([e.clientX, e.clientY]);
-  redrawStrokes();
-});
-window.addEventListener('mouseup', () => {
-  if (currentStroke) {
-    currentStroke = null;
-    scheduleSave();
-  }
+  drawStroke(currentStroke);
 });
 
-function loadEaselData(easel) {
-  if (!easel) return;
-  activeEaselId = easel.id;
-  document.getElementById('easel-title').value = easel.title || 'Untitled Easel';
-  try {
-    const parsed = JSON.parse(easel.elements_json || '[]');
-    if (Array.isArray(parsed)) {
-      elements = parsed.filter(x => x.type !== 'stroke');
-      strokes = parsed.filter(x => x.type === 'stroke');
-    } else {
-      elements = [];
-      strokes = [];
-    }
-  } catch (_) {
-    elements = [];
-    strokes = [];
-  }
-  renderCards();
-  redrawStrokes();
+canvas.addEventListener('pointermove', (e) => {
+  if (!currentStroke) return;
+  const pts = currentStroke.points;
+  const last = pts[pts.length - 1];
+  const x = Math.round(e.clientX);
+  const y = Math.round(e.clientY);
+  if (Math.hypot(x - last[0], y - last[1]) < MIN_POINT_GAP) return;
+  pts.push([x, y]);
+  // Draw only the new segment.
+  strokeStyle(currentStroke.color);
+  ctx.beginPath();
+  ctx.moveTo(last[0], last[1]);
+  ctx.lineTo(x, y);
+  ctx.stroke();
+});
+
+function endStroke() {
+  if (!currentStroke) return;
+  currentStroke = null;
+  scheduleSave();
+  maybeReconcile();
+}
+canvas.addEventListener('pointerup', endStroke);
+canvas.addEventListener('pointercancel', endStroke);
+
+function setDrawMode(on) {
+  drawMode = on;
+  document.body.classList.toggle('draw-mode', on);
+  document.getElementById('btn-draw-toggle').classList.toggle('active', on);
 }
 
-function renderPicker() {
-  const picker = document.getElementById('easel-picker');
-  picker.innerHTML = '';
-  easels.forEach(e => {
-    const opt = document.createElement('option');
-    opt.value = e.id;
-    opt.textContent = e.title || 'Untitled Easel';
-    if (e.id === activeEaselId) opt.selected = true;
-    picker.appendChild(opt);
+// ---- Cards ----------------------------------------------------------------
+
+const CARD_MIN_VISIBLE_X = 80;
+const CARD_MIN_VISIBLE_Y = 48;
+
+// Keep at least the card header on screen so a card can always be dragged
+// back, even if it was saved off-screen or the window got smaller.
+function clampX(x) {
+  return Math.max(0, Math.min(x, window.innerWidth - CARD_MIN_VISIBLE_X));
+}
+function clampY(y) {
+  return Math.max(12, Math.min(y, window.innerHeight - CARD_MIN_VISIBLE_Y));
+}
+
+function num(v, fallback) {
+  return Number.isFinite(v) ? v : fallback;
+}
+
+function placeCard(card, el) {
+  card.style.left = clampX(num(el.x, 80)) + 'px';
+  card.style.top = clampY(num(el.y, 80)) + 'px';
+}
+
+function positionCards() {
+  layer.querySelectorAll('.easel-card').forEach(card => {
+    const el = elements.find(item => item.id === card.dataset.id);
+    if (el) placeCard(card, el);
   });
+}
+
+// Accepts "example.com" or a full http(s) URL; returns '' if invalid.
+function normalizeLink(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(/^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : 'https://' + raw);
+    if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !u.hostname) return '';
+    return u.href;
+  } catch (_) {
+    return '';
+  }
+}
+
+let dragging = false;
+
+// Cards have a fixed size, so a size change after the first observation is
+// the user dragging the native resize handle: persist it.
+const observedCards = new WeakSet();
+const sizeObserver = new ResizeObserver(entries => {
+  for (const entry of entries) {
+    const card = entry.target;
+    if (!observedCards.has(card)) {
+      observedCards.add(card);
+      continue;
+    }
+    const el = elements.find(item => item.id === card.dataset.id);
+    if (!el) continue;
+    const w = card.offsetWidth;
+    const h = card.offsetHeight;
+    if (w && h && (w !== el.w || h !== el.h)) {
+      el.w = w;
+      el.h = h;
+      scheduleSave();
+    }
+  }
+});
+
+function buildCard(el) {
+  const card = document.createElement('div');
+  card.className = 'easel-card';
+  card.dataset.id = el.id;
+  placeCard(card, el);
+  card.style.width = num(el.w, 230) + 'px';
+  card.style.height = num(el.h, 140) + 'px';
+  card.style.background = el.color || '#1E293B';
+  card.style.borderColor = el.accent || '#5E9EFF';
+
+  const header = document.createElement('div');
+  header.className = 'easel-card-header';
+  const label = document.createElement('span');
+  label.textContent = el.type === 'link' ? '🔗 Web Link' : (el.type === 'text' ? '📝 Text Note' : '✨ Sticky Card');
+  const del = document.createElement('button');
+  del.className = 'easel-card-del';
+  del.title = 'Remove';
+  del.textContent = '×';
+  header.append(label, del);
+  card.appendChild(header);
+
+  const body = document.createElement('textarea');
+  body.className = 'easel-card-body';
+  body.value = el.text || '';
+  body.spellcheck = false;
+  card.appendChild(body);
+
+  if (el.type === 'link' || el.url) {
+    const urlInput = document.createElement('input');
+    urlInput.type = 'text';
+    urlInput.className = 'easel-link-input';
+    urlInput.placeholder = 'https://example.com';
+    urlInput.spellcheck = false;
+    urlInput.value = el.url || '';
+    const open = document.createElement('button');
+    open.className = 'easel-link-btn';
+    const syncOpen = () => {
+      open.disabled = !normalizeLink(el.url);
+      open.textContent = open.disabled ? 'Add a link to open it' : 'Open ↗';
+      open.title = el.url || '';
+    };
+    urlInput.addEventListener('input', () => urlInput.classList.remove('invalid'));
+    urlInput.addEventListener('change', () => {
+      const raw = urlInput.value.trim();
+      const url = normalizeLink(raw);
+      if (raw && !url) {
+        urlInput.classList.add('invalid');
+        return;
+      }
+      urlInput.value = url;
+      if (url !== (el.url || '')) {
+        el.url = url;
+        scheduleSave();
+      }
+      syncOpen();
+    });
+    urlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') urlInput.blur();
+    });
+    open.addEventListener('click', () => {
+      const url = normalizeLink(el.url);
+      if (url) postIpc({ action: 'new_tab', url });
+    });
+    syncOpen();
+    card.append(urlInput, open);
+  }
+
+  header.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('.easel-card-del')) return;
+    e.preventDefault();
+    capturePointer(header, e.pointerId);
+    dragging = true;
+    const offX = e.clientX - card.offsetLeft;
+    const offY = e.clientY - card.offsetTop;
+    const startX = card.offsetLeft;
+    const startY = card.offsetTop;
+    const onMove = (ev) => {
+      const x = clampX(Math.round(ev.clientX - offX));
+      const y = clampY(Math.round(ev.clientY - offY));
+      card.style.left = x + 'px';
+      card.style.top = y + 'px';
+    };
+    const onUp = () => {
+      header.removeEventListener('pointermove', onMove);
+      header.removeEventListener('pointerup', onUp);
+      header.removeEventListener('pointercancel', onUp);
+      dragging = false;
+      if (card.offsetLeft !== startX || card.offsetTop !== startY) {
+        el.x = card.offsetLeft;
+        el.y = card.offsetTop;
+        scheduleSave();
+      }
+      maybeReconcile();
+    };
+    header.addEventListener('pointermove', onMove);
+    header.addEventListener('pointerup', onUp);
+    header.addEventListener('pointercancel', onUp);
+  });
+
+  sizeObserver.observe(card);
+
+  del.addEventListener('click', () => {
+    elements = elements.filter(item => item.id !== el.id);
+    sizeObserver.unobserve(card);
+    card.remove();
+    scheduleSave();
+  });
+
+  body.addEventListener('input', () => {
+    el.text = body.value;
+    scheduleSave();
+  });
+
+  return card;
 }
 
 function renderCards() {
-  const layer = document.getElementById('cards-layer');
-  layer.innerHTML = '';
-  elements.forEach((el) => {
-    const card = document.createElement('div');
-    card.className = 'easel-card';
-    card.style.left = (el.x || 80) + 'px';
-    card.style.top = (el.y || 80) + 'px';
-    card.style.width = (el.w || 230) + 'px';
-    card.style.minHeight = (el.h || 140) + 'px';
-    card.style.background = el.color || '#1E293B';
-    card.style.borderColor = el.accent || '#5E9EFF';
+  sizeObserver.disconnect();
+  layer.replaceChildren(...elements.map(buildCard));
+}
 
-    const label = el.type === 'link' ? '🔗 Web Link' : (el.type === 'text' ? '📝 Text Note' : '✨ Sticky Card');
-    card.innerHTML = `
-      <div class="easel-card-header">
-        <span>${label}</span>
-        <button class="easel-card-del" title="Remove">&times;</button>
-      </div>
-      <textarea class="easel-card-body">${escapeHtml(el.text || '')}</textarea>
-      ${el.url ? `<button class="easel-link-btn">Open ${escapeHtml(el.url)} ↗</button>` : ''}
-    `;
+function addCard(el) {
+  elements.push(el);
+  const card = buildCard(el);
+  layer.appendChild(card);
+  scheduleSave();
+  return card;
+}
 
-    const header = card.querySelector('.easel-card-header');
-    header.addEventListener('mousedown', (e) => {
-      if (e.target.closest('.easel-card-del')) return;
-      const startX = e.clientX - (el.x || 0);
-      const startY = e.clientY - (el.y || 0);
-      function onMove(ev) {
-        el.x = Math.max(12, ev.clientX - startX);
-        el.y = Math.max(12, ev.clientY - startY);
-        card.style.left = el.x + 'px';
-        card.style.top = el.y + 'px';
-      }
-      function onUp() {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-        scheduleSave();
-      }
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    });
+// ---- Saving ---------------------------------------------------------------
 
-    card.querySelector('.easel-card-del').addEventListener('click', () => {
-      elements = elements.filter(item => item.id !== el.id);
-      renderCards();
-      scheduleSave();
-    });
+function serializeBoard() {
+  return JSON.stringify([...elements, ...strokes.map(s => ({ type: 'stroke', color: s.color, points: s.points }))]);
+}
 
-    const body = card.querySelector('.easel-card-body');
-    body.addEventListener('input', () => {
-      el.text = body.value;
-      scheduleSave();
-    });
+function boardTitle() {
+  return titleEl.value.trim() || 'Untitled Easel';
+}
 
-    const linkBtn = card.querySelector('.easel-link-btn');
-    if (linkBtn && el.url) {
-      linkBtn.addEventListener('click', () => {
-        postIpc({ action: 'new_tab', url: el.url });
-      });
-    }
-
-    layer.appendChild(card);
-  });
+function sendEasel(id, title, json) {
+  inflight.set(id, { title, json, at: Date.now() });
+  const cmd = { action: 'save_easel', id, title, elements_json: json };
+  if (currentWorkspace) cmd.workspace = currentWorkspace;
+  postIpc(cmd);
 }
 
 function scheduleSave() {
-  const status = document.getElementById('easel-status');
-  if (status) status.textContent = 'Saving…';
+  if (!activeEaselId) {
+    // Editing with no board open starts a new one.
+    activeEaselId = newId('easel_');
+    unconfirmed.set(activeEaselId, Date.now());
+  }
+  dirty = true;
+  disarmAll();
+  setStatus('Saving…');
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    const title = document.getElementById('easel-title').value.trim() || 'Untitled Easel';
-    if (!activeEaselId) activeEaselId = 'easel_' + Date.now();
-    const combined = [...elements, ...strokes.map(s => ({ type: 'stroke', color: s.color, points: s.points }))];
-    const json = JSON.stringify(combined);
-    const existing = easels.find(e => e.id === activeEaselId);
-    if (existing) {
-      existing.title = title;
-      existing.elements_json = json;
-    } else {
-      easels.unshift({ id: activeEaselId, title, elements_json: json, workspace: 'Default', updated_at: Math.floor(Date.now() / 1000) });
-    }
-    renderPicker();
-    postIpc({ action: 'save_easel', id: activeEaselId, title, elements_json: json });
-    if (status) status.textContent = 'Synced';
-  }, 240);
+  saveTimer = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
 }
 
+// Send the open board now if it has unsent edits. Called before anything
+// changes which board is open, and when the page is hidden or closed.
+function flushSave() {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  if (!dirty || !activeEaselId) return;
+  dirty = false;
+  const id = activeEaselId;
+  const title = boardTitle();
+  const json = serializeBoard();
+  const existing = easels.find(e => e.id === id);
+  const known = inflight.get(id) || saved.get(id);
+  if (!known || known.title !== title || known.json !== json) sendEasel(id, title, json);
+  if (existing) {
+    existing.title = title;
+    existing.elements_json = json;
+    existing.updated_at = nowSecs();
+  } else {
+    easels.unshift({ id, title, elements_json: json, workspace: currentWorkspace || '', updated_at: nowSecs() });
+  }
+  shown = { id, title, json };
+  renderPicker();
+  setStatus('Saved');
+}
+
+window.addEventListener('pagehide', flushSave);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushSave();
+});
+
+// ---- Boards ---------------------------------------------------------------
+
+function parseBoard(json) {
+  try {
+    const parsed = JSON.parse(json || '[]');
+    if (Array.isArray(parsed)) {
+      const items = parsed.filter(x => x && typeof x === 'object');
+      return {
+        elements: items.filter(x => x.type !== 'stroke').map(x => Object.assign({ id: newId('card_') }, x)),
+        strokes: items.filter(x => x.type === 'stroke' && Array.isArray(x.points)).map(x => ({ color: x.color, points: x.points }))
+      };
+    }
+  } catch (_) {}
+  return { elements: [], strokes: [] };
+}
+
+// Show `easel` (or an empty board). Callers flush pending edits first.
+function showBoard(easel) {
+  disarmAll();
+  currentStroke = null;
+  activeEaselId = easel ? easel.id : null;
+  const title = easel ? (easel.title || 'Untitled Easel') : '';
+  if (titleEl.value !== title) titleEl.value = title;
+  const board = parseBoard(easel ? easel.elements_json : '[]');
+  elements = board.elements;
+  strokes = board.strokes;
+  shown = easel ? { id: easel.id, title, json: easel.elements_json || '[]' } : null;
+  deleteBtn.disabled = !easel;
+  renderCards();
+  redrawStrokes();
+  renderPicker();
+}
+
+function openBoard(id) {
+  flushSave();
+  showBoard(easels.find(e => e.id === id) || null);
+}
+
+let lastPickerSignature = null;
+
+function renderPicker() {
+  const signature = JSON.stringify([activeEaselId, easels.map(e => [e.id, e.title])]);
+  if (signature === lastPickerSignature) return;
+  lastPickerSignature = signature;
+  const options = easels.map(e => {
+    const opt = document.createElement('option');
+    opt.value = e.id;
+    opt.textContent = e.title || 'Untitled Easel';
+    return opt;
+  });
+  if (!easels.some(e => e.id === activeEaselId)) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = easels.length ? 'New board' : 'No boards';
+    options.unshift(opt);
+  }
+  pickerEl.replaceChildren(...options);
+  pickerEl.value = easels.some(e => e.id === activeEaselId) ? activeEaselId : '';
+}
+
+// True while the user is in the middle of changing the open board.
+function isInteracting() {
+  const focused = document.activeElement;
+  return !!currentStroke || dragging ||
+    (focused && (focused === titleEl || layer.contains(focused)));
+}
+
+function maybeReconcile() {
+  if (reconcileLater && !isInteracting()) reconcileActive();
+}
+
+// Adopt a newer copy of the open board pushed by Rust, unless it has unsent
+// or unechoed edits, or the user is mid-edit (retried when they stop).
+function reconcileActive() {
+  reconcileLater = false;
+  const active = easels.find(e => e.id === activeEaselId);
+  if (!active || dirty || inflight.has(active.id)) return;
+  if (isInteracting()) {
+    reconcileLater = true;
+    return;
+  }
+  const json = active.elements_json || '[]';
+  const title = active.title || 'Untitled Easel';
+  if (!shown || shown.id !== active.id || shown.json !== json) {
+    showBoard(active);
+  } else if (shown.title !== title) {
+    titleEl.value = title;
+    shown.title = title;
+  }
+}
+
+layer.addEventListener('focusout', () => setTimeout(maybeReconcile, 0));
+titleEl.addEventListener('blur', () => setTimeout(maybeReconcile, 0));
+
+function loadFromConfig(cfg) {
+  if (!cfg) return;
+  if (cfg.accent_color) {
+    document.documentElement.style.setProperty('--accent', cfg.accent_color);
+  }
+  // A push without easels means they did not change.
+  if (!Array.isArray(cfg.easels)) return;
+
+  const now = Date.now();
+  const remote = cfg.easels.map(e => Object.assign({}, e));
+  const byId = new Map(remote.map(e => [e.id, e]));
+  saved = new Map(remote.map(e => [e.id, { title: e.title, json: e.elements_json }]));
+  for (const [id, sent] of inflight) {
+    const r = byId.get(id);
+    if ((r && r.title === sent.title && r.elements_json === sent.json) || now - sent.at > ECHO_TTL_MS) {
+      inflight.delete(id);
+    }
+  }
+  for (const [id, at] of unconfirmed) {
+    if (byId.has(id) || now - at > ECHO_TTL_MS) unconfirmed.delete(id);
+  }
+  for (const [id, at] of deleted) {
+    if (!byId.has(id) || now - at > ECHO_TTL_MS) deleted.delete(id);
+  }
+
+  // Keep local edits that Rust has not echoed yet.
+  for (const r of remote) {
+    const sent = inflight.get(r.id);
+    if (sent) {
+      r.title = sent.title;
+      r.elements_json = sent.json;
+    }
+  }
+  const next = remote.filter(e => !deleted.has(e.id));
+  for (const id of unconfirmed.keys()) {
+    const local = easels.find(e => e.id === id);
+    if (local && !byId.has(id)) next.unshift(local);
+  }
+  if (dirty && activeEaselId && !next.some(e => e.id === activeEaselId)) {
+    // The open board was deleted elsewhere while being edited: keep it.
+    next.unshift({ id: activeEaselId, title: boardTitle(), elements_json: serializeBoard(), workspace: currentWorkspace || '', updated_at: nowSecs() });
+  }
+  easels = next;
+
+  if (!easels.some(e => e.id === activeEaselId)) {
+    if (!dirty) showBoard(easels[0] || null);
+  } else {
+    reconcileActive();
+  }
+  renderPicker();
+}
+
+// ---- Toolbar --------------------------------------------------------------
+
 document.getElementById('btn-add-sticky').addEventListener('click', () => {
-  elements.push({
-    id: 'card_' + Date.now(),
+  addCard({
+    id: newId('card_'),
     type: 'sticky',
     x: 80 + (elements.length * 28) % 360,
     y: 90 + (elements.length * 24) % 260,
@@ -409,13 +819,11 @@ document.getElementById('btn-add-sticky').addEventListener('click', () => {
     accent: activeAccent,
     text: 'New idea...'
   });
-  renderCards();
-  scheduleSave();
 });
 
 document.getElementById('btn-add-text').addEventListener('click', () => {
-  elements.push({
-    id: 'card_' + Date.now(),
+  addCard({
+    id: newId('card_'),
     type: 'text',
     x: 120 + (elements.length * 24) % 340,
     y: 110 + (elements.length * 24) % 240,
@@ -425,35 +833,61 @@ document.getElementById('btn-add-text').addEventListener('click', () => {
     accent: activeAccent,
     text: 'Heading or Note...'
   });
-  renderCards();
-  scheduleSave();
 });
 
 document.getElementById('btn-add-link').addEventListener('click', () => {
-  const url = 'https://github.com';
-  elements.push({
-    id: 'card_' + Date.now(),
+  const card = addCard({
+    id: newId('card_'),
     type: 'link',
     x: 140 + (elements.length * 24) % 340,
     y: 130 + (elements.length * 24) % 240,
     w: 240,
-    h: 140,
+    h: 170,
     color: activeBg,
     accent: activeAccent,
-    url: url,
-    text: 'Pinned Resource\n' + url
+    url: '',
+    text: 'Pinned Resource'
   });
-  renderCards();
-  scheduleSave();
+  const input = card.querySelector('.easel-link-input');
+  if (input) input.focus();
 });
 
-document.getElementById('btn-draw-toggle').addEventListener('click', (e) => {
-  drawMode = !drawMode;
-  document.body.classList.toggle('draw-mode', drawMode);
-  e.currentTarget.classList.toggle('active', drawMode);
+document.getElementById('btn-draw-toggle').addEventListener('click', () => setDrawMode(!drawMode));
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && drawMode && !isInteracting()) setDrawMode(false);
 });
 
-document.getElementById('btn-clear-board').addEventListener('click', () => {
+// Destructive buttons ask for a second click within a few seconds.
+const armTimers = new Map();
+
+function disarm(btn) {
+  clearTimeout(armTimers.get(btn));
+  armTimers.delete(btn);
+  btn.classList.remove('armed');
+  btn.textContent = btn.dataset.label || btn.textContent;
+}
+
+function disarmAll() {
+  for (const btn of [...armTimers.keys()]) disarm(btn);
+}
+
+function confirmClick(btn, prompt) {
+  if (armTimers.has(btn)) {
+    disarm(btn);
+    return true;
+  }
+  disarmAll();
+  btn.dataset.label = btn.textContent;
+  btn.classList.add('armed');
+  btn.textContent = prompt;
+  armTimers.set(btn, setTimeout(() => disarm(btn), CONFIRM_MS));
+  return false;
+}
+
+clearBtn.addEventListener('click', () => {
+  if (elements.length === 0 && strokes.length === 0) return;
+  if (!confirmClick(clearBtn, 'Click again to clear')) return;
   elements = [];
   strokes = [];
   renderCards();
@@ -461,21 +895,40 @@ document.getElementById('btn-clear-board').addEventListener('click', () => {
   scheduleSave();
 });
 
+deleteBtn.addEventListener('click', () => {
+  if (!activeEaselId) return;
+  if (!confirmClick(deleteBtn, 'Click again to delete')) return;
+  const id = activeEaselId;
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  dirty = false;
+  setStatus('Saved');
+  inflight.delete(id);
+  unconfirmed.delete(id);
+  deleted.set(id, Date.now());
+  easels = easels.filter(e => e.id !== id);
+  postIpc({ action: 'delete_easel', id });
+  showBoard(easels[0] || null);
+});
+
 document.getElementById('btn-new-easel').addEventListener('click', () => {
-  const id = 'easel_' + Date.now();
-  const next = { id, title: 'New Easel Board', elements_json: '[]', workspace: 'Default', updated_at: Math.floor(Date.now() / 1000) };
-  easels.unshift(next);
-  loadEaselData(next);
-  renderPicker();
-  scheduleSave();
+  flushSave();
+  const board = { id: newId('easel_'), title: 'New Easel Board', elements_json: '[]', workspace: currentWorkspace || '', updated_at: nowSecs() };
+  easels.unshift(board);
+  unconfirmed.set(board.id, Date.now());
+  showBoard(board);
+  sendEasel(board.id, board.title, board.elements_json);
+  titleEl.focus();
+  titleEl.select();
 });
 
-document.getElementById('easel-picker').addEventListener('change', (e) => {
-  const found = easels.find(x => x.id === e.target.value);
-  if (found) loadEaselData(found);
+pickerEl.addEventListener('change', () => {
+  if (pickerEl.value && pickerEl.value !== activeEaselId) openBoard(pickerEl.value);
 });
 
-document.getElementById('easel-title').addEventListener('input', scheduleSave);
+titleEl.addEventListener('input', scheduleSave);
 
 document.querySelectorAll('.swatch').forEach(sw => {
   sw.addEventListener('click', () => {
@@ -486,29 +939,21 @@ document.querySelectorAll('.swatch').forEach(sw => {
   });
 });
 
-function escapeHtml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function loadFromConfig(cfg) {
-  if (!cfg) return;
-  easels = Array.isArray(cfg.easels) && cfg.easels.length > 0 ? cfg.easels : [];
-  if (!activeEaselId && easels.length > 0) {
-    loadEaselData(easels[0]);
-  }
-  renderPicker();
-}
-
 window.onEclipseConfigUpdated = function(cfg) {
   loadFromConfig(cfg);
 };
 
-window.addEventListener('DOMContentLoaded', () => {
-  resizeCanvas();
-  if (window.__ECLIPSE_CONFIG__) {
-    loadFromConfig(window.__ECLIPSE_CONFIG__);
+window.onEclipseStateUpdated = function(state) {
+  // State is only pushed to the active tab, so its Space is this tab's Space.
+  if (state && typeof state.current_workspace === 'string' && state.current_workspace) {
+    currentWorkspace = state.current_workspace;
   }
-});
+};
+
+resizeCanvas();
+watchPixelRatio();
+showBoard(null);
+loadFromConfig(window.__ECLIPSE_CONFIG__);
 </script>
 </body>
 </html>

@@ -165,6 +165,9 @@ body {
 }
 .btn-action:hover { color: var(--text); background: var(--card-hover); }
 .btn-action.danger:hover { color: #F87171; border-color: #F87171; }
+.btn-action.danger.armed { color: #FCA5A5; border-color: #F87171; background: rgba(239, 68, 68, 0.18); }
+.btn-action:disabled { opacity: 0.45; cursor: default; }
+.notes-empty { font-size: 12px; color: var(--dim); padding: 8px 4px; }
 .content-textarea {
   flex: 1;
   width: 100%;
@@ -202,10 +205,31 @@ body {
   <textarea class="content-textarea" id="note-content" placeholder="Write markdown, paste snippets, or jot down research thoughts..."></textarea>
 </div>
 <script>
+// Notes arrive from Rust (the init seed and onEclipseConfigUpdated) and are
+// saved one note at a time with save_note. An edit is always tied to the note
+// it was typed into, and a pushed config never overwrites text that has not
+// been saved and echoed back yet.
+const SAVE_DEBOUNCE_MS = 300;
+const ECHO_TTL_MS = 5000;
+const CONFIRM_MS = 3000;
+
 let notes = [];
 let activeNoteId = null;
-let currentWorkspace = 'Default';
+// The active Space, from the init seed or the state push; null lets Rust use
+// the Space of the tab that sends the save.
+let currentWorkspace = (typeof window.__ECLIPSE_SPACE__ === 'string' && window.__ECLIPSE_SPACE__) || null;
+let pending = null;            // { id, title, content } typed but not sent yet
 let saveTimer = null;
+let shown = null;              // { id, title, content } the editor was last synced to
+let saved = new Map();         // id -> { title, content } as last pushed by Rust
+const inflight = new Map();    // id -> { title, content, at } sent, not echoed yet
+const unconfirmed = new Map(); // id -> time a note was created here, not echoed yet
+const deleted = new Map();     // id -> time a note was deleted here
+
+const titleEl = document.getElementById('note-title');
+const contentEl = document.getElementById('note-content');
+const statusEl = document.getElementById('save-status');
+const deleteBtn = document.getElementById('btn-delete-note');
 
 function postIpc(cmd) {
   if (window.__eclipseIpc) {
@@ -215,94 +239,247 @@ function postIpc(cmd) {
   }
 }
 
+function newNoteId() {
+  return 'note_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function nowSecs() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function setStatus(text) {
+  if (statusEl.textContent !== text) statusEl.textContent = text;
+}
+
+function sendNote(id, title, content) {
+  inflight.set(id, { title, content, at: Date.now() });
+  const cmd = { action: 'save_note', id, title, content };
+  if (currentWorkspace) cmd.workspace = currentWorkspace;
+  postIpc(cmd);
+}
+
+function scheduleSave() {
+  if (!activeNoteId) {
+    // Typing with no note selected starts a new one.
+    activeNoteId = newNoteId();
+    unconfirmed.set(activeNoteId, Date.now());
+  }
+  pending = {
+    id: activeNoteId,
+    title: titleEl.value.trim() || 'Untitled Note',
+    content: contentEl.value
+  };
+  setStatus('Saving…');
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
+}
+
+// Send the pending edit now. Called before anything changes which note is
+// open, and when the page is hidden or closed.
+function flushSave() {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  if (!pending) return;
+  const snap = pending;
+  pending = null;
+  const note = notes.find(n => n.id === snap.id);
+  // Compare with what Rust has (or was last sent), not the local list, which
+  // may already show the unsent text.
+  const known = inflight.get(snap.id) || saved.get(snap.id);
+  if (!known || known.title !== snap.title || known.content !== snap.content) {
+    sendNote(snap.id, snap.title, snap.content);
+  }
+  if (note) {
+    note.title = snap.title;
+    note.content = snap.content;
+    note.updated_at = nowSecs();
+  } else {
+    notes.unshift({ id: snap.id, title: snap.title, content: snap.content, workspace: currentWorkspace || '', updated_at: nowSecs() });
+  }
+  if (snap.id === activeNoteId) shown = { id: snap.id, title: snap.title, content: snap.content };
+  renderNotesList();
+  setStatus('Saved');
+}
+
+window.addEventListener('pagehide', flushSave);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushSave();
+});
+
+function setFieldValue(field, value) {
+  if (field.value === value) return;
+  if (document.activeElement === field) {
+    const start = Math.min(field.selectionStart, value.length);
+    const end = Math.min(field.selectionEnd, value.length);
+    field.value = value;
+    field.setSelectionRange(start, end);
+  } else {
+    field.value = value;
+  }
+}
+
+function populateEditor(note) {
+  disarmDelete();
+  if (!note) {
+    titleEl.value = '';
+    contentEl.value = '';
+    shown = null;
+    deleteBtn.disabled = true;
+    return;
+  }
+  setFieldValue(titleEl, note.title || '');
+  setFieldValue(contentEl, note.content || '');
+  shown = { id: note.id, title: note.title || '', content: note.content || '' };
+  deleteBtn.disabled = false;
+}
+
+function openNote(id) {
+  flushSave();
+  activeNoteId = id;
+  populateEditor(notes.find(n => n.id === id) || null);
+  renderNotesList();
+}
+
 function loadFromConfig(cfg) {
   if (!cfg) return;
   if (cfg.accent_color) {
     document.documentElement.style.setProperty('--accent', cfg.accent_color);
   }
-  notes = Array.isArray(cfg.notes) ? cfg.notes : [];
-  if (!activeNoteId && notes.length > 0) {
-    activeNoteId = notes[0].id;
-    populateEditor(notes[0]);
+  // A push without notes means they did not change.
+  if (!Array.isArray(cfg.notes)) return;
+
+  const now = Date.now();
+  const remote = cfg.notes.map(n => Object.assign({}, n));
+  const byId = new Map(remote.map(n => [n.id, n]));
+  saved = new Map(remote.map(n => [n.id, { title: n.title, content: n.content }]));
+  for (const [id, sent] of inflight) {
+    const r = byId.get(id);
+    if ((r && r.title === sent.title && r.content === sent.content) || now - sent.at > ECHO_TTL_MS) {
+      inflight.delete(id);
+    }
+  }
+  for (const [id, at] of unconfirmed) {
+    if (byId.has(id) || now - at > ECHO_TTL_MS) unconfirmed.delete(id);
+  }
+  for (const [id, at] of deleted) {
+    if (!byId.has(id) || now - at > ECHO_TTL_MS) deleted.delete(id);
+  }
+
+  // Keep local edits that Rust has not echoed yet.
+  for (const r of remote) {
+    const local = (pending && pending.id === r.id) ? pending : inflight.get(r.id);
+    if (local) {
+      r.title = local.title;
+      r.content = local.content;
+    }
+  }
+  let next = remote.filter(n => !deleted.has(n.id));
+  for (const id of unconfirmed.keys()) {
+    const local = notes.find(n => n.id === id);
+    if (local && !byId.has(id)) next.unshift(local);
+  }
+  if (pending && !next.some(n => n.id === pending.id)) {
+    // The open note was deleted elsewhere while being edited: keep the text.
+    next.unshift({ id: pending.id, title: pending.title, content: pending.content, workspace: currentWorkspace || '', updated_at: nowSecs() });
+  }
+  notes = next;
+
+  const active = notes.find(n => n.id === activeNoteId);
+  if (!active) {
+    activeNoteId = notes.length ? notes[0].id : null;
+    populateEditor(notes[0] || null);
+  } else if (!(pending && pending.id === active.id) && !inflight.has(active.id)) {
+    // Nothing unsaved for the open note: adopt changes made elsewhere.
+    if (!shown || shown.id !== active.id || shown.title !== active.title || shown.content !== active.content) {
+      populateEditor(active);
+    }
   }
   renderNotesList();
-}
-
-function populateEditor(note) {
-  const titleEl = document.getElementById('note-title');
-  const contentEl = document.getElementById('note-content');
-  if (!note) {
-    titleEl.value = '';
-    contentEl.value = '';
-    return;
-  }
-  if (document.activeElement !== titleEl) titleEl.value = note.title || '';
-  if (document.activeElement !== contentEl) contentEl.value = note.content || '';
 }
 
 function renderNotesList() {
   const list = document.getElementById('notes-list');
   const q = (document.getElementById('note-search').value || '').toLowerCase();
-  list.innerHTML = '';
   const filtered = notes.filter(n => !q || (n.title || '').toLowerCase().includes(q) || (n.content || '').toLowerCase().includes(q));
+  list.replaceChildren();
+  if (filtered.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'notes-empty';
+    empty.textContent = q ? 'No notes match your search.' : 'No notes yet. Click + New to start one.';
+    list.appendChild(empty);
+    return;
+  }
   filtered.forEach(n => {
-    const el = document.createElement('div');
-    el.className = 'note-card' + (n.id === activeNoteId ? ' active' : '');
-    const preview = (n.content || '').replace(/\n+/g, ' ').slice(0, 80) || 'Empty note';
-    el.innerHTML = `
-      <div class="note-card-title">${escapeHtml(n.title || 'Untitled Note')}</div>
-      <div class="note-card-preview">${escapeHtml(preview)}</div>
-      <div class="note-card-meta">
-        <span>${escapeHtml(n.workspace || 'Work')}</span>
-      </div>
-    `;
-    el.addEventListener('click', () => {
-      activeNoteId = n.id;
-      populateEditor(n);
-      renderNotesList();
+    const card = document.createElement('div');
+    card.className = 'note-card' + (n.id === activeNoteId ? ' active' : '');
+    const title = document.createElement('div');
+    title.className = 'note-card-title';
+    title.textContent = n.title || 'Untitled Note';
+    const preview = document.createElement('div');
+    preview.className = 'note-card-preview';
+    preview.textContent = (n.content || '').replace(/\n+/g, ' ').slice(0, 80) || 'Empty note';
+    const meta = document.createElement('div');
+    meta.className = 'note-card-meta';
+    const ws = document.createElement('span');
+    ws.textContent = n.workspace || '';
+    meta.appendChild(ws);
+    card.append(title, preview, meta);
+    card.addEventListener('click', () => {
+      if (n.id !== activeNoteId) openNote(n.id);
     });
-    list.appendChild(el);
+    list.appendChild(card);
   });
 }
 
-function scheduleSave() {
-  const status = document.getElementById('save-status');
-  if (status) status.textContent = 'Saving…';
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    const title = document.getElementById('note-title').value.trim() || 'Untitled Note';
-    const content = document.getElementById('note-content').value;
-    if (!activeNoteId) {
-      activeNoteId = 'note_' + Date.now();
-    }
-    const existing = notes.find(n => n.id === activeNoteId);
-    if (existing) {
-      existing.title = title;
-      existing.content = content;
-    } else {
-      notes.unshift({ id: activeNoteId, title, content, workspace: currentWorkspace, updated_at: Math.floor(Date.now() / 1000) });
-    }
-    postIpc({ action: 'save_note', id: activeNoteId, title, content, workspace: currentWorkspace });
-    renderNotesList();
-    if (status) status.textContent = 'Saved';
-  }, 220);
-}
-
 document.getElementById('btn-create-note').addEventListener('click', () => {
-  const newId = 'note_' + Date.now();
-  const newNote = { id: newId, title: 'Untitled Note', content: '', workspace: currentWorkspace, updated_at: Math.floor(Date.now() / 1000) };
-  notes.unshift(newNote);
-  activeNoteId = newId;
-  populateEditor(newNote);
+  flushSave();
+  const id = newNoteId();
+  const note = { id, title: 'Untitled Note', content: '', workspace: currentWorkspace || '', updated_at: nowSecs() };
+  notes.unshift(note);
+  unconfirmed.set(id, Date.now());
+  activeNoteId = id;
+  populateEditor(note);
   renderNotesList();
-  postIpc({ action: 'save_note', id: newId, title: newNote.title, content: '', workspace: currentWorkspace });
-  document.getElementById('note-title').focus();
-  document.getElementById('note-title').select();
+  sendNote(id, note.title, note.content);
+  titleEl.focus();
+  titleEl.select();
 });
 
-document.getElementById('btn-delete-note').addEventListener('click', () => {
+// Delete asks for a second click within a few seconds instead of acting at once.
+let deleteArmTimer = null;
+
+function disarmDelete() {
+  if (deleteArmTimer) {
+    clearTimeout(deleteArmTimer);
+    deleteArmTimer = null;
+  }
+  deleteBtn.classList.remove('armed');
+  deleteBtn.textContent = 'Delete';
+}
+
+deleteBtn.addEventListener('click', () => {
   if (!activeNoteId) return;
+  if (!deleteArmTimer) {
+    deleteBtn.classList.add('armed');
+    deleteBtn.textContent = 'Click again to delete';
+    deleteArmTimer = setTimeout(disarmDelete, CONFIRM_MS);
+    return;
+  }
+  disarmDelete();
   const delId = activeNoteId;
+  if (pending && pending.id === delId) {
+    pending = null;
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    setStatus('Saved');
+  }
+  inflight.delete(delId);
+  unconfirmed.delete(delId);
+  deleted.set(delId, Date.now());
   notes = notes.filter(n => n.id !== delId);
   postIpc({ action: 'delete_note', id: delId });
   activeNoteId = notes[0] ? notes[0].id : null;
@@ -310,23 +487,24 @@ document.getElementById('btn-delete-note').addEventListener('click', () => {
   renderNotesList();
 });
 
-document.getElementById('note-title').addEventListener('input', scheduleSave);
-document.getElementById('note-content').addEventListener('input', scheduleSave);
+titleEl.addEventListener('input', scheduleSave);
+contentEl.addEventListener('input', scheduleSave);
 document.getElementById('note-search').addEventListener('input', renderNotesList);
-
-function escapeHtml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 window.onEclipseConfigUpdated = function(cfg) {
   loadFromConfig(cfg);
 };
 
-window.addEventListener('DOMContentLoaded', () => {
-  if (window.__ECLIPSE_CONFIG__) {
-    loadFromConfig(window.__ECLIPSE_CONFIG__);
+window.onEclipseStateUpdated = function(state) {
+  // State is only pushed to the active tab, so its Space is this tab's Space.
+  if (state && typeof state.current_workspace === 'string' && state.current_workspace) {
+    currentWorkspace = state.current_workspace;
   }
-});
+};
+
+populateEditor(null);
+loadFromConfig(window.__ECLIPSE_CONFIG__);
+renderNotesList();
 </script>
 </body>
 </html>

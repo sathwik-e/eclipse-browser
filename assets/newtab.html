@@ -39,22 +39,23 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Ambient Eclipse Corona Glow */
+/* Ambient Eclipse Corona Glow. A soft gradient instead of an animated
+   blur filter: the page is often left open, and anything animating forever
+   here keeps WebKit repainting while idle. */
 .eclipse-halo {
   position: absolute;
-  top: -130px;
-  width: 480px;
-  height: 480px;
+  top: -230px;
+  width: 640px;
+  height: 640px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(94, 158, 255, 0.18) 0%, rgba(139, 92, 246, 0.12) 40%, transparent 70%);
-  filter: blur(50px);
+  background: radial-gradient(circle, rgba(94, 158, 255, 0.17) 0%, rgba(139, 92, 246, 0.1) 32%, rgba(139, 92, 246, 0.04) 50%, transparent 68%);
   pointer-events: none;
-  animation: pulseCorona 7s ease-in-out infinite alternate;
+  animation: haloFadeIn 1.2s ease-out both;
 }
 
-@keyframes pulseCorona {
-  0% { transform: scale(0.95); opacity: 0.72; }
-  100% { transform: scale(1.12); opacity: 1; }
+@keyframes haloFadeIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
 
 /* Hero Celestial Eclipse Emblem */
@@ -97,6 +98,34 @@ body {
   height: 7px;
 }
 
+/* The hero emblem plays its transit once and then rests at totality. */
+.eclipse-emblem .eclipse-star {
+  animation: none;
+  transform: scale(1.06);
+}
+
+.eclipse-emblem .eclipse-corona {
+  animation: coronaReveal 1.4s var(--ease-spring) both;
+}
+
+.eclipse-emblem .eclipse-moon {
+  animation: moonArrive 1.4s cubic-bezier(0.42, 0, 0.58, 1) both;
+}
+
+.eclipse-emblem .eclipse-diamond {
+  animation: diamondFlash 1.4s ease-in-out both;
+}
+
+@keyframes moonArrive {
+  from { transform: translateX(-16px) scale(0.9); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+@keyframes coronaReveal {
+  from { transform: scale(0.85); opacity: 0.3; }
+  to { transform: scale(1.12); opacity: 0.9; }
+}
+
 body.is-navigating .eclipse-emblem {
   transform: scale(1.18);
   transition: transform 0.35s var(--ease-spring);
@@ -131,16 +160,6 @@ body.is-navigating .eclipse-emblem {
 .command-bar-card.is-loading {
   border-color: rgba(94, 158, 255, 0.75);
   box-shadow: 0 32px 84px rgba(0, 0, 0, 0.85), 0 0 42px rgba(94, 158, 255, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
-  animation: cardLoadingPulse 2.2s ease-in-out infinite;
-}
-
-@keyframes cardLoadingPulse {
-  0%, 100% {
-    box-shadow: 0 32px 84px rgba(0, 0, 0, 0.85), 0 0 30px rgba(94, 158, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
-  }
-  50% {
-    box-shadow: 0 32px 84px rgba(0, 0, 0, 0.85), 0 0 52px rgba(94, 158, 255, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.3);
-  }
 }
 
 .command-bar-header {
@@ -292,14 +311,16 @@ body.is-navigating .eclipse-emblem {
   }
 }
 
+/* The loader only runs while a navigation is in flight, and its keyframes
+   animate transform and opacity alone so they stay on the compositor. */
 @keyframes starLuminescence {
   0%, 100% {
     transform: scale(0.95);
-    filter: brightness(1) drop-shadow(0 0 5px rgba(56, 189, 248, 0.7));
+    opacity: 0.85;
   }
   50% {
     transform: scale(1.08);
-    filter: brightness(1.35) drop-shadow(0 0 14px rgba(56, 189, 248, 1));
+    opacity: 1;
   }
 }
 
@@ -307,12 +328,10 @@ body.is-navigating .eclipse-emblem {
   0%, 100% {
     transform: scale(0.85);
     opacity: 0.3;
-    box-shadow: 0 0 4px rgba(37, 99, 235, 0.4);
   }
   46%, 54% {
     transform: scale(1.38);
     opacity: 1;
-    box-shadow: 0 0 16px rgba(147, 197, 253, 0.95), 0 0 24px rgba(56, 189, 248, 0.85), inset 0 0 8px rgba(96, 165, 250, 0.9);
   }
 }
 
@@ -486,10 +505,10 @@ body.is-navigating .eclipse-emblem {
 </div>
 
 <div class="arc-quick-deck">
-  <button class="quick-pill" onclick="postIpc({ action: 'open_notes_tab' })">📝 Notes</button>
-  <button class="quick-pill" onclick="postIpc({ action: 'open_easel_tab' })">🎨 Easel</button>
-  <button class="quick-pill" onclick="postIpc({ action: 'tidy_tabs' })">✨ Tidy Tabs</button>
-  <button class="quick-pill" onclick="postIpc({ action: 'command_bar_open_url', command: 'open_downloads' })">⬇️ Downloads</button>
+  <button class="quick-pill" data-action="open_notes_tab">📝 Notes</button>
+  <button class="quick-pill" data-action="open_easel_tab">🎨 Easel</button>
+  <button class="quick-pill" data-action="tidy_tabs">✨ Tidy Tabs</button>
+  <button class="quick-pill" data-action="command_bar_open_url" data-command="open_downloads">⬇️ Downloads</button>
 </div>
 
 <script>
@@ -539,9 +558,14 @@ function getCommandItems() {
     is_search: true
   });
 
-  if (query.includes('.') || query.startsWith('http://') || query.startsWith('https://') || query.startsWith('localhost')) {
+  const looksLikeUrl = /^https?:\/\//i.test(query) ||
+    (!/\s/.test(query) && (query.includes('.') || /^localhost(:\d+)?(\/|$)/i.test(query)));
+  if (looksLikeUrl) {
     let directUrl = query;
-    if (!/^https?:\/\//i.test(directUrl)) directUrl = 'https://' + directUrl;
+    if (!/^https?:\/\//i.test(directUrl)) {
+      // Local dev servers rarely speak TLS.
+      directUrl = (/^(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(directUrl) ? 'http://' : 'https://') + directUrl;
+    }
     items.push({
       id: null,
       title: `Open ${query}`,
@@ -562,7 +586,7 @@ function getCommandItems() {
           id: t.id,
           title: t.title || cleanUrl(t.url),
           url: t.url,
-          icon: t.favicon || 'globe',
+          icon: t.favicon_url || '',
           is_open: true
         });
       });
@@ -592,7 +616,7 @@ function renderCommandResults() {
 
   if (items.length === 0) {
     container.style.display = 'none';
-    container.innerHTML = '';
+    container.replaceChildren();
     card.classList.remove('has-results');
     return;
   }
@@ -603,23 +627,20 @@ function renderCommandResults() {
     selectedIndex = Math.max(0, items.length - 1);
   }
 
-  container.innerHTML = '';
+  container.replaceChildren();
   items.forEach((item, idx) => {
     const row = document.createElement('div');
     row.className = 'command-item' + (idx === selectedIndex ? ' selected' : '');
-    let actionHtml = '';
-    if (item.is_search) {
-      actionHtml = '<div class="command-item-action">Search ↗</div>';
-    } else if (item.is_open) {
-      actionHtml = '<div class="command-item-action">Switch to Tab →</div>';
-    } else {
-      actionHtml = '<div class="command-item-action">Open ↗</div>';
-    }
-    row.innerHTML = `
-      <div class="command-item-icon">${getIconHtml(item)}</div>
-      <div class="command-item-title">${escapeHtml(item.title)}</div>
-      ${actionHtml}
-    `;
+    const icon = document.createElement('div');
+    icon.className = 'command-item-icon';
+    icon.appendChild(buildIcon(item));
+    const title = document.createElement('div');
+    title.className = 'command-item-title';
+    title.textContent = item.title;
+    const action = document.createElement('div');
+    action.className = 'command-item-action';
+    action.textContent = item.is_search ? 'Search ↗' : (item.is_open ? 'Switch to Tab →' : 'Open ↗');
+    row.append(icon, title, action);
     row.addEventListener('click', () => {
       executeCommandItem(item);
     });
@@ -640,7 +661,6 @@ function updateSelection() {
 }
 
 function executeCommandItem(item) {
-  setLoading(true);
   if (item.id !== null && item.id !== undefined) {
     postIpc({ action: 'select_tab', id: item.id });
   } else {
@@ -691,22 +711,61 @@ searchBox.addEventListener('keydown', (e) => {
 });
 
 searchBox.addEventListener('input', () => {
+  // A new query starts from the top result (search), not the old slot.
+  selectedIndex = 0;
   renderCommandResults();
 });
 
-function getIconHtml(item) {
-  if (item.is_search) {
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="#5E9EFF" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>';
-  }
-  if (item.icon && item.icon.startsWith('http')) {
-    return `<img src="${escapeHtml(item.icon)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='block';" /><svg style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>`;
-  }
-  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>';
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgIcon(stroke, width, shapes) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', stroke);
+  svg.setAttribute('stroke-width', width);
+  shapes.forEach(([tag, attrs]) => {
+    const node = document.createElementNS(SVG_NS, tag);
+    Object.keys(attrs).forEach(k => node.setAttribute(k, attrs[k]));
+    svg.appendChild(node);
+  });
+  return svg;
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function globeIcon() {
+  return svgIcon('currentColor', '1.8', [
+    ['circle', { cx: '12', cy: '12', r: '9' }],
+    ['path', { d: 'M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18' }]
+  ]);
 }
+
+// Favicons come from pages, so only image URLs are accepted, set as a property.
+function buildIcon(item) {
+  if (item.is_search) {
+    return svgIcon('#5E9EFF', '2.2', [
+      ['circle', { cx: '11', cy: '11', r: '7' }],
+      ['path', { d: 'm20 20-3.5-3.5' }]
+    ]);
+  }
+  const src = typeof item.icon === 'string' ? item.icon : '';
+  if (/^(https?:|data:image\/)/i.test(src)) {
+    const img = document.createElement('img');
+    img.alt = '';
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('error', () => img.replaceWith(globeIcon()), { once: true });
+    img.src = src;
+    return img;
+  }
+  return globeIcon();
+}
+
+document.querySelectorAll('.quick-pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    const cmd = { action: pill.dataset.action };
+    if (pill.dataset.command) cmd.command = pill.dataset.command;
+    postIpc(cmd);
+  });
+});
 
 window.onEclipseStateUpdated = function(state) {
   if (!state) return;
@@ -726,6 +785,7 @@ window.onEclipseConfigUpdated = function(cfg) {
     document.documentElement.style.setProperty('--accent', cfg.accent_color);
   }
 };
+window.onEclipseConfigUpdated(window.__ECLIPSE_CONFIG__);
 
 window.addEventListener('DOMContentLoaded', () => {
   if (searchBox) {

@@ -1,15 +1,23 @@
 # Build output
 /target
+/dist
 Eclipse.app
 *.dmg
 *.zip
 scripts/icon_512.png
 scripts/AppIcon.iconset
+__pycache__/
+*.crx
 
 # Local working copies and downloaded builds (not part of the project)
 Deepseek/
 upstream-helium/
 /Eclipse */
+
+# Local tool and editor state
+.claude/
+.vscode/
+.idea/
 
 # Screen recordings and OS clutter
 *.mov

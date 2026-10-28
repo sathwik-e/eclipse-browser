@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
 <title>Eclipse Preferences</title>
 <style>
 :root {
@@ -18,6 +18,11 @@
   --accent: #5E9EFF;
   --accent-glow: rgba(94, 158, 255, 0.28);
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --surface: rgba(255, 255, 255, 0.05);
+  --surface-strong: rgba(255, 255, 255, 0.1);
+  --hairline: rgba(255, 255, 255, 0.06);
+  --ring: #FFFFFF;
+  color-scheme: dark;
 }
 
 [data-theme="void"] { --bg: #07080B; --card: rgba(255, 255, 255, 0.035); }
@@ -32,7 +37,12 @@
   --border-active: rgba(0, 0, 0, 0.18);
   --text-main: rgba(17, 24, 39, 0.92);
   --text-muted: rgba(55, 65, 81, 0.76);
-  --text-dim: rgba(107, 114, 128, 0.76);
+  --text-dim: rgba(107, 114, 128, 0.9);
+  --surface: rgba(0, 0, 0, 0.04);
+  --surface-strong: rgba(0, 0, 0, 0.08);
+  --hairline: rgba(0, 0, 0, 0.08);
+  --ring: rgba(17, 24, 39, 0.85);
+  color-scheme: light;
 }
 
 * {
@@ -71,25 +81,13 @@ body {
   display: block;
   object-fit: contain;
   flex-shrink: 0;
+  /* Static glow: an infinite filter animation repaints every frame while idle. */
   filter: drop-shadow(0 0 10px rgba(94, 158, 255, 0.65));
-  animation: blueEclipseBreathe 4s ease-in-out infinite;
-  transition: transform 0.3s var(--ease-spring), filter 0.3s ease;
+  transition: transform 0.3s var(--ease-spring);
 }
 
 .header:hover .eclipse-icon {
   transform: scale(1.12) rotate(8deg);
-  filter: drop-shadow(0 0 18px rgba(94, 158, 255, 0.95));
-}
-
-@keyframes blueEclipseBreathe {
-  0%, 100% {
-    filter: drop-shadow(0 0 8px rgba(94, 158, 255, 0.5));
-    transform: scale(1);
-  }
-  50% {
-    filter: drop-shadow(0 0 18px rgba(94, 158, 255, 0.85));
-    transform: scale(1.04);
-  }
 }
 
 h1 {
@@ -121,7 +119,7 @@ p.hint {
 }
 
 .card:hover {
-  border-color: rgba(255, 255, 255, 0.14);
+  border-color: var(--border-active);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
   transform: translateY(-1px);
 }
@@ -144,7 +142,7 @@ p.hint {
   align-items: center;
   justify-content: space-between;
   padding: 11px 0;
-  border-bottom: 0.5px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 0.5px solid var(--hairline);
   font-size: 13px;
   transition: background 0.15s ease;
 }
@@ -163,7 +161,7 @@ p.hint {
 .theme-btn {
   padding: 10px 12px;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--surface);
   border: 0.5px solid var(--border);
   color: var(--text-muted);
   font-size: 12.5px;
@@ -208,13 +206,13 @@ p.hint {
 }
 
 .accent-dot.active {
-  border-color: #FFFFFF;
+  border-color: var(--ring);
   transform: scale(1.15);
   box-shadow: 0 0 12px var(--accent);
 }
 
-select, input[type="text"] {
-  background: rgba(255, 255, 255, 0.05);
+select, input[type="text"], textarea.code-input {
+  background: var(--surface);
   color: var(--text-main);
   border: 0.5px solid var(--border);
   border-radius: 8px;
@@ -225,9 +223,9 @@ select, input[type="text"] {
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
-select:focus, input[type="text"]:focus {
+select:focus, input[type="text"]:focus, textarea.code-input:focus {
   border-color: var(--accent);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--surface-strong);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
@@ -239,8 +237,20 @@ input[type="checkbox"] {
   transition: transform 0.15s ease;
 }
 
-input[type="checkbox"]:hover {
+input[type="checkbox"]:hover:not(:disabled) {
   transform: scale(1.1);
+}
+
+input[type="checkbox"]:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+textarea.code-input {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  resize: vertical;
 }
 
 .shortcuts-list {
@@ -257,13 +267,13 @@ input[type="checkbox"]:hover {
   gap: 10px;
   padding: 10px 12px;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--surface);
   border: 0.5px solid var(--border);
   transition: all 0.2s var(--ease-spring);
 }
 
 .shortcut-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--surface-strong);
   border-color: var(--border-active);
   transform: translateX(2px);
 }
@@ -281,6 +291,9 @@ input[type="checkbox"]:hover {
 .shortcut-url {
   font-size: 11.5px;
   color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .add-shortcut-form {
@@ -301,7 +314,7 @@ input[type="checkbox"]:hover {
 }
 
 .btn:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--surface-strong);
   transform: translateY(-1.5px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
@@ -345,7 +358,7 @@ input[type="checkbox"]:hover {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--surface);
   border: 0.5px solid var(--border);
   border-radius: 6px;
   font-size: 12px;
@@ -354,7 +367,7 @@ input[type="checkbox"]:hover {
 }
 
 .site-badge:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-strong);
   border-color: var(--border-active);
 }
 
@@ -389,13 +402,13 @@ input[type="checkbox"]:hover {
   gap: 14px;
   padding: 12px 14px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--surface);
   border: 0.5px solid var(--border);
   transition: all 0.2s var(--ease-spring);
 }
 
 .ext-item:hover {
-  background: rgba(255, 255, 255, 0.065);
+  background: var(--surface-strong);
   border-color: var(--border-active);
   transform: translateY(-1px);
 }
@@ -434,7 +447,7 @@ input[type="checkbox"]:hover {
 
 .ext-ver {
   font-size: 10.5px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--surface-strong);
   padding: 1px 6px;
   border-radius: 4px;
   color: var(--text-muted);
@@ -459,12 +472,49 @@ input[type="checkbox"]:hover {
   gap: 10px;
   flex-shrink: 0;
 }
+
+.empty-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.install-box {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: rgba(94, 158, 255, 0.05);
+  border: 1px solid rgba(94, 158, 255, 0.18);
+  border-radius: 8px;
+}
+
+.install-box-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-main);
+}
+
+#webstore-status.error,
+#unpacked-status.error {
+  color: #F87171;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
 </style>
 </head>
 <body>
 
 <div class="header">
-  <img class="eclipse-icon" src="eclipse://localhost/icon" alt="" draggable="false" onerror="this.style.display='none'" />
+  <img class="eclipse-icon" id="header-icon" src="eclipse://localhost/icon" alt="" draggable="false" />
   <h1>Eclipse Preferences</h1>
 </div>
 <p class="sub">Configure appearance, shortcuts, search engine, and privacy settings.</p>
@@ -486,22 +536,22 @@ input[type="checkbox"]:hover {
     <h2>Theme & Accent</h2>
   </div>
   <div class="theme-grid" style="margin-bottom:16px;">
-    <button class="theme-btn" data-theme="eclipse" onclick="setTheme('eclipse')">Eclipse Dark</button>
-    <button class="theme-btn" data-theme="void" onclick="setTheme('void')">Deep Space</button>
-    <button class="theme-btn" data-theme="lunar" onclick="setTheme('lunar')">Lunar Slate</button>
-    <button class="theme-btn" data-theme="nebula" onclick="setTheme('nebula')">Nebula Dusk</button>
-    <button class="theme-btn" data-theme="aurora" onclick="setTheme('aurora')">Aurora Boreal</button>
-    <button class="theme-btn" data-theme="sol" onclick="setTheme('sol')">Daylight Sol</button>
+    <button type="button" class="theme-btn" data-theme-val="eclipse">Eclipse Dark</button>
+    <button type="button" class="theme-btn" data-theme-val="void">Deep Space</button>
+    <button type="button" class="theme-btn" data-theme-val="lunar">Lunar Slate</button>
+    <button type="button" class="theme-btn" data-theme-val="nebula">Nebula Dusk</button>
+    <button type="button" class="theme-btn" data-theme-val="aurora">Aurora Boreal</button>
+    <button type="button" class="theme-btn" data-theme-val="sol">Daylight Sol</button>
   </div>
   <div class="row">
     <span>Accent Color</span>
     <div class="accent-row">
-      <div class="accent-dot" style="background:#5E9EFF" onclick="setAccent('#5E9EFF')"></div>
-      <div class="accent-dot" style="background:#E5A93C" onclick="setAccent('#E5A93C')"></div>
-      <div class="accent-dot" style="background:#A78BFA" onclick="setAccent('#A78BFA')"></div>
-      <div class="accent-dot" style="background:#34D399" onclick="setAccent('#34D399')"></div>
-      <div class="accent-dot" style="background:#F472B6" onclick="setAccent('#F472B6')"></div>
-      <div class="accent-dot" style="background:#E5E7EB" onclick="setAccent('#E5E7EB')"></div>
+      <div class="accent-dot" role="button" tabindex="0" data-color="#5E9EFF" style="background:#5E9EFF"></div>
+      <div class="accent-dot" role="button" tabindex="0" data-color="#E5A93C" style="background:#E5A93C"></div>
+      <div class="accent-dot" role="button" tabindex="0" data-color="#A78BFA" style="background:#A78BFA"></div>
+      <div class="accent-dot" role="button" tabindex="0" data-color="#34D399" style="background:#34D399"></div>
+      <div class="accent-dot" role="button" tabindex="0" data-color="#F472B6" style="background:#F472B6"></div>
+      <div class="accent-dot" role="button" tabindex="0" data-color="#E5E7EB" style="background:#E5E7EB"></div>
     </div>
   </div>
 </div>
@@ -534,7 +584,7 @@ input[type="checkbox"]:hover {
   <div class="row" id="row-current-site-adblock">
     <div>
       <div style="font-weight: 500;">Block Ads &amp; Trackers on Current Page</div>
-      <div class="hint" id="txt-current-site-adblock-domain" style="margin-top:2px;">Target: current website</div>
+      <div class="hint" id="txt-current-site-adblock-domain" style="margin-top:2px;">Open a website to control its ad blocker here</div>
     </div>
     <input type="checkbox" id="chk-site-adblock" checked />
   </div>
@@ -562,7 +612,7 @@ input[type="checkbox"]:hover {
     <span>Media Autoplay</span>
     <input type="checkbox" id="chk-autoplay" checked />
   </div>
-  <p class="hint">DRM and autoplay preferences apply to tabs opened after the change. Content shields and search engine changes apply immediately.</p>
+  <p class="hint">DRM and autoplay preferences apply only to tabs opened after the change. Content shields, search engine and tab suspension changes apply immediately.</p>
 </div>
 
 <div class="card">
@@ -576,13 +626,13 @@ input[type="checkbox"]:hover {
   <div class="row">
     <div>
       <div style="font-weight:500;">Chrome Extensions Runtime (WebExtensions API)</div>
-      <div class="hint" style="margin-top:2px;">Enables <code>chrome.runtime</code>, <code>chrome.storage</code>, <code>chrome.tabs</code>, and MV2/MV3 content scripts.</div>
+      <div class="hint" style="margin-top:2px;">Enables <code>chrome.runtime</code>, <code>chrome.storage</code>, <code>chrome.tabs</code>, and MV2/MV3 content scripts. Applies only to tabs opened after the change.</div>
     </div>
     <input type="checkbox" id="chk-extensions" checked />
   </div>
 
-  <div style="margin-top: 16px; padding: 12px 14px; background: rgba(94, 158, 255, 0.05); border: 1px solid rgba(94, 158, 255, 0.18); border-radius: 8px;">
-    <div style="font-size: 13px; font-weight: 600; margin-bottom: 4px; display:flex; align-items:center; gap:6px; color:#fff;">
+  <div class="install-box">
+    <div class="install-box-title">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5E9EFF" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
       Install Directly from Chrome Web Store
     </div>
@@ -597,6 +647,7 @@ input[type="checkbox"]:hover {
   <div style="margin-top: 18px;">
     <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Installed Chrome Extensions</div>
     <div class="ext-grid" id="installed-ext-list"></div>
+    <p class="hint" style="margin-top:-8px;">Installing, enabling, disabling or removing an extension applies only to tabs opened after the change.</p>
   </div>
 
   <div style="margin-top: 16px;">
@@ -605,54 +656,67 @@ input[type="checkbox"]:hover {
       <input type="text" id="txt-unpacked-path" placeholder="/path/to/unpacked-folder (containing manifest.json)" style="flex:1;" />
       <button class="btn" id="btn-load-unpacked">Load Unpacked</button>
     </div>
+    <div id="unpacked-status" style="font-size: 11.5px; margin-top: 6px; display:none;"></div>
     <p class="hint">Point to any unpacked Chrome MV2/MV3 extension folder on your Mac.</p>
   </div>
 
   <div style="margin-top: 14px;">
     <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Custom User Script (Tampermonkey / Userscript JS)</div>
-    <textarea id="txt-custom-js" rows="4" placeholder="// Paste custom scripts or extension code here...&#10;console.log('Eclipse user script loaded');" style="width:100%; box-sizing:border-box; background:rgba(255,255,255,0.05); color:var(--text-main); border:0.5px solid var(--border); border-radius:8px; padding:8px 12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; outline:none; resize:vertical;"></textarea>
+    <textarea id="txt-custom-js" class="code-input" rows="4" spellcheck="false" placeholder="// Paste custom scripts or extension code here...&#10;console.log('Eclipse user script loaded');"></textarea>
+    <p class="hint">Runs on websites (never on Eclipse pages) in tabs opened after the change.</p>
   </div>
   <div style="margin-top: 14px;">
     <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px;">Custom CSS Stylesheet</div>
-    <textarea id="txt-custom-css" rows="3" placeholder="/* Custom CSS applied to all web pages */" style="width:100%; box-sizing:border-box; background:rgba(255,255,255,0.05); color:var(--text-main); border:0.5px solid var(--border); border-radius:8px; padding:8px 12px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; outline:none; resize:vertical;"></textarea>
+    <textarea id="txt-custom-css" class="code-input" rows="3" spellcheck="false" placeholder="/* Custom CSS applied to all web pages */"></textarea>
+    <p class="hint">Applied to open web pages immediately.</p>
   </div>
 </div>
 
 <script>
-let currentActiveUrl = window.__ECLIPSE_ACTIVE_URL__ || '';
-
-let cfg = window.__ECLIPSE_CONFIG__ || {
+// Config only ever arrives from Rust: the init seed (window.__ECLIPSE_CONFIG__)
+// and window.onEclipseConfigUpdated(cfg, activeUrl). The page never sends the
+// config back; each change is an update_settings patch holding only the keys
+// the user just changed, and collections use their dedicated commands.
+const DEFAULT_CONFIG = {
   theme: 'eclipse',
   accent_color: '#5E9EFF',
-  sidebar_width: 232,
-  sidebar_collapsed: false,
   search_engine: 'duckduckgo',
-  user_agent: navigator.userAgent,
   drm_fairplay_enabled: true,
   autoplay_enabled: true,
   tab_hibernation_mins: 15,
   adblock_enabled: true,
   adblock_disabled_domains: [],
+  webextensions_enabled: true,
   installed_extensions: [],
+  custom_js: '',
   custom_css: '',
-  custom_user_agent: '',
-  favorites: [
-    { title: 'Apple', url: 'https://www.apple.com', icon: 'apple' },
-    { title: 'GitHub', url: 'https://github.com', icon: 'github' },
-    { title: 'YouTube', url: 'https://www.youtube.com', icon: 'youtube' },
-    { title: 'Netflix', url: 'https://www.netflix.com', icon: 'netflix' }
-  ]
+  favorites: []
 };
+const TEXT_DEBOUNCE_MS = 500;
+const INFLIGHT_TTL_MS = 4000;
 
-function getActiveDomain() {
-  try {
-    if (!currentActiveUrl || currentActiveUrl.startsWith('eclipse://')) return '';
-    const u = new URL(currentActiveUrl);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
-    return u.hostname || '';
-  } catch (_) {
-    return '';
-  }
+// The active web page (last non-internal tab), sent by Rust; may be empty.
+let currentActiveUrl = typeof window.__ECLIPSE_ACTIVE_URL__ === 'string' ? window.__ECLIPSE_ACTIVE_URL__ : '';
+let serverCfg = (window.__ECLIPSE_CONFIG__ && typeof window.__ECLIPSE_CONFIG__ === 'object') ? window.__ECLIPSE_CONFIG__ : {};
+// Edits not sent yet (debounced text fields).
+const pendingSettings = Object.create(null);
+let pendingTimer = null;
+// Edits sent but not yet reflected by a config push, so a push that was
+// already queued does not flip the control back.
+const inflightSettings = Object.create(null);
+let inflightTimer = null;
+let cfg = composeConfig();
+
+function sameValue(a, b) {
+  if (a === b) return true;
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch (_) { return false; }
+}
+
+function composeConfig() {
+  const merged = Object.assign({}, DEFAULT_CONFIG, serverCfg);
+  for (const key in inflightSettings) merged[key] = inflightSettings[key].value;
+  for (const key in pendingSettings) merged[key] = pendingSettings[key];
+  return merged;
 }
 
 function postIpc(cmd) {
@@ -665,52 +729,114 @@ function postIpc(cmd) {
   }
 }
 
-let saveTimer = null;
-
-function saveConfig() {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
+function expireInflight() {
+  inflightTimer = null;
+  const now = Date.now();
+  let next = Infinity;
+  for (const key in inflightSettings) {
+    const age = now - inflightSettings[key].at;
+    if (age >= INFLIGHT_TTL_MS) delete inflightSettings[key];
+    else next = Math.min(next, INFLIGHT_TTL_MS - age);
   }
-  postIpc({ action: 'update_config', config: cfg });
+  cfg = composeConfig();
+  renderUI();
+  if (next !== Infinity) inflightTimer = setTimeout(expireInflight, next);
 }
 
-window.addEventListener('pagehide', () => {
-  if (!saveTimer) return;
-  clearTimeout(saveTimer);
-  saveTimer = null;
-  postIpc({ action: 'update_config', config: cfg });
+// Send every pending edit plus `extra` as one update_settings patch.
+function flushSettings(extra) {
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    pendingTimer = null;
+  }
+  const patch = {};
+  for (const key in pendingSettings) {
+    patch[key] = pendingSettings[key];
+    delete pendingSettings[key];
+  }
+  if (extra) Object.assign(patch, extra);
+  const now = Date.now();
+  let changed = false;
+  for (const key of Object.keys(patch)) {
+    if (!inflightSettings[key] && sameValue(serverCfg[key], patch[key])) {
+      delete patch[key];
+      continue;
+    }
+    inflightSettings[key] = { value: patch[key], at: now };
+    changed = true;
+  }
+  if (changed) {
+    postIpc({ action: 'update_settings', settings: patch });
+    if (!inflightTimer) inflightTimer = setTimeout(expireInflight, INFLIGHT_TTL_MS);
+  }
+  cfg = composeConfig();
+}
+
+function setSetting(key, value) {
+  flushSettings({ [key]: value });
+  renderUI();
+}
+
+function setSettingDebounced(key, value) {
+  pendingSettings[key] = value;
+  cfg = composeConfig();
+  if (pendingTimer) clearTimeout(pendingTimer);
+  pendingTimer = setTimeout(() => flushSettings(), TEXT_DEBOUNCE_MS);
+}
+
+// Closing the tab or switching away must not drop a debounced edit.
+window.addEventListener('pagehide', () => flushSettings());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushSettings();
 });
 
-function setTheme(t) {
-  cfg.theme = t;
-  renderUI();
-  saveConfig();
+function getActiveDomain() {
+  try {
+    if (!currentActiveUrl) return '';
+    const u = new URL(currentActiveUrl);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    return u.hostname || '';
+  } catch (_) {
+    return '';
+  }
 }
 
-function setAccent(c) {
-  cfg.accent_color = c;
-  document.documentElement.style.setProperty('--accent', c);
-  renderUI();
-  saveConfig();
+function hexToRgba(hex, alpha) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return `rgba(94, 158, 255, ${alpha})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
-function removeDomainFromAllowlist(domain) {
-  postIpc({ action: 'toggle_site_adblock', domain: domain, enabled: true });
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
-function toggleExtension(id, enabled) {
-  postIpc({ action: 'toggle_extension', id: id, enabled: enabled });
+function setTextIfIdle(id, key) {
+  const area = document.getElementById(id);
+  if (document.activeElement === area || key in pendingSettings) return;
+  const value = cfg[key] || '';
+  if (area.value !== value) area.value = value;
 }
 
-function deleteExtension(id) {
-  postIpc({ action: 'delete_extension', id: id });
-}
+let lastAllowlistSignature = null;
+let lastExtensionsSignature = null;
+let lastShortcutsSignature = null;
 
 function renderUI() {
-  document.documentElement.style.setProperty('--accent', cfg.accent_color || '#5E9EFF');
+  const root = document.documentElement;
+  root.dataset.theme = cfg.theme || 'eclipse';
+  root.style.setProperty('--accent', cfg.accent_color || '#5E9EFF');
+  root.style.setProperty('--accent-glow', hexToRgba(cfg.accent_color, 0.28));
   document.querySelectorAll('.theme-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.theme === cfg.theme);
+    btn.classList.toggle('active', btn.dataset.themeVal === cfg.theme);
+  });
+  const accent = String(cfg.accent_color || '').toLowerCase();
+  document.querySelectorAll('.accent-dot').forEach(dot => {
+    dot.classList.toggle('active', dot.dataset.color.toLowerCase() === accent);
   });
   document.getElementById('engine-select').value = cfg.search_engine || 'duckduckgo';
   document.getElementById('hibernate-select').value = String(cfg.tab_hibernation_mins ?? 15);
@@ -718,233 +844,317 @@ function renderUI() {
   document.getElementById('chk-drm').checked = cfg.drm_fairplay_enabled !== false;
   document.getElementById('chk-autoplay').checked = cfg.autoplay_enabled !== false;
   document.getElementById('chk-extensions').checked = cfg.webextensions_enabled !== false;
-  if (document.activeElement !== document.getElementById('txt-custom-js')) {
-    document.getElementById('txt-custom-js').value = cfg.custom_js || '';
-  }
-  if (document.activeElement !== document.getElementById('txt-custom-css')) {
-    document.getElementById('txt-custom-css').value = cfg.custom_css || '';
-  }
+  setTextIfIdle('txt-custom-js', 'custom_js');
+  setTextIfIdle('txt-custom-css', 'custom_css');
 
-  // Active page adblock toggle
+  const disabledDomains = Array.isArray(cfg.adblock_disabled_domains) ? cfg.adblock_disabled_domains : [];
+  renderSiteAdblockRow(disabledDomains);
+  renderAllowlist(disabledDomains);
+  renderExtensions(Array.isArray(cfg.installed_extensions) ? cfg.installed_extensions : []);
+  renderShortcuts(Array.isArray(serverCfg.favorites) ? serverCfg.favorites : []);
+}
+
+function renderSiteAdblockRow(disabledDomains) {
   const activeDomain = getActiveDomain();
-  const siteRow = document.getElementById('row-current-site-adblock');
   const siteDomainText = document.getElementById('txt-current-site-adblock-domain');
   const chkSiteAdblock = document.getElementById('chk-site-adblock');
-  const disabledDomains = cfg.adblock_disabled_domains || [];
-
-  if (activeDomain && !activeDomain.startsWith('eclipse')) {
-    siteRow.style.display = 'flex';
-    chkSiteAdblock.disabled = false;
-    const activeLower = activeDomain.toLowerCase();
-    const isSiteDisabled = disabledDomains.some(d => {
-      const dl = d.trim().toLowerCase();
-      return dl && (activeLower === dl || activeLower.endsWith('.' + dl));
-    });
-    const isSiteActive = (cfg.adblock_enabled !== false) && !isSiteDisabled;
-    chkSiteAdblock.checked = isSiteActive;
-    siteDomainText.textContent = isSiteActive 
-      ? `Active on ${activeDomain} (turn off to allow ads on this page only)`
-      : `Ad blocker turned OFF on ${activeDomain} (ads & trackers allowed)`;
-  } else {
-    siteRow.style.display = 'flex';
+  if (!activeDomain) {
     chkSiteAdblock.disabled = true;
-    chkSiteAdblock.checked = true;
-    siteDomainText.textContent = 'Internal System Pages are always ad-free';
+    chkSiteAdblock.checked = cfg.adblock_enabled !== false;
+    siteDomainText.textContent = 'Open a website to control its ad blocker here';
+    return;
   }
-
-  // Site allowlist tags
-  const allowlistContainer = document.getElementById('site-allowlist-container');
-  if (allowlistContainer) {
-    if (disabledDomains.length === 0) {
-      allowlistContainer.innerHTML = '<span style="font-size:11.5px;color:var(--text-dim);">No sites allowlisted. Ad blocker is running on all websites.</span>';
-    } else {
-      allowlistContainer.innerHTML = disabledDomains.map(d => `
-        <span class="site-badge">
-          ${escapeHtml(d)}
-          <button type="button" class="badge-remove" onclick="removeDomainFromAllowlist('${escapeHtml(d)}')" title="Turn ad blocker back on for ${escapeHtml(d)}">&times;</button>
-        </span>
-      `).join('');
-    }
+  if (cfg.adblock_enabled === false) {
+    chkSiteAdblock.disabled = true;
+    chkSiteAdblock.checked = false;
+    siteDomainText.textContent = `Global shields are off, so ads are allowed on ${activeDomain}`;
+    return;
   }
+  const activeLower = activeDomain.toLowerCase();
+  const isSiteDisabled = disabledDomains.some(d => {
+    const dl = String(d).trim().toLowerCase();
+    return dl && (activeLower === dl || activeLower.endsWith('.' + dl));
+  });
+  chkSiteAdblock.disabled = false;
+  chkSiteAdblock.checked = !isSiteDisabled;
+  siteDomainText.textContent = isSiteDisabled
+    ? `Ad blocker turned OFF on ${activeDomain} (ads & trackers allowed)`
+    : `Active on ${activeDomain} (turn off to allow ads on this site only)`;
+}
 
-  // Installed Chrome extensions
-  const extList = document.getElementById('installed-ext-list');
-  if (extList) {
-    const extensions = cfg.installed_extensions || [];
-    if (extensions.length === 0) {
-      extList.innerHTML = '<span style="font-size:12px;color:var(--text-dim);">No Chrome extensions installed. Click "Open Chrome Web Store" above or paste an extension link to install one.</span>';
-    } else {
-      extList.innerHTML = extensions.map(ext => `
-        <div class="ext-item">
-          <div class="ext-icon">${(ext.name || 'E').charAt(0).toUpperCase()}</div>
-          <div class="ext-body">
-            <div class="ext-title-row">
-              <span class="ext-title">${escapeHtml(ext.name)}</span>
-              <span class="ext-ver">v${escapeHtml(ext.version)}</span>
-            </div>
-            <div class="ext-desc">${escapeHtml(ext.description || 'WebExtension content script')}</div>
-            <div class="ext-matches">Matches: ${(ext.matches || ['<all_urls>']).map(escapeHtml).join(', ')}</div>
-          </div>
-          <div class="ext-controls">
-            <input type="checkbox" ${ext.enabled ? 'checked' : ''} onchange="toggleExtension('${escapeHtml(ext.id)}', this.checked)" title="Enable / Disable extension" />
-            ${ext.path ? `<button type="button" class="btn danger" style="padding:4px 8px;font-size:11px;" onclick="deleteExtension('${escapeHtml(ext.id)}')">Remove</button>` : ''}
-          </div>
-        </div>
-      `).join('');
-    }
+function renderAllowlist(disabledDomains) {
+  const signature = JSON.stringify(disabledDomains);
+  if (signature === lastAllowlistSignature) return;
+  lastAllowlistSignature = signature;
+  const container = document.getElementById('site-allowlist-container');
+  container.replaceChildren();
+  if (disabledDomains.length === 0) {
+    container.appendChild(el('span', 'empty-hint', 'No sites allowlisted. Ad blocker is running on all websites.'));
+    return;
   }
-
-  const favorites = cfg.favorites || [];
-  const signature = JSON.stringify(favorites);
-  if (signature !== lastShortcutsSignature) {
-    lastShortcutsSignature = signature;
-    const list = document.getElementById('shortcuts-list');
-    list.innerHTML = '';
-    favorites.forEach((fav, idx) => {
-      const item = document.createElement('div');
-      item.className = 'shortcut-item';
-      item.innerHTML = `
-        <div class="shortcut-meta">
-          <div class="shortcut-title">${escapeHtml(fav.title)}</div>
-          <div class="shortcut-url">${escapeHtml(fav.url)}</div>
-        </div>
-        <button class="btn danger" onclick="removeFavorite(${idx})">Remove</button>
-      `;
-      list.appendChild(item);
+  disabledDomains.forEach(domain => {
+    const badge = el('span', 'site-badge', String(domain));
+    const remove = el('button', 'badge-remove', '×');
+    remove.type = 'button';
+    remove.title = `Turn ad blocker back on for ${domain}`;
+    remove.addEventListener('click', () => {
+      postIpc({ action: 'toggle_site_adblock', domain: String(domain), enabled: true });
     });
-  }
+    badge.appendChild(remove);
+    container.appendChild(badge);
+  });
 }
 
-let lastShortcutsSignature = '';
-
-function removeFavorite(idx) {
-  if (cfg.favorites && cfg.favorites[idx]) {
-    cfg.favorites.splice(idx, 1);
-    lastShortcutsSignature = '';
-    renderUI();
-    saveConfig();
+function renderExtensions(extensions) {
+  const signature = JSON.stringify(extensions.map(e => [e.id, e.name, e.version, e.description, e.matches, e.enabled, !!e.path]));
+  if (signature === lastExtensionsSignature) return;
+  lastExtensionsSignature = signature;
+  const list = document.getElementById('installed-ext-list');
+  list.replaceChildren();
+  if (extensions.length === 0) {
+    list.appendChild(el('span', 'empty-hint', 'No Chrome extensions installed. Click "Open Chrome Web Store" above or paste an extension link to install one.'));
+    return;
   }
+  extensions.forEach(ext => {
+    const item = el('div', 'ext-item');
+    item.appendChild(el('div', 'ext-icon', String(ext.name || 'E').charAt(0).toUpperCase()));
+
+    const body = el('div', 'ext-body');
+    const titleRow = el('div', 'ext-title-row');
+    titleRow.appendChild(el('span', 'ext-title', String(ext.name || 'Extension')));
+    titleRow.appendChild(el('span', 'ext-ver', 'v' + String(ext.version || '')));
+    body.appendChild(titleRow);
+    body.appendChild(el('div', 'ext-desc', String(ext.description || 'WebExtension content script')));
+    const matches = Array.isArray(ext.matches) && ext.matches.length ? ext.matches : ['<all_urls>'];
+    body.appendChild(el('div', 'ext-matches', 'Matches: ' + matches.join(', ')));
+    item.appendChild(body);
+
+    const controls = el('div', 'ext-controls');
+    const toggle = document.createElement('input');
+    toggle.type = 'checkbox';
+    toggle.checked = !!ext.enabled;
+    toggle.title = 'Enable / Disable extension (applies to new tabs)';
+    toggle.addEventListener('change', () => {
+      postIpc({ action: 'toggle_extension', id: String(ext.id), enabled: toggle.checked });
+    });
+    controls.appendChild(toggle);
+    if (ext.path) {
+      const remove = el('button', 'btn danger', 'Remove');
+      remove.type = 'button';
+      remove.style.padding = '4px 8px';
+      remove.style.fontSize = '11px';
+      remove.addEventListener('click', () => {
+        postIpc({ action: 'delete_extension', id: String(ext.id) });
+      });
+      controls.appendChild(remove);
+    }
+    item.appendChild(controls);
+    list.appendChild(item);
+  });
 }
 
-document.getElementById('btn-add-fav').addEventListener('click', () => {
-  const title = document.getElementById('new-fav-title').value.trim();
-  const url = document.getElementById('new-fav-url').value.trim();
-  if (!title || !url) return;
-  if (!cfg.favorites) cfg.favorites = [];
-  cfg.favorites.push({ title, url, icon: 'globe' });
-  document.getElementById('new-fav-title').value = '';
-  document.getElementById('new-fav-url').value = '';
-  lastShortcutsSignature = '';
-  renderUI();
-  saveConfig();
+function renderShortcuts(favorites) {
+  const signature = JSON.stringify(favorites);
+  if (signature === lastShortcutsSignature) return;
+  lastShortcutsSignature = signature;
+  const list = document.getElementById('shortcuts-list');
+  list.replaceChildren();
+  favorites.forEach((fav, idx) => {
+    const item = el('div', 'shortcut-item');
+    const meta = el('div', 'shortcut-meta');
+    meta.appendChild(el('div', 'shortcut-title', String(fav.title || fav.url || '')));
+    meta.appendChild(el('div', 'shortcut-url', String(fav.url || '')));
+    item.appendChild(meta);
+    const remove = el('button', 'btn danger', 'Remove');
+    remove.type = 'button';
+    remove.addEventListener('click', () => {
+      postIpc({ action: 'delete_favorite', index: idx });
+    });
+    item.appendChild(remove);
+    list.appendChild(item);
+  });
+}
+
+document.getElementById('header-icon').addEventListener('error', (e) => {
+  e.currentTarget.style.display = 'none';
 });
 
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
+document.querySelectorAll('.theme-btn').forEach(btn => {
+  btn.addEventListener('click', () => setSetting('theme', btn.dataset.themeVal));
+});
+
+document.querySelectorAll('.accent-dot').forEach(dot => {
+  const choose = () => setSetting('accent_color', dot.dataset.color);
+  dot.addEventListener('click', choose);
+  dot.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      choose();
+    }
+  });
+});
+
+function addFavorite() {
+  const titleInput = document.getElementById('new-fav-title');
+  const urlInput = document.getElementById('new-fav-url');
+  const title = titleInput.value.trim();
+  const url = urlInput.value.trim();
+  if (!url) {
+    urlInput.focus();
+    return;
+  }
+  // Rust normalizes the URL and picks the icon, exactly as for sidebar favorites.
+  postIpc({ action: 'save_favorite', index: null, title, url });
+  titleInput.value = '';
+  urlInput.value = '';
 }
 
+document.getElementById('btn-add-fav').addEventListener('click', addFavorite);
+document.getElementById('new-fav-url').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') addFavorite();
+});
+
 document.getElementById('engine-select').addEventListener('change', (e) => {
-  cfg.search_engine = e.target.value;
-  saveConfig();
+  setSetting('search_engine', e.target.value);
 });
 
 document.getElementById('hibernate-select').addEventListener('change', (e) => {
-  cfg.tab_hibernation_mins = parseInt(e.target.value, 10) || 0;
-  saveConfig();
+  setSetting('tab_hibernation_mins', parseInt(e.target.value, 10) || 0);
 });
 
 document.getElementById('chk-adblock').addEventListener('change', (e) => {
-  cfg.adblock_enabled = e.target.checked;
-  saveConfig();
+  setSetting('adblock_enabled', e.target.checked);
 });
 
 document.getElementById('chk-site-adblock').addEventListener('change', (e) => {
   const domain = getActiveDomain();
-  if (!domain || domain.startsWith('eclipse')) return;
+  if (!domain) return;
   postIpc({ action: 'toggle_site_adblock', domain: domain, enabled: e.target.checked });
 });
 
-document.getElementById('btn-add-allowlist-domain').addEventListener('click', () => {
+// Accepts a bare host or a pasted URL; only plain hostnames are sent.
+function normalizeDomain(input) {
+  const raw = String(input || '').trim().toLowerCase();
+  if (!raw) return '';
+  try {
+    const host = new URL(raw.includes('://') ? raw : 'http://' + raw).hostname.replace(/\.$/, '');
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(host) ? host : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function addAllowlistDomain() {
   const input = document.getElementById('new-allowlist-domain');
-  const domain = input.value.trim().toLowerCase();
-  if (!domain) return;
+  const domain = normalizeDomain(input.value);
+  if (!domain) {
+    input.focus();
+    input.select();
+    return;
+  }
   postIpc({ action: 'toggle_site_adblock', domain: domain, enabled: false });
   input.value = '';
+}
+
+document.getElementById('btn-add-allowlist-domain').addEventListener('click', addAllowlistDomain);
+document.getElementById('new-allowlist-domain').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') addAllowlistDomain();
 });
 
-const btnOpenWebstore = document.getElementById('btn-open-webstore');
-if (btnOpenWebstore) {
-  btnOpenWebstore.addEventListener('click', () => {
-    postIpc({ action: 'new_tab', url: 'https://chromewebstore.google.com' });
-  });
+document.getElementById('btn-open-webstore').addEventListener('click', () => {
+  postIpc({ action: 'new_tab', url: 'https://chromewebstore.google.com' });
+});
+
+// Installs report back only through the config push, so watch for a new
+// extension id instead of claiming success up front.
+let installWatch = null;
+
+function showInstallStatus(statusId, text, isError) {
+  const status = document.getElementById(statusId);
+  status.style.display = text ? 'block' : 'none';
+  status.classList.toggle('error', !!isError);
+  status.style.color = isError ? '' : 'var(--accent)';
+  status.textContent = text || '';
 }
 
-const btnInstallWebstore = document.getElementById('btn-install-webstore');
-if (btnInstallWebstore) {
-  btnInstallWebstore.addEventListener('click', () => {
-    const input = document.getElementById('txt-webstore-input');
-    const val = input.value.trim();
-    if (!val) return;
-    const status = document.getElementById('webstore-status');
-    if (status) {
-      status.style.display = 'block';
-      status.style.color = '#5E9EFF';
-      status.textContent = 'Downloading and installing from Chrome Web Store...';
-    }
-    postIpc({ action: 'install_from_web_store', input: val });
-    input.value = '';
-    setTimeout(() => {
-      if (status) {
-        status.textContent = 'Extension installation request sent to Eclipse engine.';
-        setTimeout(() => { status.style.display = 'none'; }, 3500);
-      }
-    }, 1200);
-  });
+function finishInstallWatch(text, isError) {
+  if (!installWatch) return;
+  const { statusId } = installWatch;
+  clearTimeout(installWatch.timer);
+  installWatch = null;
+  showInstallStatus(statusId, text, isError);
+  if (!isError) setTimeout(() => showInstallStatus(statusId, ''), 4000);
 }
+
+function startInstallWatch(statusId, text) {
+  if (installWatch) {
+    clearTimeout(installWatch.timer);
+    if (installWatch.statusId !== statusId) showInstallStatus(installWatch.statusId, '');
+  }
+  const known = new Set((cfg.installed_extensions || []).map(e => e.id));
+  installWatch = {
+    statusId,
+    known,
+    timer: setTimeout(() => {
+      finishInstallWatch('No new extension was added. If it is already installed it is listed below; otherwise check the link, ID or folder and try again.', true);
+    }, 60000)
+  };
+  showInstallStatus(statusId, text, false);
+}
+
+function checkInstallProgress() {
+  if (!installWatch) return;
+  const added = (cfg.installed_extensions || []).find(e => !installWatch.known.has(e.id));
+  if (added) finishInstallWatch(`Installed ${added.name || added.id}. It applies to tabs opened from now on.`, false);
+}
+
+document.getElementById('btn-install-webstore').addEventListener('click', () => {
+  const input = document.getElementById('txt-webstore-input');
+  const val = input.value.trim();
+  if (!val) return;
+  startInstallWatch('webstore-status', 'Downloading and installing from Chrome Web Store...');
+  postIpc({ action: 'install_from_web_store', input: val });
+  input.value = '';
+});
 
 document.getElementById('btn-load-unpacked').addEventListener('click', () => {
   const input = document.getElementById('txt-unpacked-path');
   const path = input.value.trim();
   if (!path) return;
+  startInstallWatch('unpacked-status', 'Loading unpacked extension...');
   postIpc({ action: 'install_extension', path: path });
   input.value = '';
 });
 
 document.getElementById('chk-drm').addEventListener('change', (e) => {
-  cfg.drm_fairplay_enabled = e.target.checked;
-  saveConfig();
+  setSetting('drm_fairplay_enabled', e.target.checked);
 });
 
 document.getElementById('chk-autoplay').addEventListener('change', (e) => {
-  cfg.autoplay_enabled = e.target.checked;
-  saveConfig();
+  setSetting('autoplay_enabled', e.target.checked);
 });
 
 document.getElementById('chk-extensions').addEventListener('change', (e) => {
-  cfg.webextensions_enabled = e.target.checked;
-  saveConfig();
+  setSetting('webextensions_enabled', e.target.checked);
 });
 
-let customJsDebounce = null;
-document.getElementById('txt-custom-js').addEventListener('input', (e) => {
-  cfg.custom_js = e.target.value;
-  if (customJsDebounce) clearTimeout(customJsDebounce);
-  customJsDebounce = setTimeout(saveConfig, 500);
-});
-
-let customCssDebounce = null;
-document.getElementById('txt-custom-css').addEventListener('input', (e) => {
-  cfg.custom_css = e.target.value;
-  if (customCssDebounce) clearTimeout(customCssDebounce);
-  customCssDebounce = setTimeout(saveConfig, 500);
+[['txt-custom-js', 'custom_js'], ['txt-custom-css', 'custom_css']].forEach(([id, key]) => {
+  const area = document.getElementById(id);
+  area.addEventListener('input', () => setSettingDebounced(key, area.value));
+  area.addEventListener('blur', () => flushSettings());
 });
 
 window.onEclipseConfigUpdated = function(newCfg, activeUrl) {
-  if (newCfg) cfg = newCfg;
+  if (newCfg && typeof newCfg === 'object') {
+    serverCfg = newCfg;
+    for (const key in inflightSettings) {
+      if (sameValue(serverCfg[key], inflightSettings[key].value)) delete inflightSettings[key];
+    }
+  }
   if (typeof activeUrl === 'string') currentActiveUrl = activeUrl;
+  cfg = composeConfig();
   renderUI();
+  checkInstallProgress();
 };
 
 renderUI();

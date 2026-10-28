@@ -1,5 +1,6 @@
 use crate::config::{BrowserConfig, DownloadItem, EaselItem, FavoriteShortcut, NoteItem, SpaceProfile};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum UserEvent {
@@ -32,11 +33,15 @@ pub enum UserEvent {
     },
     /// The WebContent process of a tab crashed or was killed.
     WebContentTerminated { tab_id: usize },
+    /// A Chrome Web Store download finished on its worker thread: the
+    /// unpacked extension directory, or a user-facing error.
+    ExtensionDownloaded {
+        ext_id: String,
+        result: Result<PathBuf, String>,
+    },
     TickMemory,
     HoverExpandSidebar,
     HoverCollapseSidebar,
-    #[allow(dead_code)]
-    FinishSidebarCollapse(u64),
     CloseWindow,
 }
 
@@ -77,9 +82,6 @@ pub enum IpcCommand {
     HoverCollapseSidebar,
     FocusOmnibar,
     OpenCommandBar,
-    SetFullscreen {
-        fullscreen: bool,
-    },
     NavigateOrNewTab {
         url: String,
     },
@@ -116,9 +118,6 @@ pub enum IpcCommand {
     CleanMemory,
     HibernateTab {
         id: usize,
-    },
-    UpdateConfig {
-        config: BrowserConfig,
     },
     ToggleSiteAdblock {
         domain: String,
@@ -191,13 +190,6 @@ pub enum IpcCommand {
     UpdateSpaceProfile {
         profile: SpaceProfile,
     },
-    OpenLittleArc {
-        url: String,
-    },
-    PromoteLittleArc {
-        url: String,
-    },
-    CloseLittleArc,
     UpdateScroll {
         x: f64,
         y: f64,
@@ -239,6 +231,10 @@ pub struct TabState {
     pub group: Option<String>,
 }
 
+/// State pushed to the sidebar and to the active internal page. The
+/// config-derived collections are `None` (and omitted from the JSON) unless the
+/// config changed since the last push to that webview; receivers keep their
+/// previous copy when a key is missing.
 #[derive(Debug, Clone, Serialize)]
 pub struct BrowserUiState {
     pub tabs: Vec<TabState>,
@@ -250,13 +246,21 @@ pub struct BrowserUiState {
     pub is_loading: bool,
     pub sidebar_collapsed: bool,
     pub sidebar_hover_expanded: bool,
+    pub is_fullscreen: bool,
     pub current_workspace: String,
+    /// Resident memory of the browser (UI) process only; WebContent processes
+    /// are not included.
     pub memory_mb: f64,
-    pub config: BrowserConfig,
-    pub favorites: Vec<FavoriteShortcut>,
-    pub downloads: Vec<DownloadItem>,
-    pub notes: Vec<NoteItem>,
-    pub easels: Vec<EaselItem>,
-    pub space_profiles: Vec<SpaceProfile>,
-    pub active_little_arc_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<BrowserConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub favorites: Option<Vec<FavoriteShortcut>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<Vec<DownloadItem>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<Vec<NoteItem>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub easels: Option<Vec<EaselItem>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_profiles: Option<Vec<SpaceProfile>>,
 }

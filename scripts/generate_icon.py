@@ -4,6 +4,10 @@
 The 1024 px source is generated from assets/eclipse-icon.webp; this script only
 uses macOS built-ins (sips + iconutil), so packaging still needs no Python
 image libraries.
+
+Usage: generate_icon.py [path/to/AppIcon.icns]
+The default output is the bundle that scripts/package_macos.sh assembles
+(dist/Eclipse.app/Contents/Resources/AppIcon.icns).
 """
 
 import shutil
@@ -13,9 +17,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "assets" / "eclipse-icon-1024.png"
-ICONSET = ROOT / "scripts" / "AppIcon.iconset"
-ICNS = ROOT / "Eclipse.app" / "Contents" / "Resources" / "AppIcon.icns"
-PREVIEW = ROOT / "scripts" / "icon_512.png"
+ICONSET = ROOT / "target" / "AppIcon.iconset"
+DEFAULT_ICNS = ROOT / "dist" / "Eclipse.app" / "Contents" / "Resources" / "AppIcon.icns"
 
 # (pixels, iconset filename). iconutil requires this exact set of names.
 ICON_FILES = [
@@ -50,6 +53,7 @@ def resize(size: int, destination: Path) -> None:
 
 
 def main() -> int:
+    icns = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else DEFAULT_ICNS
     if not SOURCE.exists():
         print(f"missing icon source: {SOURCE}", file=sys.stderr)
         return 1
@@ -60,14 +64,12 @@ def main() -> int:
     for size, name in ICON_FILES:
         resize(size, ICONSET / name)
 
-    shutil.copyfile(ICONSET / "icon_512x512.png", PREVIEW)
-
-    ICNS.parent.mkdir(parents=True, exist_ok=True)
+    icns.parent.mkdir(parents=True, exist_ok=True)
     res = subprocess.run(
-        ["iconutil", "-c", "icns", str(ICONSET), "-o", str(ICNS)],
+        ["iconutil", "-c", "icns", str(ICONSET), "-o", str(icns)],
         capture_output=True,
     )
-    if res.returncode != 0 or not ICNS.exists():
+    if res.returncode != 0 or not icns.exists():
         import struct
 
         chunks = []
@@ -87,8 +89,9 @@ def main() -> int:
             data = (ICONSET / filename).read_bytes()
             chunks.append(ostype + struct.pack(">I", 8 + len(data)) + data)
         body = b"".join(chunks)
-        ICNS.write_bytes(b"icns" + struct.pack(">I", 8 + len(body)) + body)
-    print(f"Generated {PREVIEW.relative_to(ROOT)} and {ICNS.relative_to(ROOT)}")
+        icns.write_bytes(b"icns" + struct.pack(">I", 8 + len(body)) + body)
+    shutil.rmtree(ICONSET, ignore_errors=True)
+    print(f"Generated {icns}")
     return 0
 
 

@@ -1,16 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!--
+  Hardened-runtime entitlements for the Eclipse UI process. WebKit's JIT runs in
+  its own signed WebContent processes, and the app is not sandboxed, so no
+  cs.* or network.* keys are needed. The hardened runtime blocks camera and
+  microphone capture unless these two are present; websites still only get
+  them after the user allows it (see NSCameraUsageDescription and
+  NSMicrophoneUsageDescription in Info.plist).
+-->
 <dict>
-    <key>com.apple.security.cs.allow-jit</key>
+    <key>com.apple.security.device.camera</key>
     <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-    <key>com.apple.security.network.client</key>
-    <true/>
-    <key>com.apple.security.network.server</key>
+    <key>com.apple.security.device.audio-input</key>
     <true/>
 </dict>
 </plist>

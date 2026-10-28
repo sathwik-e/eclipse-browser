@@ -1,7 +1,17 @@
 [package]
 name = "eclipse"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2024"
+rust-version = "1.88"
+description = "A fast, minimal macOS web browser with a vertical tab sidebar, built on the system WebKit"
+license = "MIT"
+authors = ["Sathwik Elaprolu"]
+repository = "https://github.com/sathwik-e/eclipse-browser"
+homepage = "https://github.com/sathwik-e/eclipse-browser"
+readme = "README.md"
+keywords = ["browser", "macos", "webkit", "wry", "tao"]
+categories = ["gui", "web-programming"]
+publish = false
 
 [dependencies]
 tao = "0.37"

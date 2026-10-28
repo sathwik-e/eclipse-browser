@@ -23,6 +23,8 @@ static NSWindow *eclipse_browser_window(void) {
     return window != nil ? window : [NSApp mainWindow];
 }
 
+static BOOL eclipse_little_window_perform_action(NSWindow *key, NSString *action);
+
 @interface EclipseMenuTarget : NSObject
 - (void)performEclipseAction:(id)sender;
 @end
@@ -36,8 +38,12 @@ static NSWindow *eclipse_browser_window(void) {
     }
     if (![action isKindOfClass:[NSString class]] || action.length == 0) return;
 
-    // ⌘W / ⇧⌘W in a secondary window (detached Web Inspector, About panel)
-    // closes that window instead of a browser tab behind it.
+    // Reload, Stop, Back and Forward act on a Little Eclipse window when it
+    // is key (sign-in popups, see below).
+    if (eclipse_little_window_perform_action([NSApp keyWindow], action)) return;
+
+    // ⌘W / ⇧⌘W in a secondary window (detached Web Inspector, About panel,
+    // a Little Eclipse window) closes that window instead of a browser tab behind it.
     if ([action isEqualToString:@"close_tab"] || [action isEqualToString:@"close_window"]) {
         NSWindow *key = [NSApp keyWindow];
         NSWindow *browser = gBrowserWindow;
@@ -1172,4 +1178,568 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
         // of a class that has not been hooked yet.
         eclipse_hook_delegates(webView);
     }
+}
+
+/* ------------------------------------------------------------- Little Eclipse windows */
+/* Sign-in and payment popups (window.open with a size, from a web page) open
+   in a small native window instead of a tab, so they keep window.opener and
+   can post their result back. WebKit requires the popup's WKWebView to be
+   built on the configuration it hands the opener's UI delegate; that
+   configuration shares the opener tab's WKUserContentController, so the popup
+   runs the tab's init scripts and its messages reach the tab's IPC handler
+   (Rust only trusts them as an ordinary website).
+
+   The window shows the page title, and its subtitle shows the host of the
+   committed document, derived here from WebKit's URL and never from page
+   content. A popup only ever loads web content: internal eclipse:// pages
+   and other schemes are refused by its navigation delegate. Each window
+   follows its root opener (the tab's webview): when that webview leaves its
+   window (the tab was closed, hibernated or rebuilt) the popup closes. */
+
+@interface EclipseLittleWindow : NSObject <NSWindowDelegate, WKUIDelegate, WKNavigationDelegate>
+@property(nonatomic, strong) NSWindow *window;
+@property(nonatomic, strong) WKWebView *webView;
+/* The tab webview the first popup in this chain was opened from. wry keeps
+   a destroyed tab's WKWebView alive, so its detachment, not its
+   deallocation, is what signals that the tab is gone. */
+@property(nonatomic, weak) WKWebView *opener;
+/* The committed document's URL, whose host the subtitle shows. */
+@property(nonatomic, copy) NSURL *displayURL;
+@property(nonatomic) BOOL observing;
+@property(nonatomic) BOOL closed;
+@end
+
+static NSMutableSet<EclipseLittleWindow *> *gLittleWindows = nil;
+static __weak EclipseLittleWindow *gLastLittleWindow = nil;
+static NSTimer *gLittleOpenerTimer = nil;
+static void *kEclipseLittleKVOContext = &kEclipseLittleKVOContext;
+
+static const CGFloat kEclipseLittleMinWidth = 360.0;
+static const CGFloat kEclipseLittleMinHeight = 260.0;
+static const NSUInteger kEclipseLittleMaxHostLength = 64;
+
+static BOOL eclipse_perf_enabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) enabled = getenv("ECLIPSE_PERF") != NULL ? 1 : 0;
+    return enabled == 1;
+}
+
+static BOOL eclipse_is_web_scheme(NSString *scheme) {
+    NSString *lower = scheme.lowercaseString;
+    return [lower isEqualToString:@"http"] || [lower isEqualToString:@"https"];
+}
+
+/* A URL a popup may start with or be created for: http(s), or blank (popups
+   often open empty and navigate once the opener has written to them). */
+static BOOL eclipse_little_initial_url_allowed(NSURL *url) {
+    if (url == nil || url.absoluteString.length == 0) return YES;
+    if ([url.absoluteString isEqualToString:@"about:blank"]) return YES;
+    return eclipse_is_web_scheme(url.scheme);
+}
+
+static BOOL eclipse_same_web_origin(NSURL *a, NSURL *b) {
+    if (a == nil || b == nil) return NO;
+    if (!eclipse_is_web_scheme(a.scheme) || !eclipse_is_web_scheme(b.scheme)) return NO;
+    if ([a.scheme caseInsensitiveCompare:b.scheme] != NSOrderedSame) return NO;
+    if (a.host == nil || b.host == nil || [a.host caseInsensitiveCompare:b.host] != NSOrderedSame) return NO;
+    NSNumber *pa = a.port, *pb = b.port;
+    return (pa == nil && pb == nil) || (pa != nil && pb != nil && [pa isEqualToNumber:pb]);
+}
+
+/* What the subtitle shows for the committed document. A long host keeps its
+   end (the registrable domain) and loses its start. */
+static NSString *eclipse_little_host_label(NSURL *url) {
+    if (url == nil) return @"about:blank";
+    NSString *scheme = url.scheme.lowercaseString ?: @"";
+    if (scheme.length == 0) return @"about:blank";
+    if ([scheme isEqualToString:@"about"]) {
+        // Never the query or fragment: the page controls those.
+        NSString *rest = url.resourceSpecifier ?: @"";
+        NSRange cut = [rest rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"?#"]];
+        if (cut.location != NSNotFound) rest = [rest substringToIndex:cut.location];
+        return [@"about:" stringByAppendingString:(rest.length > 0 ? rest : @"blank")];
+    }
+    if ([scheme isEqualToString:@"blob"]) {
+        NSURL *inner = [NSURL URLWithString:url.resourceSpecifier ?: @""];
+        if (inner != nil && eclipse_is_web_scheme(inner.scheme)) return eclipse_little_host_label(inner);
+        return @"Not Secure — blob:";
+    }
+    if (!eclipse_is_web_scheme(scheme)) {
+        return [NSString stringWithFormat:@"Not Secure — %@:", scheme];
+    }
+    NSString *host = url.host.lowercaseString ?: @"";
+    if (host.length == 0) return [NSString stringWithFormat:@"Not Secure — %@:", scheme];
+    if (url.port != nil) host = [NSString stringWithFormat:@"%@:%@", host, url.port];
+    if (host.length > kEclipseLittleMaxHostLength) {
+        host = [@"…" stringByAppendingString:[host substringFromIndex:host.length - kEclipseLittleMaxHostLength]];
+    }
+    if ([scheme isEqualToString:@"https"]) return host;
+    return [NSString stringWithFormat:@"Not Secure — %@", host];
+}
+
+static NSString *eclipse_little_clean_title(NSString *title) {
+    if (title.length == 0) return @"";
+    NSArray<NSString *> *parts = [title componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSMutableArray<NSString *> *words = [NSMutableArray arrayWithCapacity:parts.count];
+    for (NSString *part in parts) {
+        if (part.length > 0) [words addObject:part];
+    }
+    NSString *clean = [words componentsJoinedByString:@" "];
+    if (clean.length > 120) clean = [[clean substringToIndex:120] stringByAppendingString:@"…"];
+    return clean;
+}
+
+static void eclipse_little_log(NSString *what, EclipseLittleWindow *lw) {
+    if (!eclipse_perf_enabled()) return;
+    NSString *label = eclipse_little_host_label(lw.displayURL);
+    fprintf(stderr, "[little] %s host=%s open=%lu\n", what.UTF8String, label.UTF8String,
+            (unsigned long)gLittleWindows.count);
+}
+
+static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration *configuration,
+                                                         WKWebView *opener,
+                                                         NSSize requested,
+                                                         BOOL hasPosition,
+                                                         NSPoint topLeft);
+
+static void eclipse_little_check_openers(void);
+
+@implementation EclipseLittleWindow
+
+- (void)refreshTitle {
+    if (self.closed) return;
+    NSString *label = eclipse_little_host_label(self.displayURL);
+    NSString *title = eclipse_little_clean_title(self.webView.title);
+    if (@available(macOS 11.0, *)) {
+        self.window.title = title.length > 0 ? title : label;
+        self.window.subtitle = label;
+    } else {
+        self.window.title = title.length > 0 ? [NSString stringWithFormat:@"%@ — %@", label, title] : label;
+    }
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey, id> *)change
+                       context:(void *)context {
+    if (context != kEclipseLittleKVOContext) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    if (self.closed) return;
+    if ([keyPath isEqualToString:@"URL"]) {
+        // WebKit's URL already names a provisional load while the previous
+        // document is still on screen, so only a same-origin change (a
+        // fragment, pushState, a failed load reverting) is taken from here;
+        // a new origin is shown once its document commits.
+        NSURL *current = self.webView.URL;
+        if (self.displayURL == nil || eclipse_same_web_origin(self.displayURL, current)) {
+            if (current != nil) self.displayURL = current;
+        }
+    }
+    [self refreshTitle];
+}
+
+- (void)stopObserving {
+    if (!self.observing) return;
+    self.observing = NO;
+    [self.webView removeObserver:self forKeyPath:@"URL" context:kEclipseLittleKVOContext];
+    [self.webView removeObserver:self forKeyPath:@"title" context:kEclipseLittleKVOContext];
+}
+
+/* NSWindowDelegate */
+
+- (void)windowWillClose:(NSNotification *)notification {
+    (void)notification;
+    if (self.closed) return;
+    // A dialog still showing is answered (Cancel) before the page goes away.
+    NSWindow *sheet = self.window.attachedSheet;
+    if (sheet != nil) {
+        [self.window endSheet:sheet returnCode:NSModalResponseCancel];
+    }
+    self.closed = YES;
+    [self stopObserving];
+    WKWebView *webView = self.webView;
+    webView.UIDelegate = nil;
+    webView.navigationDelegate = nil;
+    [webView stopLoading];
+    // Released on the next turn of the run loop: the window is still in the
+    // middle of closing.
+    EclipseLittleWindow *me = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [gLittleWindows removeObject:me];
+        if (eclipse_perf_enabled()) {
+            fprintf(stderr, "[little] closed open=%lu\n", (unsigned long)gLittleWindows.count);
+        }
+        if (gLittleWindows.count == 0) {
+            [gLittleOpenerTimer invalidate];
+            gLittleOpenerTimer = nil;
+        }
+    });
+}
+
+/* WKNavigationDelegate */
+
+- (void)webView:(WKWebView *)webView
+    decidePolicyForNavigationAction:(WKNavigationAction *)action
+                    decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    (void)webView;
+    NSURL *url = action.request.URL;
+    NSString *scheme = url.scheme.lowercaseString ?: @"";
+    BOOL mainFrame = action.targetFrame == nil || action.targetFrame.isMainFrame;
+    BOOL allowed = eclipse_is_web_scheme(scheme) || [scheme isEqualToString:@"about"] ||
+                   [scheme isEqualToString:@"blob"] || (!mainFrame && [scheme isEqualToString:@"data"]);
+    if (!allowed && mainFrame && action.navigationType == WKNavigationTypeLinkActivated &&
+        ([scheme isEqualToString:@"mailto"] || [scheme isEqualToString:@"tel"])) {
+        [[NSWorkspace sharedWorkspace] openURL:url];
+    }
+    if (!allowed && eclipse_perf_enabled()) {
+        fprintf(stderr, "[little] refused %s navigation\n", scheme.UTF8String);
+    }
+    decisionHandler(allowed ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
+}
+
+- (void)webView:(WKWebView *)webView
+    decidePolicyForNavigationResponse:(WKNavigationResponse *)response
+                      decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+    (void)webView;
+    // Popups do not download files.
+    decisionHandler(response.canShowMIMEType ? WKNavigationResponsePolicyAllow
+                                             : WKNavigationResponsePolicyCancel);
+}
+
+- (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
+    (void)navigation;
+    if (self.closed) return;
+    self.displayURL = webView.URL;
+    [self refreshTitle];
+    eclipse_little_log(@"committed", self);
+}
+
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+    if (!self.closed) [webView reload];
+}
+
+/* WKUIDelegate */
+
+- (WKWebView *)webView:(WKWebView *)webView
+    createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
+               forNavigationAction:(WKNavigationAction *)action
+                    windowFeatures:(WKWindowFeatures *)features {
+    (void)webView;
+    if (self.closed) return nil;
+    NSURL *url = action.request.URL;
+    if (features.width == nil || features.height == nil) {
+        // Not a popup (a target=_blank link, window.open without a size):
+        // a web page opens as a tab, as it would from a tab.
+        if (eclipse_is_web_scheme(url.scheme) && gCallback != NULL) {
+            NSString *command = [@"little_window_new_tab:" stringByAppendingString:url.absoluteString];
+            gCallback(command.UTF8String);
+        }
+        return nil;
+    }
+    if (!eclipse_little_initial_url_allowed(url)) return nil;
+    WKWebView *opener = self.opener;
+    if (opener == nil) return nil;
+    BOOL hasPosition = features.x != nil && features.y != nil;
+    NSPoint topLeft = hasPosition ? NSMakePoint(features.x.doubleValue, features.y.doubleValue) : NSZeroPoint;
+    EclipseLittleWindow *nested = eclipse_little_window_create(
+        configuration, opener, NSMakeSize(features.width.doubleValue, features.height.doubleValue),
+        hasPosition, topLeft);
+    return nested.webView;
+}
+
+- (void)webViewDidClose:(WKWebView *)webView {
+    (void)webView;
+    if (!self.closed) [self.window close];
+}
+
+/* Dialogs are sheets on the popup. The completion handler runs exactly once:
+   immediately with Cancel when the popup is not on screen or already shows a
+   dialog, otherwise when the sheet ends (also when the window closes). */
+- (BOOL)canPresentSheet {
+    NSWindow *window = self.window;
+    return !self.closed && window != nil && window.isVisible && window.attachedSheet == nil &&
+           !self.webView.isHiddenOrHasHiddenAncestor;
+}
+
+- (void)webView:(WKWebView *)webView
+    runJavaScriptAlertPanelWithMessage:(NSString *)message
+                      initiatedByFrame:(WKFrameInfo *)frame
+                     completionHandler:(void (^)(void))completionHandler {
+    (void)webView;
+    if (![self canPresentSheet]) {
+        completionHandler();
+        return;
+    }
+    NSAlert *alert = eclipse_dialog_alert(frame, message);
+    [alert addButtonWithTitle:@"OK"];
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+        (void)response;
+        completionHandler();
+    }];
+}
+
+- (void)webView:(WKWebView *)webView
+    runJavaScriptConfirmPanelWithMessage:(NSString *)message
+                        initiatedByFrame:(WKFrameInfo *)frame
+                       completionHandler:(void (^)(BOOL))completionHandler {
+    (void)webView;
+    if (![self canPresentSheet]) {
+        completionHandler(NO);
+        return;
+    }
+    NSAlert *alert = eclipse_dialog_alert(frame, message);
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Cancel"];
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+        completionHandler(response == NSAlertFirstButtonReturn);
+    }];
+}
+
+- (void)webView:(WKWebView *)webView
+    runJavaScriptTextInputPanelWithPrompt:(NSString *)prompt
+                              defaultText:(NSString *)defaultText
+                         initiatedByFrame:(WKFrameInfo *)frame
+                        completionHandler:(void (^)(NSString *))completionHandler {
+    (void)webView;
+    if (![self canPresentSheet]) {
+        completionHandler(nil);
+        return;
+    }
+    NSAlert *alert = eclipse_dialog_alert(frame, prompt);
+    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:@"Cancel"];
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 300, 24)];
+    field.stringValue = defaultText ?: @"";
+    alert.accessoryView = field;
+    alert.window.initialFirstResponder = field;
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+        completionHandler(response == NSAlertFirstButtonReturn ? field.stringValue : nil);
+    }];
+}
+
+- (void)webView:(WKWebView *)webView
+    runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
+              initiatedByFrame:(WKFrameInfo *)frame
+             completionHandler:(void (^)(NSArray<NSURL *> *))completionHandler {
+    (void)webView; (void)frame;
+    if (![self canPresentSheet]) {
+        completionHandler(nil);
+        return;
+    }
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = YES;
+    panel.allowsMultipleSelection = parameters.allowsMultipleSelection;
+    panel.canChooseDirectories = parameters.allowsDirectories;
+    [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+        completionHandler(response == NSModalResponseOK ? panel.URLs : nil);
+    }];
+}
+
+@end
+
+/* Whether `opener` (a tab's webview) is still showing in the browser. */
+static BOOL eclipse_little_opener_alive(WKWebView *opener) {
+    return opener != nil && opener.superview != nil && opener.window != nil;
+}
+
+static void eclipse_little_check_openers(void) {
+    for (EclipseLittleWindow *lw in [gLittleWindows allObjects]) {
+        if (!lw.closed && !eclipse_little_opener_alive(lw.opener)) {
+            if (eclipse_perf_enabled()) {
+                fprintf(stderr, "[little] opener tab is gone, closing\n");
+            }
+            [lw.window close];
+        }
+    }
+}
+
+static void eclipse_little_start_opener_timer(void) {
+    if (gLittleOpenerTimer != nil) return;
+    gLittleOpenerTimer = [NSTimer timerWithTimeInterval:0.5
+                                                repeats:YES
+                                                  block:^(NSTimer *timer) {
+                                                      (void)timer;
+                                                      eclipse_little_check_openers();
+                                                  }];
+    gLittleOpenerTimer.tolerance = 0.2;
+    [[NSRunLoop mainRunLoop] addTimer:gLittleOpenerTimer forMode:NSRunLoopCommonModes];
+}
+
+static BOOL eclipse_frame_on_screen(NSRect frame) {
+    for (NSScreen *screen in [NSScreen screens]) {
+        if (NSContainsRect(screen.visibleFrame, frame)) return YES;
+    }
+    return NO;
+}
+
+/* Moves `frame` inside `visible` (it already fits: content is at most 90% of
+   it). */
+static NSRect eclipse_clamp_frame(NSRect frame, NSRect visible) {
+    if (NSMaxX(frame) > NSMaxX(visible)) frame.origin.x = NSMaxX(visible) - frame.size.width;
+    if (NSMinX(frame) < NSMinX(visible)) frame.origin.x = NSMinX(visible);
+    if (NSMaxY(frame) > NSMaxY(visible)) frame.origin.y = NSMaxY(visible) - frame.size.height;
+    if (NSMinY(frame) < NSMinY(visible)) frame.origin.y = NSMinY(visible);
+    return frame;
+}
+
+static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration *configuration,
+                                                         WKWebView *opener,
+                                                         NSSize requested,
+                                                         BOOL hasPosition,
+                                                         NSPoint topLeft) {
+    if (configuration == nil || !eclipse_little_opener_alive(opener)) return nil;
+
+    NSWindow *anchor = opener.window ?: eclipse_browser_window();
+    NSScreen *screen = anchor.screen ?: [NSScreen mainScreen];
+    if (screen == nil) return nil;
+    NSRect visible = screen.visibleFrame;
+
+    CGFloat maxWidth = MAX(kEclipseLittleMinWidth, floor(visible.size.width * 0.9));
+    CGFloat maxHeight = MAX(kEclipseLittleMinHeight, floor(visible.size.height * 0.9));
+    CGFloat width = isfinite(requested.width) ? requested.width : kEclipseLittleMinWidth;
+    CGFloat height = isfinite(requested.height) ? requested.height : kEclipseLittleMinHeight;
+    width = MIN(MAX(width, kEclipseLittleMinWidth), maxWidth);
+    height = MIN(MAX(height, kEclipseLittleMinHeight), maxHeight);
+    NSRect contentRect = NSMakeRect(0, 0, width, height);
+
+    NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                              NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:contentRect
+                                                   styleMask:style
+                                                     backing:NSBackingStoreBuffered
+                                                       defer:NO];
+    window.releasedWhenClosed = NO;
+    window.restorable = NO;
+    // Shown over the browser window also when that is in full screen.
+    window.collectionBehavior |= NSWindowCollectionBehaviorFullScreenAuxiliary;
+    window.contentMinSize = NSMakeSize(kEclipseLittleMinWidth, kEclipseLittleMinHeight);
+    if ([window respondsToSelector:@selector(setTabbingMode:)]) {
+        window.tabbingMode = NSWindowTabbingModeDisallowed;
+    }
+
+    WKWebView *webView = nil;
+    @try {
+        webView = [[WKWebView alloc] initWithFrame:contentRect configuration:configuration];
+    } @catch (NSException *exception) {
+        if (eclipse_perf_enabled()) {
+            fprintf(stderr, "[little] webview creation failed: %s\n", exception.reason.UTF8String ?: "");
+        }
+        return nil;
+    }
+    if (webView == nil) return nil;
+    webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    webView.customUserAgent = opener.customUserAgent;
+    webView.allowsMagnification = YES;
+    if (@available(macOS 13.3, *)) {
+        webView.inspectable = YES;
+    }
+    window.contentView = webView;
+
+    // Where: the requested spot if the whole window fits on a screen there,
+    // else a step down from the last popup still open, else centred over the
+    // browser window.
+    NSRect frame = [window frameRectForContentRect:contentRect];
+    BOOL placed = NO;
+    if (hasPosition && isfinite(topLeft.x) && isfinite(topLeft.y)) {
+        NSScreen *primary = [NSScreen screens].firstObject;
+        if (primary != nil) {
+            NSRect candidate = frame;
+            candidate.origin.x = topLeft.x;
+            candidate.origin.y = NSMaxY(primary.frame) - topLeft.y - frame.size.height;
+            if (eclipse_frame_on_screen(candidate)) {
+                frame = candidate;
+                placed = YES;
+            }
+        }
+    }
+    EclipseLittleWindow *previous = gLastLittleWindow;
+    if (!placed && previous != nil && !previous.closed && previous.window.isVisible) {
+        NSRect last = previous.window.frame;
+        NSRect candidate = frame;
+        candidate.origin.x = NSMinX(last) + 24.0;
+        candidate.origin.y = NSMaxY(last) - 24.0 - frame.size.height;
+        if (NSContainsRect(visible, candidate)) {
+            frame = candidate;
+            placed = YES;
+        }
+    }
+    if (!placed) {
+        NSRect around = anchor != nil ? anchor.frame : visible;
+        frame.origin.x = floor(NSMidX(around) - frame.size.width / 2.0);
+        frame.origin.y = floor(NSMidY(around) - frame.size.height / 2.0);
+        frame = eclipse_clamp_frame(frame, visible);
+    }
+    [window setFrame:frame display:NO];
+
+    EclipseLittleWindow *lw = [[EclipseLittleWindow alloc] init];
+    lw.window = window;
+    lw.webView = webView;
+    lw.opener = opener;
+    webView.UIDelegate = lw;
+    webView.navigationDelegate = lw;
+    window.delegate = lw;
+    [webView addObserver:lw forKeyPath:@"URL" options:0 context:kEclipseLittleKVOContext];
+    [webView addObserver:lw forKeyPath:@"title" options:0 context:kEclipseLittleKVOContext];
+    lw.observing = YES;
+    [lw refreshTitle];
+
+    if (gLittleWindows == nil) gLittleWindows = [NSMutableSet set];
+    [gLittleWindows addObject:lw];
+    gLastLittleWindow = lw;
+    eclipse_little_start_opener_timer();
+
+    [window makeKeyAndOrderFront:nil];
+    if (eclipse_perf_enabled()) {
+        fprintf(stderr, "[little] opened %.0fx%.0f open=%lu\n", width, height,
+                (unsigned long)gLittleWindows.count);
+    }
+    return lw;
+}
+
+/* Opens a Little Eclipse window for a popup requested by `openerPtr` (a tab's
+   WKWebView), built on `configurationPtr` (the WKWebViewConfiguration WebKit
+   handed the opener's UI delegate). `x`/`y` are the requested top-left in
+   screen coordinates with y downwards from the primary screen's top.
+   Returns the popup's WKWebView retained (+1; the caller owns that
+   reference and hands it to WebKit), or NULL when no window could be made. */
+void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double width, double height,
+                                 int hasPosition, double x, double y) {
+    if (configurationPtr == NULL || openerPtr == NULL) return NULL;
+    @autoreleasepool {
+        WKWebViewConfiguration *configuration = (__bridge WKWebViewConfiguration *)configurationPtr;
+        WKWebView *opener = (__bridge WKWebView *)openerPtr;
+        if (![configuration isKindOfClass:[WKWebViewConfiguration class]] ||
+            ![opener isKindOfClass:[WKWebView class]]) {
+            return NULL;
+        }
+        EclipseLittleWindow *lw = eclipse_little_window_create(
+            configuration, opener, NSMakeSize(width, height), hasPosition != 0, NSMakePoint(x, y));
+        if (lw == nil) return NULL;
+        return (__bridge_retained void *)lw.webView;
+    }
+}
+
+/* Menu commands that act on the Little Eclipse window when it is key (the
+   rest go to the browser; ⌘W is handled with the other secondary windows). */
+static BOOL eclipse_little_window_perform_action(NSWindow *key, NSString *action) {
+    if (key == nil || gLittleWindows.count == 0) return NO;
+    for (EclipseLittleWindow *lw in gLittleWindows) {
+        if (lw.closed || lw.window != key) continue;
+        WKWebView *webView = lw.webView;
+        if ([action isEqualToString:@"reload"]) {
+            [webView reload];
+        } else if ([action isEqualToString:@"stop_loading"]) {
+            [webView stopLoading];
+        } else if ([action isEqualToString:@"go_back"]) {
+            [webView goBack];
+        } else if ([action isEqualToString:@"go_forward"]) {
+            [webView goForward];
+        } else {
+            return NO;
+        }
+        return YES;
+    }
+    return NO;
 }

@@ -1,6 +1,6 @@
 [package]
 name = "eclipse"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 rust-version = "1.88"
 description = "A fast, minimal macOS web browser with a vertical tab sidebar, built on the system WebKit"
@@ -20,6 +20,13 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 libc = "0.2"
 url = "2.5"
+
+# Little Eclipse windows hand WebKit a native WKWebView through wry's
+# NewWindowResponse::Create. Same versions and a subset of the features wry
+# already uses, so no second copy is built.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration"] }
 
 [build-dependencies]
 cc = "1"

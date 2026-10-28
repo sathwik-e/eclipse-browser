@@ -177,6 +177,17 @@ impl NavState {
         }
     }
 
+    /// URL of the committed web page that would be a popup's opener: empty
+    /// while an internal page or the error page is on screen.
+    fn popup_opener_url(&self) -> String {
+        if self.showing_error_page.load(Ordering::Relaxed)
+            || self.current_is_internal.load(Ordering::Relaxed)
+        {
+            return String::new();
+        }
+        self.committed_url()
+    }
+
     /// What the committed document is, for an IPC message arriving now.
     fn document_trust(&self) -> DocumentTrust {
         if self.showing_error_page.load(Ordering::Relaxed) {
@@ -427,6 +438,7 @@ impl Tab {
         let nav_load = nav.clone();
         let nav_policy = nav.clone();
         let nav_ipc = nav.clone();
+        let nav_popup = nav.clone();
 
         let mut builder = WebViewBuilder::new()
             .with_id(&webview_id)
@@ -556,13 +568,26 @@ impl Tab {
             .with_document_title_changed_handler(move |title| {
                 let _ = proxy_title.send_event(UserEvent::TitleChanged { tab_id, title });
             })
-            // Popups open as ordinary tabs without `window.opener`. wry 0.57
-            // can hand WebKit a webview built on the opener's configuration
-            // (NewWindowResponse::Create), but such a webview shares the
-            // opener's WKUserContentController, so wry skips its IPC handler
-            // and init scripts: it would run the opener's bridge and token, and
-            // its messages would be attributed to the opener's tab.
-            .with_new_window_req_handler(move |url, _features| {
+            // Sized popups from a web page (sign-in and payment flows) open in
+            // a Little Eclipse window that keeps `window.opener`; everything
+            // else opens as an ordinary tab without one. The popup's webview
+            // is built on the configuration WebKit hands over, which shares
+            // this tab's WKUserContentController: it runs this tab's init
+            // scripts and its messages reach this tab's IPC handler, where
+            // they are trusted only as a website from another origin (see
+            // app::handle_tab_ipc).
+            .with_new_window_req_handler(move |url, features| {
+                #[cfg(target_os = "macos")]
+                if opens_little_window(
+                    &nav_popup.popup_opener_url(),
+                    features.size.is_some(),
+                    &url,
+                ) && let Some(webview) = crate::macos_menu::open_little_window(&features)
+                {
+                    return NewWindowResponse::Create { webview };
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = (&nav_popup, features);
                 let _ = proxy_newwin.send_event(UserEvent::NewWindowRequested { url });
                 NewWindowResponse::Deny
             })
@@ -1100,6 +1125,22 @@ fn url_host_in_domains(url: &str, domains: &[String]) -> bool {
 
 fn is_http_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
+}
+
+/// Whether a `window.open` request opens in a Little Eclipse window (a small
+/// native window that keeps `window.opener`, see menu.m) instead of a tab:
+/// the opener's committed document is a web page (`opener_document` is
+/// empty for internal pages and the error page), the page asked for a size
+/// (sign-in and payment popups do; plain `target=_blank` links do not), and
+/// the target is a web page or blank (popups often open empty and navigate
+/// once the opener has written to them).
+pub(crate) fn opens_little_window(opener_document: &str, has_size: bool, target_url: &str) -> bool {
+    let is_web = |url: &str| {
+        Url::parse(url).is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
+    };
+    has_size
+        && is_web(opener_document)
+        && (target_url.is_empty() || target_url == "about:blank" || is_web(target_url))
 }
 
 /// Two eclipse:// URLs name the same page (WebKit may add a trailing slash).
@@ -1925,6 +1966,48 @@ fn percent_decode(input: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::ExtensionConfig;
+
+    #[test]
+    fn sized_popups_from_web_pages_open_little_windows() {
+        let page = "https://shop.example/checkout";
+        assert!(opens_little_window(page, true, "https://accounts.example/oauth?x=1"));
+        assert!(opens_little_window("http://127.0.0.1:8000/opener.html", true, "http://127.0.0.1:8000/popup.html"));
+        // Popups that start blank and navigate later.
+        assert!(opens_little_window(page, true, ""));
+        assert!(opens_little_window(page, true, "about:blank"));
+    }
+
+    #[test]
+    fn other_popups_keep_opening_as_tabs() {
+        let page = "https://shop.example/checkout";
+        // No size: an ordinary target=_blank link or window.open(url).
+        assert!(!opens_little_window(page, false, "https://accounts.example/"));
+        // Internal pages and the error page never get popups (their opener
+        // URL is empty), nor does anything that is not a web page.
+        assert!(!opens_little_window("", true, "https://accounts.example/"));
+        assert!(!opens_little_window("eclipse://localhost/settings", true, "https://a.example/"));
+        assert!(!opens_little_window("about:blank", true, "https://a.example/"));
+        assert!(!opens_little_window("file:///tmp/a.html", true, "https://a.example/"));
+        // Targets that are not web pages.
+        assert!(!opens_little_window(page, true, "eclipse://settings"));
+        assert!(!opens_little_window(page, true, "javascript:alert(1)"));
+        assert!(!opens_little_window(page, true, "data:text/html,hi"));
+        assert!(!opens_little_window(page, true, "file:///etc/passwd"));
+        assert!(!opens_little_window(page, true, "about:srcdoc"));
+        assert!(!opens_little_window(page, true, "mailto:a@b.example"));
+    }
+
+    #[test]
+    fn popup_opener_is_only_a_committed_web_page() {
+        let nav = NavState::default();
+        assert_eq!(nav.popup_opener_url(), "");
+        nav.note_commit("https://shop.example/");
+        assert_eq!(nav.popup_opener_url(), "https://shop.example/");
+        nav.showing_error_page.store(true, Ordering::Relaxed);
+        assert_eq!(nav.popup_opener_url(), "");
+        nav.note_commit("eclipse://localhost/newtab");
+        assert_eq!(nav.popup_opener_url(), "");
+    }
 
     fn is_legitimate_download(suggested_name: &str, url_str: &str) -> bool {
         resolve_download_name(suggested_name, url_str).is_some()

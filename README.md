@@ -8,7 +8,7 @@ megabytes and starts in under a tenth of a second.
 Eclipse has an Arc-style vertical sidebar that hides itself, Spaces, a
 command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
 
-> **Status:** 1.0.0, macOS 11+ only. The app is ad-hoc signed, not notarized
+> **Status:** 1.0.1, macOS 11+ only. The app is ad-hoc signed, not notarized
 > (see [Installing](#installing)).
 
 ---
@@ -32,6 +32,11 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
 - **Tab hibernation.** Background tabs that are quiet are discarded after a
   configurable time and restored on demand. Tabs that are loading or playing
   audio are never discarded.
+- **Little Eclipse windows for sign-in popups.** Sign-in and payment popups
+  open in a small window of their own instead of a tab, so they keep
+  `window.opener` and can hand their result back to the page. The window
+  always shows the real host of the page it is on, with "Not Secure" for
+  plain http. Ordinary links that open new windows still open as tabs.
 - **Notes and Easel.** A notes page and a sketch-and-cards canvas, stored
   locally.
 - **Real browser plumbing:**
@@ -168,12 +173,9 @@ ECLIPSE_SMOKE_URL=https://example.com   # open a URL through the normal tab path
 ## Known limitations
 
 - **macOS only.**
-- **Popups open as tabs.** `window.open` targets open as normal tabs without a
-  `window.opener`, so sign-in flows that rely on a popup talking back to its
-  opener may not complete. Use the site's redirect sign-in where offered.
 - **Hibernation drops a tab's back/forward list.** The URL, title, scroll
   position and zoom are kept.
-- **One window.** There are no private windows yet.
+- **One browser window.** There are no private windows yet.
 - **WebExtensions support is partial.** Only content scripts and styles are
   supported, not background pages, popups or the full `chrome.*` API.
 - **Not notarized.** See [Installing](#installing).

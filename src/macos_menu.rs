@@ -33,6 +33,15 @@ unsafe extern "C" {
     fn eclipse_register_tab_view(view_ptr: *mut std::ffi::c_void, tab_id: u64);
     fn eclipse_recheck_hover();
     fn eclipse_navigation_policy_context() -> i32;
+    fn eclipse_open_little_window(
+        configuration: *mut std::ffi::c_void,
+        opener: *mut std::ffi::c_void,
+        width: f64,
+        height: f64,
+        has_position: i32,
+        x: f64,
+        y: f64,
+    ) -> *mut std::ffi::c_void;
 }
 
 /// `kind`: 0 = provisional navigation failed, 1 = committed navigation failed.
@@ -267,4 +276,43 @@ pub fn navigation_policy_context() -> PolicyContext {
         main_frame: bits & POLICY_MAIN_FRAME != 0,
         back_forward: bits & POLICY_BACK_FORWARD != 0,
     }
+}
+
+/// Opens a Little Eclipse window (menu.m) for a popup `features` describes,
+/// built on the configuration WebKit handed the opener, and returns its
+/// webview for `NewWindowResponse::Create`. `None` when the request has no
+/// size or the native window could not be made.
+pub fn open_little_window(
+    features: &wry::NewWindowFeatures,
+) -> Option<objc2::rc::Retained<objc2_web_kit::WKWebView>> {
+    use objc2::rc::Retained;
+
+    let size = features.size?;
+    let (has_position, x, y) = match features.position {
+        Some(position) => (1, position.x, position.y),
+        None => (0, 0.0, 0.0),
+    };
+    let configuration = Retained::as_ptr(&features.opener.target_configuration)
+        .cast_mut()
+        .cast::<std::ffi::c_void>();
+    let opener = Retained::as_ptr(&features.opener.webview)
+        .cast_mut()
+        .cast::<std::ffi::c_void>();
+    // Both pointers stay valid for the call: `features` holds a reference to
+    // each object.
+    let raw = unsafe {
+        eclipse_open_little_window(
+            configuration,
+            opener,
+            size.width,
+            size.height,
+            has_position,
+            x,
+            y,
+        )
+    };
+    // SAFETY: menu.m returns either null or a WKWebView retained once for
+    // the caller (`__bridge_retained`); `from_raw` takes over exactly that
+    // reference, and dropping the `Retained` releases it.
+    unsafe { Retained::from_raw(raw.cast::<objc2_web_kit::WKWebView>()) }
 }

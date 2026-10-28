@@ -1266,11 +1266,20 @@ impl BrowserApp {
         if token != tab.token {
             return;
         }
-        // Only the committed web document may report its own (same-origin)
-        // URL: never a late message from a page the tab already left.
-        if let IpcCommand::UrlChanged { url } = &command
-            && !is_plausible_url_report(url, origin, &tab.committed_url())
+        // Only the committed web document may report its own state (its
+        // same-origin URL, favicon, audio, scroll position): never a late
+        // message from a page the tab already left, nor a Little Eclipse
+        // popup, which posts through its opener tab's handler.
+        if sender == IpcSender::Web
+            && !is_plausible_page_report(&command, origin, &tab.committed_url())
         {
+            if self.perf {
+                eprintln!(
+                    "[ipc] ignored {} from another document in tab {tab_id} ({})",
+                    command_name(&command),
+                    truncate_message(origin, 120)
+                );
+            }
             return;
         }
         if !is_command_allowed(sender, &command) {
@@ -2279,6 +2288,15 @@ impl BrowserApp {
 
     /// Actions from the native menu (menu.m owns every browser shortcut).
     pub fn handle_menu_action(&mut self, action: &str) {
+        // An unsized window.open or target=_blank link inside a Little Eclipse
+        // window (menu.m) opens as a tab, like one from a tab. The URL comes
+        // from a web page: only http(s) is opened.
+        if let Some(url) = action.strip_prefix("little_window_new_tab:") {
+            if is_http_url(url) {
+                self.create_tab(url, true);
+            }
+            return;
+        }
         if let Some(index) = action.strip_prefix("select_tab_index:") {
             if let Ok(index) = index.parse::<usize>() {
                 self.select_tab_by_workspace_index(index.min(7));
@@ -2906,20 +2924,38 @@ pub fn classify_tab_sender(origin: &str, document: DocumentTrust) -> IpcSender {
     }
 }
 
+/// Both URLs parse and share a tuple (scheme, host, port) origin; opaque
+/// origins (about:, data:, eclipse:, file:) never match.
+fn is_same_tuple_origin(a: &str, b: &str) -> bool {
+    let origin = |value: &str| url::Url::parse(value).ok().map(|parsed| parsed.origin());
+    match (origin(a), origin(b)) {
+        (Some(a), Some(b)) => a.is_tuple() && a == b,
+        _ => false,
+    }
+}
+
 /// A `url_changed` report comes from the committed web document itself:
 /// the new URL, the posting frame and the committed document share an
 /// origin (pushState cannot leave it), so a late report from a page the tab
 /// already left, or from an internal or error page, is ignored.
 fn is_plausible_url_report(url: &str, frame_origin: &str, committed_url: &str) -> bool {
-    if !is_http_url(url) {
-        return false;
-    }
-    let origin = |value: &str| url::Url::parse(value).ok().map(|parsed| parsed.origin());
-    match (origin(url), origin(frame_origin), origin(committed_url)) {
-        (Some(target), Some(frame), Some(committed)) => {
-            target.is_tuple() && target == frame && target == committed
-        }
-        _ => false,
+    is_http_url(url)
+        && is_same_tuple_origin(url, frame_origin)
+        && is_same_tuple_origin(frame_origin, committed_url)
+}
+
+/// A website's report about the tab's page (its URL, favicon, audio or
+/// scroll position) must come from the tab's committed document: a frame of
+/// another origin is a page the tab already left, or a Little Eclipse popup
+/// (which shares its opener tab's IPC handler). Other commands are left to
+/// the sender allowlist.
+fn is_plausible_page_report(command: &IpcCommand, frame_origin: &str, committed_url: &str) -> bool {
+    match command {
+        IpcCommand::UrlChanged { url } => is_plausible_url_report(url, frame_origin, committed_url),
+        IpcCommand::UpdateFavicon { .. }
+        | IpcCommand::SetAudible { .. }
+        | IpcCommand::UpdateScroll { .. } => is_same_tuple_origin(frame_origin, committed_url),
+        _ => true,
     }
 }
 
@@ -3637,6 +3673,40 @@ mod tests {
         let settings = "eclipse://localhost/settings";
         assert!(!is_plausible_url_report("eclipse://settings", settings, settings));
         assert!(!is_plausible_url_report("https://app.example/", page, ""));
+    }
+
+    #[test]
+    fn page_reports_must_come_from_the_committed_document() {
+        let page = "https://shop.example/checkout";
+        let popup = "https://accounts.example/oauth";
+        let reports = [
+            r#"{"action":"update_favicon","favicon":"https://accounts.example/f.ico"}"#,
+            r#"{"action":"set_audible","audible":true}"#,
+            r#"{"action":"update_scroll","x":0,"y":10}"#,
+        ];
+        for json in reports {
+            let report = command(json);
+            assert!(is_plausible_page_report(&report, "https://shop.example/other", page), "{json}");
+            // A Little Eclipse popup posting through its opener tab's handler.
+            assert!(!is_plausible_page_report(&report, popup, page), "{json}");
+            // A blank popup the opener wrote into, and a late message after
+            // the tab moved on to an internal page or has nothing committed.
+            assert!(!is_plausible_page_report(&report, "about:blank", page), "{json}");
+            assert!(!is_plausible_page_report(&report, page, "eclipse://localhost/newtab"), "{json}");
+            assert!(!is_plausible_page_report(&report, page, ""), "{json}");
+            // Same host, different scheme or port.
+            assert!(!is_plausible_page_report(&report, "http://shop.example/", page), "{json}");
+            assert!(!is_plausible_page_report(&report, "https://shop.example:8443/", page), "{json}");
+        }
+        // url_changed keeps its stricter check.
+        let url_report = command(r#"{"action":"url_changed","url":"https://accounts.example/x"}"#);
+        assert!(!is_plausible_page_report(&url_report, popup, page));
+        let url_report = command(r#"{"action":"url_changed","url":"https://shop.example/done"}"#);
+        assert!(is_plausible_page_report(&url_report, page, page));
+        // A popup may still open http(s) links in new tabs.
+        let new_tab = command(r#"{"action":"new_tab","url":"https://help.example/"}"#);
+        assert!(is_plausible_page_report(&new_tab, popup, page));
+        assert!(is_command_allowed(classify_tab_sender(popup, DocumentTrust::default()), &new_tab));
     }
 
     #[test]

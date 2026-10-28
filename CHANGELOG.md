@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.1 — 2026-10-28
+
+### Added
+- **Little Eclipse windows for sign-in popups.** When a web page opens a
+  sized popup (`window.open` with a width and height, as sign-in and payment
+  flows do), it now opens in a small native window instead of a tab. The
+  popup keeps `window.opener`, so it can post its result back and close
+  itself, which makes "Sign in with …" popups work.
+  - The window title shows the page title. The subtitle shows the host of the
+    page actually on screen, with "Not Secure" for plain http. The page has no
+    control over it.
+  - JavaScript dialogs appear as sheets on the popup. `window.close()` closes
+    it, and ⌘W closes it while it is in front.
+  - A popup can only show web pages, never internal `eclipse://` pages, and it
+    closes when the tab that opened it is closed or hibernated.
+  - Links without a size and popups from internal pages still open as tabs.
+
+### Security
+- Websites' reports about a tab's page (favicon, audio, scroll position) are
+  now accepted only from the tab's own document. A popup posts through its
+  opener tab's channel, so it can no longer change that tab's icon or state.
+  It can still open http(s) links in new tabs.
+
 ## 1.0.0 — 2026-10-28
 
 First public release. This version is the result of a full audit of the

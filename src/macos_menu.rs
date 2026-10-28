@@ -33,8 +33,9 @@ unsafe extern "C" {
     fn eclipse_recheck_hover();
 }
 
-/// `kind`: 0 = provisional navigation failed, 1 = committed navigation failed,
-/// 2 = WebContent process terminated. Strings are UTF-8, may be null.
+/// `kind`: 0 = provisional navigation failed, 1 = committed navigation failed.
+/// Strings are UTF-8, may be null. WebContent crashes are not reported here;
+/// tabs get them from wry's web-content-process-terminate handler.
 type NavigationCallback =
     extern "C" fn(tab_id: u64, kind: i32, code: i64, description: *const c_char, url: *const c_char);
 
@@ -193,7 +194,8 @@ fn c_string(ptr: *const c_char) -> String {
 
 extern "C" fn handle_navigation_event(
     tab_id: u64,
-    kind: i32,
+    // UserEvent::NavigationFailed treats both kinds alike.
+    _kind: i32,
     code: i64,
     description: *const c_char,
     url: *const c_char,
@@ -205,21 +207,16 @@ extern "C" fn handle_navigation_event(
     let Some(proxy) = proxy else {
         return;
     };
-    let tab_id = tab_id as usize;
-    let event = if kind == 2 {
-        UserEvent::WebContentTerminated { tab_id }
-    } else {
-        UserEvent::NavigationFailed {
-            tab_id,
-            code,
-            description: c_string(description),
-            url: c_string(url),
-        }
-    };
-    let _ = proxy.send_event(event);
+    let _ = proxy.send_event(UserEvent::NavigationFailed {
+        tab_id: tab_id as usize,
+        code,
+        description: c_string(description),
+        url: c_string(url),
+    });
 }
 
-/// Hooks WebKit navigation failures and WebContent crashes into the event loop.
+/// Hooks WebKit navigation failures (failed provisional or committed loads)
+/// into the event loop.
 pub fn install_navigation_hooks(proxy: EventLoopProxy<UserEvent>) {
     if let Ok(mut guard) = NAV_PROXY.lock() {
         *guard = Some(proxy);

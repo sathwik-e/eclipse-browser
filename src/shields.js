@@ -6,32 +6,39 @@
  * zero-jank in-page stream and player neutralization:
  *  1. Intercepts YouTube player responses (ytInitialPlayerResponse, fetch, XHR)
  *     to strip adPlacements, playerAds, adSlots, and adConfig at the data layer.
+ *     The interceptors are only installed once blocking is enabled for the page.
  *  2. Fast-forwards / auto-dismisses any residual video ad interstitials with
- *     an O(1) class watcher on #movie_player (zero full-DOM polling or subtree mutation thrashing).
+ *     an O(1) class watcher on #movie_player (no full-DOM polling, and no timer
+ *     at all while no ad is playing).
  *  3. Injects fast, flat CSS rules (no expensive :has() or universal substring selectors)
  *     so scrolling and layout remain locked at 120Hz.
  *  4. Enforces strict Do Not Track (DNT) and Global Privacy Control (GPC).
  */
 (function () {
   'use strict';
-  if (window.__eclipseShieldsReady) return;
+  if (window.__eclipseShieldsReady || location.protocol === 'eclipse:') return;
   window.__eclipseShieldsReady = true;
 
-  var TOKEN = '__ECLIPSE_TOKEN__';
+  var CONTROL = '__ECLIPSE_CONTROL__';
   var enabled = false;
   var styleEl = null;
   var playerObserver = null;
   var observedPlayer = null;
-  var adSkipTimer = null;
-  var adSkippingActive = false;
-  var userWasMuted = false;
+  var findPlayerTimer = null;
+  var adTimer = null;
   var cachedPlayer = null;
   var cachedVideo = null;
+  // The media element changed while an ad played, and what it was before,
+  // so it can be put back exactly as the user had it.
+  var adVideo = null;
+  var savedMuted = false;
+  var savedRate = 1;
 
   var COSMETIC_CSS = [
-    '/* Generic Display & Banner Ads (flat O(1) selectors for zero style-recalc jank) */',
-    '.adsbygoogle, [id^="google_ads_"], .ad-banner, .ad-unit,',
-    '.advertisement, .ad-container, [data-ad-slot],',
+    '/* Ad-network containers (flat O(1) selectors for zero style-recalc jank).',
+    '   Generic names such as .advertisement or .ad-container are left alone:',
+    '   too many sites use them for real content. */',
+    '.adsbygoogle, [id^="google_ads_"],',
     '.trc_related_container, .outbrain, .taboola,',
     '',
     '/* YouTube Feed, Search & Watch Page Ad Slots */',
@@ -299,6 +306,26 @@
   }
 
   var SKIP_SELECTORS = '.ytp-ad-skip-button-modern, .ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-slot button, .ytp-ad-overlay-close-button';
+  var AD_RATE = 16;
+
+  // Puts mute and speed back, but only where they still hold the values we
+  // set: YouTube restores the user's own speed after an ad by itself.
+  function restoreAdVideo() {
+    if (!adVideo) return;
+    var video = adVideo;
+    adVideo = null;
+    try {
+      if (video.playbackRate === AD_RATE) video.playbackRate = savedRate;
+      if (video.muted && !savedMuted) video.muted = false;
+    } catch (_) {}
+  }
+
+  function stopAdTimer() {
+    if (adTimer) {
+      clearInterval(adTimer);
+      adTimer = null;
+    }
+  }
 
   function skipYouTubeAd() {
     if (!enabled || !isYouTube()) return;
@@ -310,43 +337,68 @@
     var classList = player.classList;
     var isAdActive = classList.contains('ad-showing') || classList.contains('ad-interrupting');
 
-    if (isAdActive) {
-      var video = getVideo(player);
-      if (!adSkippingActive) {
-        adSkippingActive = true;
-        if (video) userWasMuted = video.muted;
-      }
-
-      if (typeof player.skipAd === 'function') {
-        try { player.skipAd(); } catch (_) {}
-      }
-
-      var btns = player.querySelectorAll(SKIP_SELECTORS);
-      for (var i = 0; i < btns.length; i++) {
-        try { btns[i].click(); } catch (_) {}
-      }
-
-      if (video) {
-        try {
-          video.muted = true;
-          video.playbackRate = 16.0;
-          if (isFinite(video.duration) && video.duration > 0.1) {
-            video.currentTime = video.duration - 0.05;
-          }
-        } catch (_) {}
-      }
-    } else if (adSkippingActive) {
-      adSkippingActive = false;
-      var normalVideo = getVideo(player);
-      if (normalVideo) {
-        try {
-          if (normalVideo.playbackRate > 2.0) {
-            normalVideo.playbackRate = 1.0;
-          }
-          normalVideo.muted = userWasMuted;
-        } catch (_) {}
-      }
+    if (!isAdActive) {
+      stopAdTimer();
+      restoreAdVideo();
+      return;
     }
+
+    // Ads can take a few ticks to become skippable; poll only while one shows.
+    if (!adTimer) adTimer = setInterval(skipYouTubeAd, 250);
+
+    if (typeof player.skipAd === 'function') {
+      try { player.skipAd(); } catch (_) {}
+    }
+
+    var btns = player.querySelectorAll(SKIP_SELECTORS);
+    for (var i = 0; i < btns.length; i++) {
+      try { btns[i].click(); } catch (_) {}
+    }
+
+    var video = getVideo(player);
+    if (!video) return;
+    try {
+      // Capture the user's state from the element itself, the first time we
+      // actually touch it, never from a default.
+      if (adVideo !== video) {
+        restoreAdVideo();
+        adVideo = video;
+        savedMuted = video.muted;
+        savedRate = video.playbackRate === AD_RATE ? 1 : video.playbackRate;
+      }
+      video.muted = true;
+      video.playbackRate = AD_RATE;
+      if (isFinite(video.duration) && video.duration > 0.1) {
+        video.currentTime = video.duration - 0.05;
+      }
+    } catch (_) {}
+  }
+
+  function stopFindPlayer() {
+    if (findPlayerTimer) {
+      clearInterval(findPlayerTimer);
+      findPlayerTimer = null;
+    }
+  }
+
+  // The player appears after load and is replaced on SPA navigation. Look for
+  // it for a while, then rely on the class observer alone.
+  function findPlayer() {
+    stopFindPlayer();
+    if (getPlayer()) {
+      skipYouTubeAd();
+      return;
+    }
+    var attempts = 0;
+    findPlayerTimer = setInterval(function () {
+      attempts += 1;
+      if (getPlayer()) {
+        stopFindPlayer();
+        skipYouTubeAd();
+      } else if (attempts >= 60) {
+        stopFindPlayer();
+      }
+    }, 500);
   }
 
   function startYouTubeWatcher() {
@@ -355,19 +407,10 @@
 
     // Observe ONLY #movie_player's class attribute instead of the entire document subtree
     playerObserver = new MutationObserver(skipYouTubeAd);
-    var p = getPlayer();
-    if (p) {
-      try {
-        playerObserver.observe(p, { attributes: true, attributeFilter: ['class'] });
-        observedPlayer = p;
-      } catch (_) {}
-    }
-
-    // Lightweight O(1) check every 300ms to attach to player after SPA navigation
-    adSkipTimer = setInterval(skipYouTubeAd, 300);
-
-    window.addEventListener('yt-navigate-finish', skipYouTubeAd, { passive: true });
-    skipYouTubeAd();
+    observedPlayer = null;
+    cachedPlayer = null;
+    window.addEventListener('yt-navigate-finish', findPlayer, { passive: true });
+    findPlayer();
   }
 
   function stopYouTubeWatcher() {
@@ -376,22 +419,10 @@
       playerObserver = null;
     }
     observedPlayer = null;
-    if (adSkipTimer) {
-      clearInterval(adSkipTimer);
-      adSkipTimer = null;
-    }
-    if (adSkippingActive) {
-      adSkippingActive = false;
-      var video = getVideo(cachedPlayer);
-      if (video) {
-        try {
-          if (video.playbackRate > 2.0) {
-            video.playbackRate = 1.0;
-          }
-          video.muted = userWasMuted;
-        } catch (_) {}
-      }
-    }
+    window.removeEventListener('yt-navigate-finish', findPlayer, { passive: true });
+    stopFindPlayer();
+    stopAdTimer();
+    restoreAdVideo();
   }
 
   function setEnabled(next) {
@@ -417,14 +448,10 @@
     }
   }
 
-  if (isYouTube()) {
-    installYouTubeInterceptors();
-  }
-
   try {
     Object.defineProperty(window, '__eclipseShields', {
       value: function (secret, next) {
-        if (secret !== TOKEN) return;
+        if (secret !== CONTROL) return;
         setEnabled(next);
       },
       writable: false,

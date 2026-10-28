@@ -1,7 +1,9 @@
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use tao::event_loop::EventLoopProxy;
@@ -20,9 +22,67 @@ const SHIELDS_SCRIPT: &str = include_str!("shields.js");
 pub const MIN_ZOOM: f64 = 0.5;
 pub const MAX_ZOOM: f64 = 3.0;
 
-/// Background colour used beneath every page while it loads. This avoids the
-/// white flash you normally see between navigations in a dark browser.
-const PAGE_BACKGROUND: (u8, u8, u8, u8) = (9, 10, 15, 255);
+/// Revision passed by callers that do not track config revisions: the config
+/// is always pushed.
+const UNVERSIONED: u64 = u64::MAX;
+
+/// Navigation state shared between a tab and its webview's WebKit callbacks.
+/// Every webview (including one rebuilt after hibernation) gets a fresh one.
+#[derive(Default)]
+struct NavState {
+    /// Bumped on every committed navigation, so each value is one document.
+    /// Zero means nothing has committed yet.
+    epoch: AtomicU64,
+    /// The epoch whose load has finished.
+    finished_epoch: AtomicU64,
+    /// URL of the committed main-frame document, as WebKit reports it.
+    committed_url: Mutex<String>,
+    /// The committed document is an internal eclipse:// page.
+    current_is_internal: AtomicBool,
+    /// The browser started the pending navigation itself (load_url, back,
+    /// forward, reload), so it may lead to an eclipse:// page.
+    browser_initiated: AtomicBool,
+    /// An error page is shown through load_html. Its about:blank load events
+    /// are swallowed so the tab keeps reporting the URL that failed.
+    showing_error_page: AtomicBool,
+}
+
+impl NavState {
+    fn committed_url(&self) -> String {
+        self.committed_url
+            .lock()
+            .map(|url| url.clone())
+            .unwrap_or_default()
+    }
+
+    /// Navigation policy: web pages may not open internal pages (other than
+    /// the new-tab page, which holds nothing) in the tab or in frames.
+    fn allows_navigation(&self, url: &str) -> bool {
+        if !is_eclipse_scheme(url) {
+            return true;
+        }
+        self.current_is_internal.load(Ordering::Relaxed)
+            || self.browser_initiated.load(Ordering::Relaxed)
+            || is_newtab_url(url)
+    }
+}
+
+/// What the current document of a tab has already received, so repeated
+/// sync calls (page events, config changes, tab switches) only send changes.
+#[derive(Default)]
+struct SyncState {
+    /// Navigation epoch the fields below belong to.
+    epoch: Cell<u64>,
+    /// Config revision and active URL last pushed to this internal page after
+    /// it finished loading.
+    config: RefCell<Option<(u64, String)>>,
+    /// In-page shields state of this document (None: the init-script default).
+    shields: Cell<Option<bool>>,
+    /// Extension content scripts / custom JS were injected into this document.
+    page_scripts_done: Cell<bool>,
+    /// Whether the native content-rule list is attached to the webview.
+    native_adblock: Cell<Option<bool>>,
+}
 
 pub struct Tab {
     pub id: usize,
@@ -44,6 +104,17 @@ pub struct Tab {
     pub pending_scroll_restore: Option<(f64, f64)>,
     pub favorite_index: Option<usize>,
     pub group: Option<String>,
+    /// Secret for the in-page control hooks (`__eclipseFind`, `__eclipseShields`).
+    /// It is not the IPC token, so a page that pre-empts a hook learns nothing
+    /// it could post with.
+    control_token: String,
+    nav: Arc<NavState>,
+    sync: SyncState,
+    /// Shields state, DRM shim and custom CSS baked into the webview's init
+    /// scripts (fixed at creation; later documents are topped up in sync).
+    init_shields: bool,
+    init_drm: bool,
+    init_custom_css: String,
 }
 
 impl Tab {
@@ -89,6 +160,12 @@ impl Tab {
             pending_scroll_restore: None,
             favorite_index: None,
             group: None,
+            control_token: generate_ipc_token(),
+            nav: Arc::default(),
+            sync: SyncState::default(),
+            init_shields: false,
+            init_drm: false,
+            init_custom_css: String::new(),
         };
 
         let webview = tab.build_webview(window, proxy, bounds, config);
@@ -97,7 +174,7 @@ impl Tab {
     }
 
     fn build_webview(
-        &self,
+        &mut self,
         window: &Arc<Window>,
         proxy: EventLoopProxy<UserEvent>,
         bounds: Rect,
@@ -120,31 +197,50 @@ impl Tab {
             config.active_user_agent()
         };
 
-        let init_script = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}",
-            build_config_seed_script(config, Some(&self.url), &self.workspace),
-            build_bridge_script(&self.token),
+        let nav = Arc::new(NavState::default());
+        nav.browser_initiated
+            .store(self.url.starts_with("eclipse://"), Ordering::Relaxed);
+        self.nav = nav.clone();
+        self.sync = SyncState::default();
+        self.sync.native_adblock.set(Some(is_adblock_active));
+        self.init_shields = is_adblock_active;
+        self.init_drm = config.drm_fairplay_enabled;
+        self.init_custom_css = config.custom_css.clone();
+
+        // Each part is its own WKUserScript inside its own try/catch, so a
+        // syntax or runtime error in one (for example a Trusted Types site
+        // refusing a DOM write) cannot stop the others.
+        let init_scripts = [
+            build_config_seed_script(config, &self.url),
+            build_bridge_script(&self.token, &self.control_token),
             build_drm_script(config.drm_fairplay_enabled),
-            build_shields_script(&self.token, is_adblock_active),
+            build_shields_script(&self.control_token, is_adblock_active),
             build_custom_css_script(&config.custom_css),
-            build_extension_support_script(&self.url, config, &self.workspace),
-        );
+        ];
 
         let target_url = tab_webview_url(&self.url);
         let webview_id = format!("tab_{tab_id}");
+        let nav_load = nav.clone();
+        let nav_policy = nav.clone();
 
-        let webview = WebViewBuilder::new()
+        let mut builder = WebViewBuilder::new()
             .with_id(&webview_id)
             .with_bounds(bounds)
             .with_user_agent(active_ua)
             .with_autoplay(config.autoplay_enabled)
-            .with_background_color(PAGE_BACKGROUND)
             .with_back_forward_navigation_gestures(true)
             .with_background_throttling(BackgroundThrottlingPolicy::Throttle)
             .with_accept_first_mouse(true)
             .with_focused(false)
-            .with_devtools(true)
-            .with_initialization_script(&init_script)
+            .with_devtools(true);
+        for script in init_scripts
+            .iter()
+            .filter(|script| !script.trim().is_empty())
+        {
+            builder = builder.with_initialization_script(guard_script(script));
+        }
+
+        let builder = builder
             .with_ipc_handler(move |req| {
                 let origin = req.uri().to_string();
                 let body = req.body().clone();
@@ -154,71 +250,126 @@ impl Tab {
                     origin,
                 });
             })
+            .with_navigation_handler(move |url| nav_policy.allows_navigation(&url))
             .with_download_started_handler(move |url, path| {
                 let suggested = path
                     .file_name()
                     .and_then(|s| s.to_str())
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    .to_string();
+                let mut pending = pending_downloads();
 
-                let Some(clean_name) = resolve_download_name(suggested, &url) else {
+                let Some(clean_name) = resolve_download_name(&suggested, &url) else {
+                    // A page load WebKit could not display, not a file.
+                    remember_download(&mut pending, url, None);
                     return false;
                 };
 
-                if let Some(target) =
-                    downloads_dir().map(|dir| unique_download_path(&dir, &clean_name))
-                {
-                    *path = target;
+                if let Some(dir) = downloads_dir() {
+                    let reserved: Vec<&Path> =
+                        pending.iter().filter_map(|d| d.path.as_deref()).collect();
+                    *path = unique_download_path(&dir, &clean_name, &reserved);
                 }
 
-                let final_path = path.to_string_lossy().to_string();
+                let file_name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or(clean_name);
+                remember_download(&mut pending, url.clone(), Some(path.clone()));
+                drop(pending);
+
                 let _ = proxy_download_started.send_event(UserEvent::DownloadStarted {
-                    file_name: clean_name,
-                    url: url.clone(),
-                    path: final_path,
+                    file_name,
+                    url,
+                    path: path.to_string_lossy().to_string(),
                 });
                 true
             })
             .with_download_completed_handler(move |url, path, success| {
-                let suggested = path
+                // wry reports no path on macOS; the path chosen at start is
+                // remembered by URL instead.
+                let started = {
+                    let mut pending = pending_downloads();
+                    pending
+                        .iter()
+                        .position(|d| d.url == url)
+                        .map(|index| pending.remove(index))
+                };
+                let final_path = match started {
+                    Some(PendingDownload { path: None, .. }) => return,
+                    Some(PendingDownload { path: Some(p), .. }) => path.or(Some(p)),
+                    None => path,
+                };
+                let file_name = final_path
                     .as_ref()
                     .and_then(|p| p.file_name())
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_default();
-
-                let resolved_path = path.as_ref().map(|p| p.to_string_lossy().to_string());
-                if let Some(file_name) = resolve_download_name(suggested, &url) {
-                    let _ = proxy_download_finished.send_event(UserEvent::DownloadCompleted {
-                        url: url.clone(),
-                        file_name,
-                        path: resolved_path,
-                        success,
-                    });
-                }
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| download_file_name(&url));
+                let _ = proxy_download_finished.send_event(UserEvent::DownloadCompleted {
+                    url,
+                    file_name,
+                    path: final_path.map(|p| p.to_string_lossy().to_string()),
+                    success,
+                });
             })
             .with_on_page_load_handler(move |event, url| {
+                let error_page_load =
+                    nav_load.showing_error_page.load(Ordering::Relaxed) && url == "about:blank";
+                if error_page_load {
+                    return;
+                }
                 let payload = match event {
-                    PageLoadEvent::Started => UserEvent::PageStarted {
-                        tab_id,
-                        url: url.clone(),
-                    },
-                    PageLoadEvent::Finished => UserEvent::PageFinished {
-                        tab_id,
-                        url: url.clone(),
-                    },
+                    PageLoadEvent::Started => {
+                        nav_load.showing_error_page.store(false, Ordering::Relaxed);
+                        nav_load.browser_initiated.store(false, Ordering::Relaxed);
+                        nav_load
+                            .current_is_internal
+                            .store(is_eclipse_scheme(&url), Ordering::Relaxed);
+                        if let Ok(mut committed) = nav_load.committed_url.lock() {
+                            committed.clone_from(&url);
+                        }
+                        nav_load.epoch.fetch_add(1, Ordering::Relaxed);
+                        UserEvent::PageStarted { tab_id, url }
+                    }
+                    PageLoadEvent::Finished => {
+                        nav_load
+                            .finished_epoch
+                            .store(nav_load.epoch.load(Ordering::Relaxed), Ordering::Relaxed);
+                        UserEvent::PageFinished { tab_id, url }
+                    }
                 };
                 let _ = proxy_load.send_event(payload);
             })
             .with_document_title_changed_handler(move |title| {
                 let _ = proxy_title.send_event(UserEvent::TitleChanged { tab_id, title });
             })
-            .with_new_window_req_handler(move |url, _target| {
+            // Popups open as ordinary tabs without `window.opener`. wry 0.57
+            // can hand WebKit a webview built on the opener's configuration
+            // (NewWindowResponse::Create), but such a webview shares the
+            // opener's WKUserContentController, so wry skips its IPC handler
+            // and init scripts: it would run the opener's bridge and token, and
+            // its messages would be attributed to the opener's tab.
+            .with_new_window_req_handler(move |url, _features| {
                 let _ = proxy_newwin.send_event(UserEvent::NewWindowRequested { url });
                 NewWindowResponse::Deny
             })
             .with_custom_protocol("eclipse".into(), move |_id, req| {
                 crate::ui_assets::handle_eclipse_protocol(req)
             })
-            .with_url(&target_url)
+            .with_url(&target_url);
+
+        #[cfg(target_os = "macos")]
+        let builder = {
+            use wry::WebViewBuilderExtDarwin;
+            let proxy_terminated = proxy.clone();
+            builder.with_on_web_content_process_terminate_handler(move || {
+                let _ = proxy_terminated.send_event(UserEvent::WebContentTerminated { tab_id });
+            })
+        };
+
+        // No background colour: wry would turn off drawsBackground, and pages
+        // without their own CSS background must render on white, like Safari.
+        let webview = builder
             .build_as_child(&**window)
             .expect("Failed to build tab webview as child");
 
@@ -301,6 +452,10 @@ impl Tab {
         self.scroll_y = 0.0;
         self.pending_scroll_restore = None;
         self.last_active = Instant::now();
+        self.nav.showing_error_page.store(false, Ordering::Relaxed);
+        self.nav
+            .browser_initiated
+            .store(canonical.starts_with("eclipse://"), Ordering::Relaxed);
 
         if let Some(ref wv) = self.webview {
             self.is_hibernated = false;
@@ -314,17 +469,26 @@ impl Tab {
     pub fn reload(&self) {
         if let Some(ref wv) = self.webview {
             self.set_loading_indicator(true);
+            if self.nav.showing_error_page.load(Ordering::Relaxed) {
+                // Reloading would only redisplay the error page.
+                let _ = wv.load_url(&tab_webview_url(&self.url));
+                return;
+            }
+            self.nav.browser_initiated.store(true, Ordering::Relaxed);
             let _ = wv.reload();
         }
     }
 
     pub fn stop_loading(&mut self) {
-        self.evaluate_script("window.stop(); window.__eclipseSetLoading && window.__eclipseSetLoading(false);");
+        self.evaluate_script(
+            "window.stop(); window.__eclipseSetLoading && window.__eclipseSetLoading(false);",
+        );
         self.is_loading = false;
     }
 
     pub fn go_back(&self) {
         if let Some(ref wv) = self.webview {
+            self.nav.browser_initiated.store(true, Ordering::Relaxed);
             if wv.can_go_back().unwrap_or(false) {
                 let _ = wv.go_back();
             } else {
@@ -335,6 +499,7 @@ impl Tab {
 
     pub fn go_forward(&self) {
         if let Some(ref wv) = self.webview {
+            self.nav.browser_initiated.store(true, Ordering::Relaxed);
             if wv.can_go_forward().unwrap_or(false) {
                 let _ = wv.go_forward();
             } else {
@@ -368,10 +533,18 @@ impl Tab {
     pub fn find(&self, action: &str) {
         let js = format!(
             "window.__eclipseFind && window.__eclipseFind({}, {});",
-            js_string(&self.token),
+            js_string(&self.control_token),
             js_string(action)
         );
         self.evaluate_script(&js);
+    }
+
+    /// Opens the native print panel for the page (WebKit ignores a scripted
+    /// `window.print()` without a UI-delegate hook).
+    pub fn print(&self) {
+        if let Some(ref wv) = self.webview {
+            let _ = wv.print();
+        }
     }
 
     pub fn open_devtools(&self) {
@@ -384,47 +557,120 @@ impl Tab {
         self.evaluate_script(&build_custom_css_script(css));
     }
 
-    /// Push the current configuration into this page without leaking the
-    /// browser config to ordinary websites.
+    /// Replaces the page with a self-contained error page for a navigation
+    /// that failed. The tab keeps reporting `failed_url` as its URL and title,
+    /// and "Try Again" navigates there again (plain JS, no IPC).
+    pub fn show_error_page(&mut self, failed_url: &str, description: &str) {
+        if self.webview.is_none() {
+            return;
+        }
+        self.nav.showing_error_page.store(true, Ordering::Relaxed);
+        self.nav.current_is_internal.store(false, Ordering::Relaxed);
+        self.nav.browser_initiated.store(false, Ordering::Relaxed);
+        self.url = failed_url.to_string();
+        self.title = failed_url.to_string();
+        self.favicon = get_default_favicon(failed_url);
+        self.favicon_url = None;
+        self.is_loading = false;
+        self.is_audible = false;
+        self.set_loading_indicator(false);
+        if let Some(ref wv) = self.webview {
+            let _ = wv.load_html(&build_error_page_html(failed_url, description));
+        }
+    }
+
+    /// Transitional wrapper with the pre-revision signature, kept only so the
+    /// crate builds until every caller passes a revision. Always pushes.
+    /// The integrator removes it and renames `sync_config_rev` to `sync_config`.
     pub fn sync_config(&self, config: &BrowserConfig, active_url: Option<&str>) {
-        let Ok(json) = serde_json::to_string(config) else {
+        self.sync_config_rev(config, UNVERSIONED, active_url);
+    }
+
+    /// Brings the page in line with `config` (C9). Ordinary websites never
+    /// receive config or user data: they only get the shields switch and the
+    /// native ad blocker, each only when its effective state changes, plus
+    /// matching extension content scripts and custom JS once per document.
+    /// Internal eclipse:// pages get `config.to_page_json()` through
+    /// `onEclipseConfigUpdated`, once per (revision, active URL) per document.
+    pub fn sync_config_rev(&self, config: &BrowserConfig, revision: u64, active_url: Option<&str>) {
+        let Some(ref _wv) = self.webview else {
             return;
         };
         let space_profile = config.profile_for_workspace(&self.workspace);
-        let is_adblock_active =
-            space_profile.adblock_enabled && is_adblock_active_for_url(&self.url, config);
-        let act_url = active_url.unwrap_or(&self.url);
-        let script = format!(
-            r##"(function () {{
-                var cfg = {json};
-                var actUrl = {act_url_js};
-                try {{
-                    if (location.protocol === 'eclipse:') {{
-                        window.__ECLIPSE_CONFIG__ = cfg;
-                        window.__ECLIPSE_ACTIVE_URL__ = actUrl;
-                        if (typeof window.onEclipseConfigUpdated === 'function') {{
-                            window.onEclipseConfigUpdated(cfg, actUrl);
-                        }}
-                    }}
-                }} catch (_) {{}}
-                try {{
-                    if (typeof window.__eclipseShields === 'function') {{
-                        window.__eclipseShields({secret}, {is_adblock_active});
-                    }}
-                }} catch (_) {{}}
-            }})();"##,
-            secret = js_string(&self.token),
-            act_url_js = js_string(act_url),
-            is_adblock_active = if is_adblock_active { "true" } else { "false" }
-        );
-        self.evaluate_script(&script);
+        let blocking =
+            |url: &str| space_profile.adblock_enabled && is_adblock_active_for_url(url, config);
 
-        #[cfg(target_os = "macos")]
-        if let Some(ref wv) = self.webview {
-            use wry::WebViewExtMacOS;
-            let ns_view = wv.webview();
-            let ptr = (&*ns_view) as *const _ as *mut std::ffi::c_void;
-            crate::macos_menu::set_native_adblocker_enabled(ptr, is_adblock_active);
+        // The rule list applies to the tab's next loads, so it follows the
+        // tab's target URL rather than the document still on screen.
+        if !self.url.starts_with("eclipse://") {
+            let desired = blocking(&self.url);
+            if self.sync.native_adblock.get() != Some(desired) {
+                self.sync.native_adblock.set(Some(desired));
+                #[cfg(target_os = "macos")]
+                {
+                    use wry::WebViewExtMacOS;
+                    let ns_view = _wv.webview();
+                    let ptr = (&*ns_view) as *const _ as *mut std::ffi::c_void;
+                    crate::macos_menu::set_native_adblocker_enabled(ptr, desired);
+                }
+            }
+        }
+
+        let nav = &self.nav;
+        let epoch = nav.epoch.load(Ordering::Relaxed);
+        // Nothing has committed yet (the init scripts cover the first
+        // document), or an error page is up.
+        if epoch == 0 || nav.showing_error_page.load(Ordering::Relaxed) {
+            return;
+        }
+        if self.sync.epoch.get() != epoch {
+            self.sync.epoch.set(epoch);
+            self.sync.config.replace(None);
+            self.sync.shields.set(None);
+            self.sync.page_scripts_done.set(false);
+        }
+        // A push made before the document finished loading may have run
+        // before the page's own scripts; it is repeated once on finish.
+        let finished = nav.finished_epoch.load(Ordering::Relaxed) == epoch;
+
+        if nav.current_is_internal.load(Ordering::Relaxed) {
+            let act_url = active_url.unwrap_or(&self.url);
+            let up_to_date = revision != UNVERSIONED
+                && matches!(&*self.sync.config.borrow(), Some((rev, url)) if *rev == revision && url == act_url);
+            if !up_to_date {
+                self.evaluate_script(&build_config_push_script(config, act_url));
+                if finished {
+                    self.sync
+                        .config
+                        .replace(Some((revision, act_url.to_string())));
+                }
+            }
+            return;
+        }
+
+        let committed = nav.committed_url();
+        let desired = blocking(&committed);
+        if self.sync.shields.get().unwrap_or(self.init_shields) != desired {
+            self.evaluate_script(&format!(
+                "typeof window.__eclipseShields === 'function' && window.__eclipseShields({}, {desired});",
+                js_string(&self.control_token)
+            ));
+            if finished {
+                self.sync.shields.set(Some(desired));
+            }
+        }
+
+        if !self.sync.page_scripts_done.get() {
+            self.sync.page_scripts_done.set(true);
+            for script in build_page_scripts(&committed, config) {
+                self.evaluate_script(&script);
+            }
+            if config.drm_fairplay_enabled && !self.init_drm {
+                self.evaluate_script(&build_drm_script(true));
+            }
+            if config.custom_css != self.init_custom_css {
+                self.evaluate_script(&build_custom_css_script(&config.custom_css));
+            }
         }
     }
 
@@ -487,6 +733,18 @@ impl Tab {
     }
 }
 
+fn is_eclipse_scheme(url: &str) -> bool {
+    url.get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("eclipse:"))
+}
+
+fn is_newtab_url(url: &str) -> bool {
+    matches!(
+        url.trim_end_matches('/'),
+        "eclipse://localhost/newtab" | "eclipse://newtab" | "eclipse://localhost"
+    )
+}
+
 pub fn tab_webview_url(url: &str) -> String {
     match url {
         "eclipse://newtab" | "" => "eclipse://localhost/newtab".to_string(),
@@ -508,9 +766,6 @@ pub fn canonicalize_eclipse_url(url: &str) -> String {
         if url.contains("easel") {
             return "eclipse://easel".to_string();
         }
-        if url.contains("sidebar") {
-            return "eclipse://sidebar".to_string();
-        }
         return "eclipse://newtab".to_string();
     }
     url.to_string()
@@ -520,16 +775,16 @@ pub fn is_adblock_active_for_url(url: &str, config: &BrowserConfig) -> bool {
     if !config.adblock_enabled {
         return false;
     }
-    if let Ok(parsed) = url::Url::parse(url) {
-        if let Some(host) = parsed.host_str() {
-            let host_clean = host.to_lowercase();
-            for domain in &config.adblock_disabled_domains {
-                let d_clean = domain.trim().to_lowercase();
-                if !d_clean.is_empty()
-                    && (host_clean == d_clean || host_clean.ends_with(&format!(".{d_clean}")))
-                {
-                    return false;
-                }
+    if let Ok(parsed) = url::Url::parse(url)
+        && let Some(host) = parsed.host_str()
+    {
+        let host_clean = host.to_lowercase();
+        for domain in &config.adblock_disabled_domains {
+            let d_clean = domain.trim().to_lowercase();
+            if !d_clean.is_empty()
+                && (host_clean == d_clean || host_clean.ends_with(&format!(".{d_clean}")))
+            {
+                return false;
             }
         }
     }
@@ -613,249 +868,204 @@ fn extension_matches_url(pattern: &str, url: &str) -> bool {
     url.contains(p)
 }
 
-pub fn build_extension_support_script(
-    url: &str,
-    config: &BrowserConfig,
-    workspace: &str,
-) -> String {
+/// Extension content scripts, their CSS and the user's custom JS for one
+/// committed document, each as its own script for `evaluate_script` (which
+/// page CSP does not apply to, unlike `new Function`). Matching happens per
+/// navigation against the real URL, so installs, toggles and new-tab tabs
+/// pick up changes on the next load. Only http(s) pages get any of it: never
+/// eclipse:// pages, which hold the privileged IPC helper.
+///
+/// `chrome.storage` here is per document and in memory: persisting it would
+/// mean storing extension data in the website's own localStorage, where the
+/// site can read and rewrite it.
+fn build_page_scripts(url: &str, config: &BrowserConfig) -> Vec<String> {
+    let mut scripts = Vec::new();
     if !config.webextensions_enabled {
-        return String::new();
+        return scripts;
     }
+    let Ok(parsed) = Url::parse(url) else {
+        return scripts;
+    };
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return scripts;
+    }
+    let host_js = js_string(parsed.host_str().unwrap_or(""));
+    let guard = format!(
+        "if (location.protocol !== 'http:' && location.protocol !== 'https:') return;\n\
+         if (location.hostname !== {host_js}) return;"
+    );
 
     let mut ext_scripts = Vec::new();
     let mut ext_styles = Vec::new();
-
-    for ext in &config.installed_extensions {
-        if !ext.enabled {
-            continue;
-        }
-        let matches = ext
+    for ext in config.installed_extensions.iter().filter(|ext| ext.enabled) {
+        if !ext
             .matches
             .iter()
-            .any(|pattern| extension_matches_url(pattern, url));
-        if matches {
-            for script in &ext.content_scripts {
-                if !script.trim().is_empty() {
-                    ext_scripts.push(script.clone());
-                }
-            }
-            for css in &ext.content_css {
-                if !css.trim().is_empty() {
-                    ext_styles.push(css.clone());
-                }
-            }
+            .any(|pattern| extension_matches_url(pattern, url))
+        {
+            continue;
+        }
+        ext_scripts.extend(ext.content_scripts.iter().filter(|s| !s.trim().is_empty()));
+        ext_styles.extend(ext.content_css.iter().filter(|s| !s.trim().is_empty()));
+    }
+
+    if !ext_styles.is_empty() {
+        let encoded_styles = serde_json::to_string(&ext_styles).unwrap_or_else(|_| "[]".into());
+        scripts.push(format!(
+            r##"(function () {{
+                {guard}
+                {encoded_styles}.forEach(function (css) {{
+                    var styleEl = document.createElement('style');
+                    styleEl.className = '__eclipse_extension_style';
+                    styleEl.textContent = css;
+                    (document.head || document.documentElement).appendChild(styleEl);
+                }});
+            }})();"##
+        ));
+    }
+
+    if !ext_scripts.is_empty() {
+        scripts.push(format!(
+            "(function () {{\n{guard}\n{EXTENSION_RUNTIME_SHIM}\n}})();"
+        ));
+        for code in ext_scripts {
+            scripts.push(wrap_user_code(
+                &guard,
+                code,
+                "Eclipse Extension Script Error",
+            ));
         }
     }
 
-    let has_custom_js = !config.custom_js.trim().is_empty();
-    if ext_scripts.is_empty() && ext_styles.is_empty() && !has_custom_js {
-        return String::new();
+    if !config.custom_js.trim().is_empty() {
+        scripts.push(wrap_user_code(
+            &guard,
+            &config.custom_js,
+            "Eclipse UserScript Error",
+        ));
     }
+    scripts
+}
 
-    let encoded_custom_js =
-        serde_json::to_string(&config.custom_js).unwrap_or_else(|_| "\"\"".into());
-    let encoded_ext_scripts =
-        serde_json::to_string(&ext_scripts).unwrap_or_else(|_| "[]".into());
-    let encoded_ext_styles =
-        serde_json::to_string(&ext_styles).unwrap_or_else(|_| "[]".into());
-    let storage_key = format!("__eclipse_ext_storage_{workspace}");
-    let encoded_storage_key =
-        serde_json::to_string(&storage_key).unwrap_or_else(|_| "\"__eclipse_ext_storage\"".into());
-
+/// Runs third-party code once the DOM is ready (like a content script's
+/// default `document_idle`). The code is inlined as a function body, so a
+/// syntax error only fails this one evaluation.
+fn wrap_user_code(guard: &str, code: &str, label: &str) -> String {
+    let label_js = js_string(label);
     format!(
-        r##"(function () {{
-            'use strict';
-            try {{
-                if (!window.chrome) window.chrome = {{}};
-                if (!window.chrome.runtime) {{
-                    var storageKey = {encoded_storage_key};
-                    var storageMap = {{}};
-                    try {{
-                        storageMap = JSON.parse(localStorage.getItem(storageKey) || '{{}}');
-                    }} catch (_) {{}}
-
-                    var runtime = {{
-                        id: 'eclipse-webextension-engine',
-                        getURL: function(path) {{
-                            return 'eclipse://extensions/' + String(path || '').replace(/^\//, '');
-                        }},
-                        getManifest: function() {{
-                            return {{
-                                name: 'Eclipse WebExtension Engine',
-                                version: '2.0.0',
-                                manifest_version: 3
-                            }};
-                        }},
-                        sendMessage: function(msg, cb) {{
-                            if (typeof cb === 'function') {{
-                                setTimeout(function() {{ cb(undefined); }}, 0);
-                            }}
-                            return Promise.resolve(undefined);
-                        }},
-                        onMessage: {{
-                            addListener: function() {{}},
-                            removeListener: function() {{}},
-                            hasListener: function() {{ return false; }}
-                        }},
-                        connect: function() {{
-                            var port = {{
-                                name: '',
-                                postMessage: function() {{}},
-                                onMessage: {{ addListener: function() {{}}, removeListener: function() {{}} }},
-                                onDisconnect: {{
-                                    addListener: function(fn) {{
-                                        if (typeof fn === 'function') {{
-                                            setTimeout(function() {{ fn(port); }}, 0);
-                                        }}
-                                    }},
-                                    removeListener: function() {{}}
-                                }}
-                            }};
-                            return port;
-                        }}
-                    }};
-
-                    var storage = {{
-                        local: {{
-                            get: function(keys, cb) {{
-                                var result = {{}};
-                                if (typeof keys === 'string') {{
-                                    result[keys] = storageMap[keys];
-                                }} else if (Array.isArray(keys)) {{
-                                    keys.forEach(function(k) {{ result[k] = storageMap[k]; }});
-                                }} else if (keys && typeof keys === 'object') {{
-                                    Object.keys(keys).forEach(function(k) {{
-                                        result[k] = (storageMap[k] !== undefined) ? storageMap[k] : keys[k];
-                                    }});
-                                }} else {{
-                                    result = Object.assign({{}}, storageMap);
-                                }}
-                                if (typeof cb === 'function') cb(result);
-                                return Promise.resolve(result);
-                            }},
-                            set: function(items, cb) {{
-                                if (items && typeof items === 'object') {{
-                                    Object.assign(storageMap, items);
-                                    try {{
-                                        localStorage.setItem(storageKey, JSON.stringify(storageMap));
-                                    }} catch (_) {{}}
-                                }}
-                                if (typeof cb === 'function') cb();
-                                return Promise.resolve();
-                            }},
-                            remove: function(keys, cb) {{
-                                var arr = Array.isArray(keys) ? keys : [keys];
-                                arr.forEach(function(k) {{ delete storageMap[k]; }});
-                                try {{
-                                    localStorage.setItem(storageKey, JSON.stringify(storageMap));
-                                }} catch (_) {{}}
-                                if (typeof cb === 'function') cb();
-                                return Promise.resolve();
-                            }},
-                            clear: function(cb) {{
-                                storageMap = {{}};
-                                try {{
-                                    localStorage.removeItem(storageKey);
-                                }} catch (_) {{}}
-                                if (typeof cb === 'function') cb();
-                                return Promise.resolve();
-                            }}
-                        }},
-                        sync: null
-                    }};
-                    storage.sync = storage.local;
-
-                    var tabs = {{
-                        query: function(info, cb) {{
-                            var activeTab = [{{
-                                id: 1,
-                                active: true,
-                                url: location.href,
-                                title: document.title
-                            }}];
-                            if (typeof cb === 'function') cb(activeTab);
-                            return Promise.resolve(activeTab);
-                        }},
-                        sendMessage: function(tabId, msg, cb) {{
-                            if (typeof cb === 'function') cb(undefined);
-                            return Promise.resolve(undefined);
-                        }},
-                        create: function(props, cb) {{
-                            if (props && props.url) window.open(props.url, '_blank');
-                            if (typeof cb === 'function') cb({{ id: 2, url: props ? props.url : '' }});
-                            return Promise.resolve({{ id: 2, url: props ? props.url : '' }});
-                        }}
-                    }};
-
-                    var action = {{
-                        setTitle: function() {{}},
-                        setIcon: function() {{}},
-                        setBadgeText: function() {{}},
-                        setBadgeBackgroundColor: function() {{}},
-                        onClicked: {{ addListener: function() {{}}, removeListener: function() {{}} }}
-                    }};
-
-                    window.chrome.runtime = runtime;
-                    window.chrome.storage = storage;
-                    window.chrome.tabs = tabs;
-                    window.chrome.action = action;
-                    window.chrome.browserAction = action;
-                    window.chrome.extension = {{
-                        getURL: runtime.getURL,
-                        inIncognitoContext: false
-                    }};
-                    if (!window.browser) {{
-                        window.browser = window.chrome;
-                    }}
-                }}
-            }} catch (_) {{}}
-
-            var extStyles = {encoded_ext_styles};
-            if (Array.isArray(extStyles) && extStyles.length > 0) {{
-                function injectExtStyles() {{
-                    extStyles.forEach(function(css) {{
-                        var styleEl = document.createElement('style');
-                        styleEl.className = '__eclipse_extension_style';
-                        styleEl.textContent = css;
-                        (document.head || document.documentElement).appendChild(styleEl);
-                    }});
-                }}
-                if (document.head || document.documentElement) injectExtStyles();
-                else document.addEventListener('DOMContentLoaded', injectExtStyles, {{ once: true }});
-            }}
-
-            var extScripts = {encoded_ext_scripts};
-            if (Array.isArray(extScripts) && extScripts.length > 0) {{
-                extScripts.forEach(function(code) {{
-                    try {{
-                        (new Function(code))();
-                    }} catch (err) {{
-                        console.warn('[Eclipse Extension Script Error]', err);
-                    }}
-                }});
-            }}
-
-            var customScript = {encoded_custom_js};
-            if (customScript && customScript.trim()) {{
-                try {{
-                    var runCustom = new Function(customScript);
-                    if (document.readyState === 'loading') {{
-                        document.addEventListener('DOMContentLoaded', function() {{ runCustom(); }}, {{ once: true }});
-                    }} else {{
-                        runCustom();
-                    }}
-                }} catch (err) {{
-                    console.warn('[Eclipse UserScript Error]', err);
-                }}
-            }}
-        }})();"##
+        "(function () {{\n{guard}\nfunction run() {{\ntry {{\n(function () {{\n{code}\n}}).call(window);\n}} catch (err) {{\nconsole.warn({label_js}, err);\n}}\n}}\nif (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run, {{ once: true }});\nelse run();\n}})();"
     )
 }
+
+const EXTENSION_RUNTIME_SHIM: &str = r##"if (!window.chrome) window.chrome = {};
+if (!window.chrome.runtime) {
+    var storageMap = {};
+    var runtime = {
+        id: 'eclipse-webextension-engine',
+        getURL: function (path) {
+            return 'eclipse://extensions/' + String(path || '').replace(/^\//, '');
+        },
+        getManifest: function () {
+            return { name: 'Eclipse WebExtension Engine', version: '2.0.0', manifest_version: 3 };
+        },
+        sendMessage: function (msg, cb) {
+            if (typeof cb === 'function') setTimeout(function () { cb(undefined); }, 0);
+            return Promise.resolve(undefined);
+        },
+        onMessage: {
+            addListener: function () {},
+            removeListener: function () {},
+            hasListener: function () { return false; }
+        },
+        connect: function () {
+            var port = {
+                name: '',
+                postMessage: function () {},
+                onMessage: { addListener: function () {}, removeListener: function () {} },
+                onDisconnect: {
+                    addListener: function (fn) {
+                        if (typeof fn === 'function') setTimeout(function () { fn(port); }, 0);
+                    },
+                    removeListener: function () {}
+                }
+            };
+            return port;
+        }
+    };
+    var storage = {
+        local: {
+            get: function (keys, cb) {
+                var result = {};
+                if (typeof keys === 'string') {
+                    result[keys] = storageMap[keys];
+                } else if (Array.isArray(keys)) {
+                    keys.forEach(function (k) { result[k] = storageMap[k]; });
+                } else if (keys && typeof keys === 'object') {
+                    Object.keys(keys).forEach(function (k) {
+                        result[k] = storageMap[k] !== undefined ? storageMap[k] : keys[k];
+                    });
+                } else {
+                    result = Object.assign({}, storageMap);
+                }
+                if (typeof cb === 'function') cb(result);
+                return Promise.resolve(result);
+            },
+            set: function (items, cb) {
+                if (items && typeof items === 'object') Object.assign(storageMap, items);
+                if (typeof cb === 'function') cb();
+                return Promise.resolve();
+            },
+            remove: function (keys, cb) {
+                (Array.isArray(keys) ? keys : [keys]).forEach(function (k) { delete storageMap[k]; });
+                if (typeof cb === 'function') cb();
+                return Promise.resolve();
+            },
+            clear: function (cb) {
+                storageMap = {};
+                if (typeof cb === 'function') cb();
+                return Promise.resolve();
+            }
+        },
+        sync: null
+    };
+    storage.sync = storage.local;
+    var tabs = {
+        query: function (info, cb) {
+            var activeTab = [{ id: 1, active: true, url: location.href, title: document.title }];
+            if (typeof cb === 'function') cb(activeTab);
+            return Promise.resolve(activeTab);
+        },
+        sendMessage: function (tabId, msg, cb) {
+            if (typeof cb === 'function') cb(undefined);
+            return Promise.resolve(undefined);
+        },
+        create: function (props, cb) {
+            if (props && props.url) window.open(props.url, '_blank');
+            if (typeof cb === 'function') cb({ id: 2, url: props ? props.url : '' });
+            return Promise.resolve({ id: 2, url: props ? props.url : '' });
+        }
+    };
+    var action = {
+        setTitle: function () {},
+        setIcon: function () {},
+        setBadgeText: function () {},
+        setBadgeBackgroundColor: function () {},
+        onClicked: { addListener: function () {}, removeListener: function () {} }
+    };
+    window.chrome.runtime = runtime;
+    window.chrome.storage = storage;
+    window.chrome.tabs = tabs;
+    window.chrome.action = action;
+    window.chrome.browserAction = action;
+    window.chrome.extension = { getURL: runtime.getURL, inIncognitoContext: false };
+    if (!window.browser) window.browser = window.chrome;
+}"##;
 
 pub fn build_custom_css_script(css: &str) -> String {
     let encoded_css = serde_json::to_string(css).unwrap_or_else(|_| "\"\"".into());
     format!(
         r##"(function () {{
+            if (location.protocol === 'eclipse:') return;
             var cssText = {encoded_css};
             function applyUserCss() {{
                 var el = document.getElementById('__eclipse_user_custom_css');
@@ -879,23 +1089,38 @@ pub fn build_custom_css_script(css: &str) -> String {
     )
 }
 
-fn build_config_seed_script(
-    config: &BrowserConfig,
-    active_url: Option<&str>,
-    workspace: &str,
-) -> String {
-    let json = serde_json::to_string(config).unwrap_or_else(|_| "{}".into());
-    let act_url = js_string(active_url.unwrap_or(""));
-    let ws_js = js_string(workspace);
+/// Seeds `window.__ECLIPSE_CONFIG__` at document start for tabs created on an
+/// internal page, so those pages render with settings on first paint. Tabs
+/// created on a website get no seed at all; their internal pages receive the
+/// config from `sync_config` once they commit.
+fn build_config_seed_script(config: &BrowserConfig, tab_url: &str) -> String {
+    if !tab_url.starts_with("eclipse://") {
+        return String::new();
+    }
+    let json = config.to_page_json();
+    let act_url = js_string(tab_url);
     format!(
         r##"(function () {{
-            try {{
-                window.__ECLIPSE_SPACE__ = {ws_js};
-                if (location.protocol === 'eclipse:') {{
-                    window.__ECLIPSE_CONFIG__ = {json};
-                    window.__ECLIPSE_ACTIVE_URL__ = {act_url};
-                }}
-            }} catch (_) {{}}
+            if (location.protocol !== 'eclipse:') return;
+            window.__ECLIPSE_CONFIG__ = {json};
+            window.__ECLIPSE_ACTIVE_URL__ = {act_url};
+        }})();"##
+    )
+}
+
+fn build_config_push_script(config: &BrowserConfig, active_url: &str) -> String {
+    let json = config.to_page_json();
+    let act_url = js_string(active_url);
+    format!(
+        r##"(function () {{
+            if (location.protocol !== 'eclipse:') return;
+            var cfg = {json};
+            var actUrl = {act_url};
+            window.__ECLIPSE_CONFIG__ = cfg;
+            window.__ECLIPSE_ACTIVE_URL__ = actUrl;
+            if (typeof window.onEclipseConfigUpdated === 'function') {{
+                window.onEclipseConfigUpdated(cfg, actUrl);
+            }}
         }})();"##
     )
 }
@@ -916,19 +1141,113 @@ fn build_drm_script(enabled: bool) -> String {
         .to_string()
 }
 
-fn build_bridge_script(token: &str) -> String {
-    BRIDGE_SCRIPT.replace("__ECLIPSE_TOKEN__", token)
+fn build_bridge_script(token: &str, control: &str) -> String {
+    BRIDGE_SCRIPT
+        .replace("__ECLIPSE_TOKEN__", token)
+        .replace("__ECLIPSE_CONTROL__", control)
 }
 
-fn build_shields_script(token: &str, enabled: bool) -> String {
-    SHIELDS_SCRIPT.replace("__ECLIPSE_TOKEN__", token).replace(
-        "__ECLIPSE_ENABLED__",
-        if enabled { "true" } else { "false" },
+fn build_shields_script(control: &str, enabled: bool) -> String {
+    SHIELDS_SCRIPT
+        .replace("__ECLIPSE_CONTROL__", control)
+        .replace(
+            "__ECLIPSE_ENABLED__",
+            if enabled { "true" } else { "false" },
+        )
+}
+
+/// One init-script part, isolated so a runtime error in it cannot abort the
+/// parts after it.
+fn guard_script(script: &str) -> String {
+    format!("try {{\n{script}\n}} catch (_eclipseInitError) {{}}")
+}
+
+/// A self-contained page for a failed navigation. Everything from the URL and
+/// the error is escaped; "Try Again" is a plain navigation, with no IPC.
+fn build_error_page_html(failed_url: &str, description: &str) -> String {
+    let description = if description.trim().is_empty() {
+        "The page could not be loaded."
+    } else {
+        description.trim()
+    };
+    let parsed = Url::parse(failed_url).ok();
+    let host = parsed
+        .as_ref()
+        .and_then(|u| u.host_str())
+        .unwrap_or(failed_url);
+    let retry = parsed
+        .as_ref()
+        .is_some_and(|u| u.scheme() == "http" || u.scheme() == "https");
+    let retry_markup = if retry {
+        format!(
+            r#"<button id="retry" type="button">Try Again</button>
+<script>
+document.getElementById('retry').addEventListener('click', function () {{ location.href = {}; }});
+</script>"#,
+            js_string(failed_url).replace('<', "\\u003c")
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        r#"<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+:root {{ color-scheme: light dark; }}
+body {{ margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  font: 14px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; background: #f5f5f7; color: #1d1d1f; }}
+main {{ max-width: 520px; padding: 32px; text-align: center; }}
+h1 {{ font-size: 22px; font-weight: 600; margin: 0 0 12px; }}
+p {{ margin: 0 0 10px; line-height: 1.45; color: #515154; }}
+.url {{ font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; color: #6e6e73; }}
+button {{ margin-top: 18px; padding: 8px 18px; border: 0; border-radius: 8px; font: inherit; font-weight: 500;
+  background: #0071e3; color: #fff; cursor: pointer; }}
+@media (prefers-color-scheme: dark) {{
+  body {{ background: #1c1c1e; color: #f5f5f7; }}
+  p {{ color: #c7c7cc; }}
+  .url {{ color: #98989d; }}
+}}
+</style>
+</head>
+<body>
+<main>
+<h1>Can’t open {host}</h1>
+<p>{description}</p>
+<p class="url">{url}</p>
+{retry_markup}
+</main>
+</body>
+</html>"#,
+        title = html_escape(failed_url),
+        host = html_escape(host),
+        description = html_escape(description),
+        url = html_escape(failed_url),
     )
 }
 
-/// 128 bits of OS randomness. The token never leaves our injected closure, so
-/// untrusted pages cannot drive the browser chrome through `window.ipc`.
+fn html_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+/// 128 bits of OS randomness, used for the IPC token and the control secret.
+/// Neither is ever placed on a page-reachable object (see bridge.js); Rust
+/// also authorizes each message by the frame URL WebKit reports, not by the
+/// token alone.
 pub fn generate_ipc_token() -> String {
     let mut bytes = [0u8; 16];
     if let Ok(mut file) = fs::File::open("/dev/urandom")
@@ -959,6 +1278,15 @@ pub fn generate_ipc_token() -> String {
     token
 }
 
+/// `host` is `domain` itself or one of its subdomains (not merely containing
+/// it, so github.com.login-verify.io does not get the GitHub glyph).
+fn host_is(host: &str, domain: &str) -> bool {
+    host == domain
+        || host
+            .strip_suffix(domain)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
 pub fn get_default_favicon(url: &str) -> String {
     if url.starts_with("eclipse://") {
         return "eclipse".into();
@@ -967,17 +1295,17 @@ pub fn get_default_favicon(url: &str) -> String {
         && let Some(host) = parsed.host_str()
     {
         let h = host.to_lowercase();
-        if h.contains("netflix.com") {
+        if host_is(&h, "netflix.com") {
             return "netflix".into();
-        } else if h.contains("youtube.com") || h.contains("youtu.be") {
+        } else if host_is(&h, "youtube.com") || host_is(&h, "youtu.be") {
             return "youtube".into();
-        } else if h.contains("github.com") {
+        } else if host_is(&h, "github.com") {
             return "github".into();
-        } else if h.contains("reddit.com") {
+        } else if host_is(&h, "reddit.com") {
             return "reddit".into();
-        } else if h.contains("apple.com") {
+        } else if host_is(&h, "apple.com") {
             return "apple".into();
-        } else if h.contains("spotify.com") {
+        } else if host_is(&h, "spotify.com") {
             return "spotify".into();
         }
     }
@@ -1010,10 +1338,36 @@ pub fn downloads_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
-fn unique_download_path(dir: &Path, file_name: &str) -> PathBuf {
+/// A download WebKit announced, by original request URL. `path` is where it
+/// is being written, or None when it was refused as a mis-detected page.
+struct PendingDownload {
+    url: String,
+    path: Option<PathBuf>,
+}
+
+/// Shared by every tab: destinations stay reserved until WebKit reports the
+/// download finished, so two concurrent downloads never pick the same file.
+static PENDING_DOWNLOADS: Mutex<Vec<PendingDownload>> = Mutex::new(Vec::new());
+const PENDING_DOWNLOAD_LIMIT: usize = 64;
+
+fn pending_downloads() -> std::sync::MutexGuard<'static, Vec<PendingDownload>> {
+    PENDING_DOWNLOADS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn remember_download(pending: &mut Vec<PendingDownload>, url: String, path: Option<PathBuf>) {
+    if pending.len() >= PENDING_DOWNLOAD_LIMIT {
+        pending.remove(0);
+    }
+    pending.push(PendingDownload { url, path });
+}
+
+fn unique_download_path(dir: &Path, file_name: &str, reserved: &[&Path]) -> PathBuf {
+    let taken = |candidate: &Path| candidate.exists() || reserved.contains(&candidate);
     let safe = sanitize_file_name(file_name);
     let mut candidate = dir.join(&safe);
-    if !candidate.exists() {
+    if !taken(&candidate) {
         return candidate;
     }
     let path = Path::new(&safe);
@@ -1030,12 +1384,14 @@ fn unique_download_path(dir: &Path, file_name: &str) -> PathBuf {
             None => format!("{stem} ({index})"),
         };
         candidate = dir.join(name);
-        if !candidate.exists() {
+        if !taken(&candidate) {
             return candidate;
         }
     }
     dir.join(safe)
 }
+
+const MAX_FILE_NAME_CHARS: usize = 180;
 
 fn sanitize_file_name(file_name: &str) -> String {
     let name = Path::new(file_name)
@@ -1052,108 +1408,83 @@ fn sanitize_file_name(file_name: &str) -> String {
         .collect();
     let trimmed = cleaned.trim().trim_matches('.');
     if trimmed.is_empty() {
-        "download".into()
-    } else {
-        trimmed.chars().take(180).collect()
+        return "download".into();
     }
+    if trimmed.chars().count() <= MAX_FILE_NAME_CHARS {
+        return trimmed.to_string();
+    }
+    // Shorten the stem, keep the extension.
+    let path = Path::new(trimmed);
+    if let (Some(stem), Some(ext)) = (path.file_stem(), path.extension()) {
+        let ext = ext.to_string_lossy();
+        let ext_len = ext.chars().count();
+        if ext_len <= 16 {
+            let stem: String = stem
+                .to_string_lossy()
+                .chars()
+                .take(MAX_FILE_NAME_CHARS - ext_len - 1)
+                .collect();
+            return format!("{}.{ext}", stem.trim_end());
+        }
+    }
+    trimmed.chars().take(MAX_FILE_NAME_CHARS).collect()
 }
 
-const NON_DOWNLOADABLE_EXTENSIONS: &[&str] = &[
-    "html", "htm", "xhtml", "php", "asp", "aspx", "jsp", "cgi", "js", "mjs", "cjs", "css", "less",
-    "scss", "ts", "tsx", "map",
-];
-
-const TOP_LEVEL_DOMAINS: &[&str] = &[
-    "com", "org", "net", "edu", "gov", "mil", "io", "co", "ai", "app", "dev", "in", "uk", "de",
-    "fr", "ca", "au", "jp", "cn", "ru", "br", "it", "nl", "se", "no", "es", "ch", "at", "dk", "fi",
-    "pl", "be", "ie", "nz", "kr", "sg", "hk", "tw", "za", "mx", "ar", "cl", "xyz", "top", "site",
-    "online", "info", "biz", "pro", "me", "tv", "cc", "fm", "am", "us", "eu",
-];
-
-const LEGITIMATE_DOWNLOAD_EXTENSIONS: &[&str] = &[
-    "zip", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "7z", "rar", "z", "lz", "lzma", "cab",
-    "iso", "img", "bin", "dmg", "pkg", "toast", "vcd", "exe", "msi", "msix", "appx", "deb", "rpm",
-    "apk", "aab", "ipa", "jar", "war", "crx", "xpi", "torrent", "pdf", "epub", "mobi", "azw",
-    "azw3", "csv", "tsv", "xlsx", "xls", "docx", "doc", "pptx", "ppt", "odt", "ods", "odp", "rtf",
-    "tex", "sqlite", "sqlite3", "db", "sql", "parquet", "patch", "diff", "txt", "mp3", "wav",
-    "flac", "aac", "ogg", "m4a", "wma", "opus", "aiff", "mp4", "mkv", "avi", "mov", "wmv", "flv",
-    "webm", "m4v", "psd", "ai", "blend", "stl", "obj", "fbx", "step", "iges",
-];
-
-#[allow(dead_code)]
-pub fn is_legitimate_download(suggested_name: &str, url_str: &str) -> bool {
-    resolve_download_name(suggested_name, url_str).is_some()
-}
-
+/// The file name for a download, or None for a page load that WebKit could
+/// not display and handed over as a "download" (named after the host, or
+/// with no name at all). Real files are never refused for their extension or
+/// length: attachments named .html/.js/.ai, extensionless binaries named by
+/// Content-Disposition, and over-long names (shortened) all download.
 pub fn resolve_download_name(suggested_name: &str, url_str: &str) -> Option<String> {
-    if let Some(candidate) = extract_valid_download_name(suggested_name) {
-        return Some(candidate);
-    }
+    let parsed = Url::parse(url_str).ok();
+    let host = parsed
+        .as_ref()
+        .and_then(|u| u.host_str())
+        .map(|h| h.to_ascii_lowercase())
+        .unwrap_or_default();
+    let last_segment = parsed
+        .as_ref()
+        .and_then(|u| u.path_segments())
+        .and_then(|mut segments| segments.next_back())
+        .map(percent_decode)
+        .unwrap_or_default();
 
-    if let Ok(parsed) = Url::parse(url_str)
-        && let Some(segment) = parsed
-            .path_segments()
-            .and_then(|mut segments| segments.next_back())
-    {
-        let decoded = percent_decode(segment);
-        if !decoded.is_empty()
-            && decoded != "/"
-            && let Some(candidate) = extract_valid_download_name(&decoded)
-        {
-            return Some(candidate);
+    // WebKit's suggestion comes from Content-Disposition, the <a download>
+    // name, or the last URL segment. Without an extension it only counts when
+    // it is not just that segment (a streaming endpoint such as YouTube's
+    // "videoplayback" loaded in a frame).
+    if let Some(name) = clean_download_name(suggested_name, &host) {
+        let from_url = name == sanitize_file_name(&last_segment);
+        if Path::new(&name).extension().is_some() || !from_url {
+            return Some(name);
         }
     }
-
-    None
-}
-
-fn extract_valid_download_name(candidate: &str) -> Option<String> {
-    let decoded = percent_decode(candidate);
-    let clean = sanitize_file_name(&decoded);
-    if clean.is_empty()
-        || clean == "download"
-        || clean == "unknown"
-        || clean.starts_with("download-")
+    if let Some(name) = clean_download_name(&last_segment, &host)
+        && Path::new(&name).extension().is_some()
     {
-        return None;
+        return Some(name);
     }
-
-    let path = Path::new(&clean);
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    if ext.is_empty() {
-        return None;
+    // Script-generated files have no useful name but are always real.
+    match parsed.as_ref().map(|u| u.scheme()) {
+        Some("blob") | Some("data") => Some("download".into()),
+        _ => None,
     }
-
-    if NON_DOWNLOADABLE_EXTENSIONS.contains(&ext.as_str()) {
-        return None;
-    }
-
-    if TOP_LEVEL_DOMAINS.contains(&ext.as_str()) {
-        return None;
-    }
-
-    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-        let stem_lower = stem.to_ascii_lowercase();
-        for tld in TOP_LEVEL_DOMAINS {
-            if stem_lower.ends_with(&format!(".{tld}")) || stem_lower == *tld {
-                return None;
-            }
-        }
-    }
-
-    if LEGITIMATE_DOWNLOAD_EXTENSIONS.contains(&ext.as_str()) {
-        return Some(clean);
-    }
-
-    if ext.len() >= 2 && ext.len() <= 6 && ext.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Some(clean);
-    }
-
-    None
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
+fn clean_download_name(candidate: &str, host: &str) -> Option<String> {
+    let clean = sanitize_file_name(&percent_decode(candidate));
+    let lower = clean.to_ascii_lowercase();
+    if lower == "download" || lower == "unknown" {
+        return None;
+    }
+    let bare_host = host.trim_start_matches("www.");
+    if !bare_host.is_empty() && lower.trim_start_matches("www.") == bare_host {
+        return None;
+    }
+    Some(clean)
+}
+
+/// Name for a download whose real name is unknown (never empty).
 pub fn download_file_name(url: &str) -> String {
     resolve_download_name("", url).unwrap_or_else(|| "download".into())
 }
@@ -1189,6 +1520,11 @@ fn percent_decode(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ExtensionConfig;
+
+    fn is_legitimate_download(suggested_name: &str, url_str: &str) -> bool {
+        resolve_download_name(suggested_name, url_str).is_some()
+    }
 
     #[test]
     fn canonical_urls() {
@@ -1207,6 +1543,10 @@ mod tests {
         assert_eq!(
             canonicalize_eclipse_url("eclipse://localhost/easel"),
             "eclipse://easel"
+        );
+        assert_eq!(
+            canonicalize_eclipse_url("eclipse://sidebar"),
+            "eclipse://newtab"
         );
         assert_eq!(
             canonicalize_eclipse_url("https://example.com"),
@@ -1256,7 +1596,26 @@ mod tests {
     }
 
     #[test]
+    fn brand_favicons_need_the_real_domain() {
+        assert_eq!(get_default_favicon("https://github.com/x"), "github");
+        assert_eq!(get_default_favicon("https://gist.github.com/x"), "github");
+        assert_eq!(get_default_favicon("https://www.apple.com"), "apple");
+        assert_eq!(get_default_favicon("https://youtu.be/abc"), "youtube");
+        assert_eq!(
+            get_default_favicon("https://github.com.login-verify.io/"),
+            "globe"
+        );
+        assert_eq!(get_default_favicon("https://pineapple.com/"), "globe");
+        assert_eq!(
+            get_default_favicon("https://applecare-support.com/"),
+            "globe"
+        );
+        assert_eq!(get_default_favicon("https://notgithub.com/"), "globe");
+    }
+
+    #[test]
     fn download_validation_rejects_pages_and_accepts_files() {
+        // Pages WebKit handed over as downloads.
         assert!(!is_legitimate_download(
             "www.youtube.com",
             "https://www.youtube.com/"
@@ -1270,16 +1629,8 @@ mod tests {
             "https://www.youtube.com/videoplayback"
         ));
         assert!(!is_legitimate_download(
-            "index.html",
-            "https://example.com/index.html"
-        ));
-        assert!(!is_legitimate_download(
-            "login.php",
-            "https://example.com/login.php"
-        ));
-        assert!(!is_legitimate_download(
-            "bundle.js",
-            "https://example.com/bundle.js"
+            "videoplayback",
+            "https://rr1.googlevideo.com/videoplayback?id=1"
         ));
         assert!(!is_legitimate_download("", "https://example.com/"));
 
@@ -1300,6 +1651,50 @@ mod tests {
             "https://example.com/export?format=csv"
         ));
 
+        // Files the old extension/TLD heuristics cancelled.
+        assert!(is_legitimate_download(
+            "logo.ai",
+            "https://cdn.example.com/x?id=3"
+        ));
+        assert!(is_legitimate_download(
+            "download-manager-setup.dmg",
+            "https://example.com/get"
+        ));
+        assert!(is_legitimate_download(
+            "MyTool.app.zip",
+            "https://example.com/t"
+        ));
+        assert!(is_legitimate_download(
+            "my.site.zip",
+            "https://example.com/z"
+        ));
+        assert!(is_legitimate_download(
+            "index.html",
+            "https://example.com/index.html"
+        ));
+        assert!(is_legitimate_download(
+            "script.js",
+            "https://example.com/get?f=1"
+        ));
+        assert!(is_legitimate_download(
+            "theme.css",
+            "https://example.com/theme.css"
+        ));
+        // Extensionless name from Content-Disposition.
+        assert_eq!(
+            resolve_download_name("ffmpeg", "https://example.com/download?id=7"),
+            Some("ffmpeg".into())
+        );
+        // Script-generated exports.
+        assert_eq!(
+            resolve_download_name("Unknown", "blob:https://example.com/1f2e"),
+            Some("download".into())
+        );
+        assert_eq!(
+            resolve_download_name("export.csv", "blob:https://example.com/1f2e"),
+            Some("export.csv".into())
+        );
+
         assert_eq!(
             resolve_download_name(
                 "report%20final.pdf",
@@ -1313,16 +1708,156 @@ mod tests {
         );
         assert_eq!(resolve_download_name("", "https://example.com/"), None);
         assert!(!sanitize_file_name("../../etc/passwd").contains('/'));
+        assert_eq!(download_file_name("https://example.com/"), "download");
+        assert_eq!(download_file_name("https://example.com/a/b.zip"), "b.zip");
+    }
+
+    #[test]
+    fn long_download_names_keep_their_extension() {
+        let long = format!("{}.pdf", "a".repeat(400));
+        let name = resolve_download_name(&long, "https://example.com/x").unwrap();
+        assert!(name.ends_with(".pdf"));
+        assert_eq!(name.chars().count(), MAX_FILE_NAME_CHARS);
+    }
+
+    #[test]
+    fn reserved_download_paths_are_skipped() {
+        let dir = std::env::temp_dir().join(format!("eclipse-dl-test-{}", generate_ipc_token()));
+        fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("report.pdf");
+        assert_eq!(unique_download_path(&dir, "report.pdf", &[]), first);
+        let second = unique_download_path(&dir, "report.pdf", &[first.as_path()]);
+        assert_eq!(second, dir.join("report (1).pdf"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn web_pages_cannot_open_internal_pages() {
+        let nav = NavState::default();
+        assert!(nav.allows_navigation("https://example.com/"));
+        assert!(nav.allows_navigation("about:blank"));
+        assert!(nav.allows_navigation("eclipse://localhost/newtab"));
+        assert!(!nav.allows_navigation("eclipse://localhost/settings"));
+        assert!(!nav.allows_navigation("ECLIPSE://localhost/notes"));
+
+        nav.browser_initiated.store(true, Ordering::Relaxed);
+        assert!(nav.allows_navigation("eclipse://localhost/settings"));
+        nav.browser_initiated.store(false, Ordering::Relaxed);
+
+        nav.current_is_internal.store(true, Ordering::Relaxed);
+        assert!(nav.allows_navigation("eclipse://localhost/easel"));
+    }
+
+    #[test]
+    fn error_page_escapes_everything() {
+        let html = build_error_page_html(
+            "https://example.com/\"';</script><script>alert(1)</script>",
+            "<b>Server</b> & co",
+        );
+        assert!(!html.contains("<script>alert(1)"));
+        assert!(!html.contains("<b>Server</b>"));
+        assert!(html.contains("&lt;b&gt;Server&lt;/b&gt; &amp; co"));
+        assert!(html.contains("Try Again"));
+        assert!(!html.contains("ipc"));
+
+        let html = build_error_page_html("javascript:alert(1)", "");
+        assert!(!html.contains("Try Again"));
+        assert!(html.contains("The page could not be loaded."));
+    }
+
+    fn extension(matches: &[&str], script: &str) -> ExtensionConfig {
+        ExtensionConfig {
+            id: "ext".into(),
+            name: "Ext".into(),
+            version: "1".into(),
+            description: String::new(),
+            enabled: true,
+            path: None,
+            matches: matches.iter().map(|m| m.to_string()).collect(),
+            content_scripts: vec![script.into()],
+            content_css: vec!["body { outline: 1px solid red; }".into()],
+        }
+    }
+
+    #[test]
+    fn page_scripts_match_per_navigation_and_skip_internal_pages() {
+        let mut cfg = BrowserConfig {
+            webextensions_enabled: true,
+            installed_extensions: vec![extension(&["*://*.youtube.com/*"], "window.__ytExt = 1;")],
+            custom_js: "window.__custom = 1;".into(),
+            ..BrowserConfig::default()
+        };
+
+        let yt = build_page_scripts("https://www.youtube.com/watch?v=1", &cfg);
+        assert!(yt.iter().any(|s| s.contains("window.__ytExt = 1;")));
+        assert!(yt.iter().any(|s| s.contains("__eclipse_extension_style")));
+        assert!(yt.iter().any(|s| s.contains("window.__custom = 1;")));
+        assert!(yt.iter().all(|s| !s.contains("new Function")));
+        assert!(yt.iter().all(|s| !s.contains("localStorage")));
+        assert!(
+            yt.iter()
+                .all(|s| s.contains("location.hostname !== \"www.youtube.com\""))
+        );
+
+        let other = build_page_scripts("https://example.org/", &cfg);
+        assert!(other.iter().all(|s| !s.contains("__ytExt")));
+        assert!(other.iter().any(|s| s.contains("window.__custom = 1;")));
+
+        assert!(build_page_scripts("eclipse://localhost/settings", &cfg).is_empty());
+        assert!(build_page_scripts("about:blank", &cfg).is_empty());
+
+        cfg.webextensions_enabled = false;
+        assert!(build_page_scripts("https://www.youtube.com/", &cfg).is_empty());
+    }
+
+    #[test]
+    fn config_seed_is_only_for_internal_tabs_and_strips_extension_code() {
+        let cfg = BrowserConfig {
+            installed_extensions: vec![extension(&["<all_urls>"], "SECRET_EXTENSION_SOURCE")],
+            ..BrowserConfig::default()
+        };
+        assert!(build_config_seed_script(&cfg, "https://example.com/").is_empty());
+        let seed = build_config_seed_script(&cfg, "eclipse://newtab");
+        assert!(seed.contains("__ECLIPSE_CONFIG__"));
+        assert!(!seed.contains("SECRET_EXTENSION_SOURCE"));
+        assert!(!seed.contains("__ECLIPSE_SPACE__"));
+        let push = build_config_push_script(&cfg, "https://example.com/");
+        assert!(!push.contains("SECRET_EXTENSION_SOURCE"));
+        assert!(push.contains("location.protocol !== 'eclipse:'"));
+    }
+
+    #[test]
+    fn injected_scripts_keep_secrets_off_page_objects() {
+        let bridge = build_bridge_script("aaaabbbb", "ccccdddd");
+        assert!(!bridge.contains("__ECLIPSE_TOKEN__"));
+        assert!(!bridge.contains("__ECLIPSE_CONTROL__"));
+        assert!(!bridge.contains("innerHTML"));
+        assert!(!bridge.contains("insertAdjacentHTML"));
+        assert!(!bridge.contains("payload.token"));
+        assert!(!bridge.contains("__eclipseCommandBar"));
+        assert!(!bridge.contains("__eclipseLittleArc"));
+        assert!(!bridge.contains("set_fullscreen"));
+        let shields = build_shields_script("ccccdddd", true);
+        assert!(!shields.contains("__ECLIPSE_CONTROL__"));
+        assert!(!shields.contains("__ECLIPSE_ENABLED__"));
+        assert!(!shields.contains("aaaabbbb"));
+        assert!(!shields.contains("innerHTML"));
+        assert!(guard_script("x();").starts_with("try {"));
     }
 
     #[test]
     fn test_adblock_site_toggling_and_extension_matching() {
-        let mut cfg = BrowserConfig::default();
-        cfg.adblock_enabled = true;
-        cfg.adblock_disabled_domains = vec!["net77.cc".into(), "youtube.com".into()];
+        let mut cfg = BrowserConfig {
+            adblock_enabled: true,
+            adblock_disabled_domains: vec!["net77.cc".into(), "youtube.com".into()],
+            ..BrowserConfig::default()
+        };
 
         assert!(!is_adblock_active_for_url("https://net77.cc/home", &cfg));
-        assert!(!is_adblock_active_for_url("https://sub.net77.cc/video", &cfg));
+        assert!(!is_adblock_active_for_url(
+            "https://sub.net77.cc/video",
+            &cfg
+        ));
         assert!(!is_adblock_active_for_url(
             "https://www.youtube.com/watch?v=123",
             &cfg

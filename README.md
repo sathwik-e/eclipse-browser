@@ -52,6 +52,9 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     window while it is in front. Ordinary links that open new windows, and
     popups a page opens on its own, still open as tabs.
   - They share the tabs' cookies and sign-ins, user agent and ad blocking.
+  - Files download as they would from a tab, into `~/Downloads` and the
+    Downloads list. A window opened only for a file (a link to a `.zip` from
+    Mail, say) closes once the download starts.
 - **Notes and Easel.** A notes page and a sketch-and-cards canvas, stored
   locally.
 - **Real browser plumbing:**
@@ -206,8 +209,9 @@ ECLIPSE_SMOKE_LITTLE_URL=https://example.com   # open a URL as a link from anoth
 (user gesture, limits, the host on the top bar for loads that never commit,
 popup messages, `eclipse://` requests and opener navigation, shortcuts with
 and without a dialog up, focus, resizing, links that open tabs, Open in
-Eclipse, standalone windows without an opener, and the address field,
-including its refusal of `eclipse://`). It builds
+Eclipse, standalone windows without an opener, the address field,
+including its refusal of `eclipse://`, "Not Secure" on long http hosts, and
+downloads from standalone windows, popups and links). It builds
 `src/menu.m` into a small harness, serves local test pages on ports 8831 and
 8832, and opens windows for about two minutes; the harness makes itself the
 active app, so leave the keyboard alone while it runs. `GUARD_MALLOC=1` runs

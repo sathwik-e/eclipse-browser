@@ -1633,6 +1633,9 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
 @property(nonatomic) uint64_t serial;
 @property(nonatomic, strong) NSView *container;
 @property(nonatomic, strong) NSButton *hostButton;
+/* What the host button stands for (eclipse_little_host_label); its title is
+   this, shortened to fit (see -fitHostLabel). */
+@property(nonatomic, copy) NSString *hostLabel;
 @property(nonatomic, strong) NSTextField *addressField;
 /* The rounded background the address field sits on while editing. */
 @property(nonatomic, strong) NSView *addressBox;
@@ -1640,8 +1643,10 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
 @property(nonatomic) BOOL editing;
 - (void)layoutChrome;
 - (void)applyTheme;
+- (void)fitHostLabel;
 - (void)beginEditingAddress;
 - (void)openInEclipse;
+- (void)downloadStarted;
 @end
 
 /* The window's content view: the theme-coloured frame that holds the bar's
@@ -1783,6 +1788,47 @@ static NSImage *eclipse_little_security_image(NSString *label) {
     return nil;
 }
 
+static NSString *const kEclipseLittleNotSecurePrefix = @"Not Secure — ";
+
+/* `label` as it fits on `button`. When the whole of it does not, the host
+   loses characters from its start (its end, the registrable domain, stays)
+   and a "Not Secure — " in front of it always stays: the security state is
+   never what gets cut. */
+static NSString *eclipse_little_fit_label(NSButton *button, NSString *label) {
+    CGFloat width = NSWidth(button.frame);
+    if (label.length == 0 || !isfinite(width) || width <= 0) return label;
+    NSButtonCell *probe = [button.cell copy];
+    BOOL (^fits)(NSString *) = ^BOOL(NSString *title) {
+        probe.title = title;
+        return probe.cellSize.width <= width;
+    };
+    if (fits(label)) return label;
+    NSString *prefix = @"";
+    NSString *host = label;
+    if ([label hasPrefix:kEclipseLittleNotSecurePrefix]) {
+        prefix = kEclipseLittleNotSecurePrefix;
+        host = [label substringFromIndex:prefix.length];
+    }
+    if ([host hasPrefix:@"…"]) host = [host substringFromIndex:1];
+    if (host.length == 0) return label;
+    // The longest end of the host that fits after "…" (at least one character).
+    NSString *(^shortened)(NSUInteger) = ^NSString *(NSUInteger keep) {
+        NSUInteger start = [host rangeOfComposedCharacterSequenceAtIndex:host.length - keep].location;
+        return [NSString stringWithFormat:@"%@…%@", prefix, [host substringFromIndex:start]];
+    };
+    NSUInteger low = 1, high = host.length, best = 1;
+    while (low <= high) {
+        NSUInteger mid = low + (high - low) / 2;
+        if (fits(shortened(mid))) {
+            best = mid;
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return shortened(best);
+}
+
 static NSString *eclipse_little_clean_title(NSString *title) {
     if (title.length == 0) return @"";
     NSArray<NSString *> *parts = [title componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -1827,6 +1873,146 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
 static void eclipse_little_check_openers(void);
 static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect visible);
 
+/* -- downloads
+
+   A Little Eclipse window downloads what it cannot show, and what a link
+   marks with `download`, as a tab does: the WKDownload goes to the
+   navigation delegate of a tab's webview (wry's), which gives it wry's
+   download delegate, so tab.rs names the file, saves it to ~/Downloads and
+   lists it under Downloads. An EclipseLittleDownload sits in between: it
+   forwards everything to that delegate (and keeps it alive should the tab
+   close mid-download) and tells the window once the file has a destination.
+   A window that has shown no page then closes: it was opened for the file (a
+   link from another app, a popup) and would otherwise stay empty. The
+   download carries on without it.
+   WKDownload needs macOS 11.3, above the deployment target. Without it, or
+   with no tab to take the download, a file the window cannot show opens as a
+   tab instead (which downloads it if it can). */
+
+/* WKNavigationActionPolicyDownload and WKNavigationResponsePolicyDownload
+   (macOS 11.3), only ever passed once eclipse_little_download_tab found a tab
+   to take the download (which needs WKDownload). */
+static const WKNavigationActionPolicy kEclipseLittleActionPolicyDownload = (WKNavigationActionPolicy)2;
+static const WKNavigationResponsePolicy kEclipseLittleResponsePolicyDownload = (WKNavigationResponsePolicy)2;
+
+static SEL eclipse_little_download_selector(BOOL fromAction) {
+    return fromAction ? @selector(webView:navigationAction:didBecomeDownload:)
+                      : @selector(webView:navigationResponse:didBecomeDownload:);
+}
+
+/* A tab webview whose navigation delegate can take a download over (with
+   `sel`): `preferred` (a popup's opener tab) if it is one, else a tab in a
+   window, else any tab. nil without WKDownload or a tab. */
+static WKWebView *eclipse_little_download_tab(WKWebView *preferred, SEL sel) {
+    if (NSClassFromString(@"WKDownload") == Nil || gTabIdsByWebView == nil) return nil;
+    BOOL (^usable)(WKWebView *) = ^BOOL(WKWebView *view) {
+        id delegate = view.navigationDelegate;
+        return delegate != nil && [delegate respondsToSelector:sel];
+    };
+    if (preferred != nil && [gTabIdsByWebView objectForKey:preferred] != nil && usable(preferred)) return preferred;
+    WKWebView *fallback = nil;
+    for (WKWebView *view in gTabIdsByWebView.keyEnumerator) {
+        if (!usable(view)) continue;
+        if (view.window != nil) return view;
+        if (fallback == nil) fallback = view;
+    }
+    return fallback;
+}
+
+API_AVAILABLE(macos(11.3))
+@interface EclipseLittleDownload : NSObject <WKDownloadDelegate>
+/* wry's download delegate, which the tab's navigation delegate gave the
+   download. */
+@property(nonatomic, strong) id<WKDownloadDelegate> inner;
+@property(nonatomic, strong) WKDownload *download;
+@property(nonatomic, weak) EclipseLittleWindow *window;
+@end
+
+/* Downloads from Little Eclipse windows still running (a WKDownload holds
+   its delegate weakly). */
+static NSMutableSet *gLittleDownloads = nil;
+
+@implementation EclipseLittleDownload
+
+- (void)download:(WKDownload *)download
+    decideDestinationUsingResponse:(NSURLResponse *)response
+                 suggestedFilename:(NSString *)suggestedFilename
+                 completionHandler:(void (^)(NSURL *))completionHandler {
+    __weak EclipseLittleWindow *window = self.window;
+    [self.inner download:download
+        decideDestinationUsingResponse:response
+                     suggestedFilename:suggestedFilename
+                     completionHandler:^(NSURL *destination) {
+                         completionHandler(destination);
+                         // nil: tab.rs refused it (a page, not a file); the
+                         // window stays as it is, like a tab.
+                         if (destination == nil) return;
+                         dispatch_async(dispatch_get_main_queue(), ^{
+                             [window downloadStarted];
+                         });
+                     }];
+}
+
+- (void)downloadDidFinish:(WKDownload *)download {
+    if ([self.inner respondsToSelector:@selector(downloadDidFinish:)]) [self.inner downloadDidFinish:download];
+    [self finished];
+}
+
+- (void)download:(WKDownload *)download didFailWithError:(NSError *)error resumeData:(NSData *)resumeData {
+    if ([self.inner respondsToSelector:@selector(download:didFailWithError:resumeData:)]) {
+        [self.inner download:download didFailWithError:error resumeData:resumeData];
+    }
+    [self finished];
+}
+
+/* Released on the next turn of the run loop: WebKit is still calling it. */
+- (void)finished {
+    EclipseLittleDownload *me = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        me.download = nil;
+        [gLittleDownloads removeObject:me];
+    });
+}
+
+/* Anything else WKDownloadDelegate asks (redirects, authentication) is for
+   wry's delegate. */
+- (BOOL)respondsToSelector:(SEL)selector {
+    return [super respondsToSelector:selector] || [self.inner respondsToSelector:selector];
+}
+
+- (id)forwardingTargetForSelector:(SEL)selector {
+    return [self.inner respondsToSelector:selector] ? self.inner : nil;
+}
+
+@end
+
+/* Hands `download` (from `navigation`, the WKNavigationAction or
+   WKNavigationResponse that became it) over to a tab's navigation delegate,
+   with an EclipseLittleDownload in between. Cancels it if no tab takes it. */
+API_AVAILABLE(macos(11.3))
+static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *preferredTab, WKDownload *download,
+                                         id navigation, BOOL fromAction) {
+    SEL sel = eclipse_little_download_selector(fromAction);
+    WKWebView *tab = eclipse_little_download_tab(preferredTab, sel);
+    id delegate = tab.navigationDelegate;
+    if (delegate != nil) {
+        ((void (*)(id, SEL, id, id, id))objc_msgSend)(delegate, sel, tab, navigation, download);
+    }
+    id<WKDownloadDelegate> inner = download.delegate;
+    if (inner == nil) {
+        if (eclipse_perf_enabled()) fprintf(stderr, "[little] no tab took a download, cancelled\n");
+        [download cancel:nil];
+        return;
+    }
+    EclipseLittleDownload *proxy = [[EclipseLittleDownload alloc] init];
+    proxy.inner = inner;
+    proxy.download = download;
+    proxy.window = lw;
+    if (gLittleDownloads == nil) gLittleDownloads = [NSMutableSet set];
+    [gLittleDownloads addObject:proxy];
+    download.delegate = proxy;
+}
+
 @implementation EclipseLittleWindow
 
 - (void)refreshTitle {
@@ -1836,12 +2022,28 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     // The title bar is hidden: the title is what Mission Control, the Window
     // menu and the Dock list. The host on the bar is ours.
     self.window.title = title.length > 0 ? title : label;
-    NSButton *host = self.hostButton;
-    if (![host.title isEqualToString:label]) {
-        host.title = label;
+    if (![self.hostLabel isEqualToString:label]) {
+        self.hostLabel = label;
+        NSButton *host = self.hostButton;
         host.image = eclipse_little_security_image(label);
         host.accessibilityLabel = [@"Address: " stringByAppendingString:label];
+        [self fitHostLabel];
     }
+}
+
+/* The host button's title: the label, shortened to the button's width by
+   eclipse_little_fit_label rather than by the cell (which would cut "Not
+   Secure" off the front). Again whenever the button changes size. */
+- (void)fitHostLabel {
+    NSButton *host = self.hostButton;
+    if (host == nil || self.closed) return;
+    NSString *label = self.hostLabel ?: @"";
+    // Should even "Not Secure — …" and one character not fit, the cell cuts
+    // the end rather than the security state.
+    host.cell.lineBreakMode = [label hasPrefix:kEclipseLittleNotSecurePrefix] ? NSLineBreakByTruncatingTail
+                                                                              : NSLineBreakByTruncatingHead;
+    NSString *shown = eclipse_little_fit_label(host, label);
+    if (![host.title isEqualToString:shown]) host.title = shown;
 }
 
 - (void)applyTheme {
@@ -1873,6 +2075,7 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     self.openButton.frame = NSMakeRect(NSWidth(bounds) - 8.0 - button, floor(mid - button / 2.0), button, button);
     CGFloat right = NSMinX(self.openButton.frame) - 6.0;
     self.hostButton.frame = NSMakeRect(leading, floor(mid - 12.0), MAX(40.0, right - leading), 24.0);
+    [self fitHostLabel];
     NSRect box = NSMakeRect(leading, floor(mid - 12.0), MAX(40.0, right - leading), 24.0);
     self.addressBox.frame = box;
     CGFloat textHeight = ceil(self.addressField.intrinsicContentSize.height);
@@ -1998,6 +2201,53 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     [self.window close];
 }
 
+/* -- downloads (see above) */
+
+/* The tab a download from this window preferably goes through: a popup's
+   opener tab (nil for a standalone window and its popups: any tab). */
+- (WKWebView *)downloadTab {
+    return self.standalone ? nil : self.opener;
+}
+
+/* No page has been on screen: nothing committed, and the opener has not
+   written into the initial blank document either. */
+- (BOOL)showsNoPage {
+    if (self.webView.backForwardList.currentItem != nil) return NO;
+    NSURL *shown = self.displayURL;
+    return shown == nil || [shown.scheme.lowercaseString isEqualToString:@"about"];
+}
+
+/* A file from this window went elsewhere (a download, or a tab). A window
+   opened for it, which has shown no page, closes. */
+- (void)fileLeft {
+    if (self.closed || ![self showsNoPage]) return;
+    if (eclipse_perf_enabled()) {
+        fprintf(stderr, "[little] closing a window that only held a file standalone=%d\n", self.standalone ? 1 : 0);
+    }
+    eclipse_end_all_sheets(self.window);
+    [self.window close];
+}
+
+- (void)downloadStarted {
+    if (self.closed) return;
+    eclipse_little_log(@"download started", self);
+    [self fileLeft];
+}
+
+- (void)webView:(WKWebView *)webView
+    navigationResponse:(WKNavigationResponse *)navigationResponse
+     didBecomeDownload:(WKDownload *)download API_AVAILABLE(macos(11.3)) {
+    (void)webView;
+    eclipse_little_take_download(self, [self downloadTab], download, navigationResponse, NO);
+}
+
+- (void)webView:(WKWebView *)webView
+    navigationAction:(WKNavigationAction *)navigationAction
+    didBecomeDownload:(WKDownload *)download API_AVAILABLE(macos(11.3)) {
+    (void)webView;
+    eclipse_little_take_download(self, [self downloadTab], download, navigationAction, YES);
+}
+
 /* NSTextFieldDelegate */
 
 - (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)selector {
@@ -2090,6 +2340,17 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     NSURL *url = action.request.URL;
     NSString *scheme = url.scheme.lowercaseString ?: @"";
     BOOL mainFrame = action.targetFrame == nil || action.targetFrame.isMainFrame;
+    // A link with `download` (to a web page, or a blob/data file the page
+    // made) downloads, as in a tab (WKNavigationAction.shouldPerformDownload,
+    // macOS 11.3).
+    BOOL wantsDownload = [action respondsToSelector:@selector(shouldPerformDownload)] &&
+                         ((BOOL (*)(id, SEL))objc_msgSend)(action, @selector(shouldPerformDownload));
+    if (wantsDownload &&
+        (eclipse_is_web_scheme(scheme) || [scheme isEqualToString:@"blob"] || [scheme isEqualToString:@"data"]) &&
+        eclipse_little_download_tab([self downloadTab], eclipse_little_download_selector(YES)) != nil) {
+        decisionHandler(kEclipseLittleActionPolicyDownload);
+        return;
+    }
     BOOL allowed = eclipse_is_web_scheme(scheme) || [scheme isEqualToString:@"about"] ||
                    [scheme isEqualToString:@"blob"] || (!mainFrame && [scheme isEqualToString:@"data"]);
     if (!allowed && mainFrame && action.navigationType == WKNavigationTypeLinkActivated &&
@@ -2106,9 +2367,30 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     decidePolicyForNavigationResponse:(WKNavigationResponse *)response
                       decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
     (void)webView;
-    // Little Eclipse windows do not download files.
-    decisionHandler(response.canShowMIMEType ? WKNavigationResponsePolicyAllow
-                                             : WKNavigationResponsePolicyCancel);
+    if (response.canShowMIMEType) {
+        decisionHandler(WKNavigationResponsePolicyAllow);
+        return;
+    }
+    // A file: downloaded as a tab would (see "downloads" above).
+    if (eclipse_little_download_tab([self downloadTab], eclipse_little_download_selector(NO)) != nil) {
+        decisionHandler(kEclipseLittleResponsePolicyDownload);
+        return;
+    }
+    decisionHandler(WKNavigationResponsePolicyCancel);
+    // No download here: a file that would have been the window's page opens
+    // as a tab instead, rather than vanish.
+    NSURL *url = response.response.URL;
+    if (self.closed || !response.isForMainFrame || !eclipse_is_web_scheme(url.scheme) ||
+        url.absoluteString.length == 0 || gCallback == NULL) {
+        return;
+    }
+    if (eclipse_perf_enabled()) fprintf(stderr, "[little] cannot download here, opening the file as a tab\n");
+    NSString *command = [@"little_window_new_tab:" stringByAppendingString:url.absoluteString];
+    gCallback(command.UTF8String);
+    __weak EclipseLittleWindow *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [weakSelf fileLeft];
+    });
 }
 
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
@@ -2512,6 +2794,8 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     host.imagePosition = NSImageLeading;
     host.imageHugsTitle = YES;
     host.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium];
+    // -fitHostLabel shortens the host to fit and sets the cell's own
+    // truncation, a last resort.
     host.cell.lineBreakMode = NSLineBreakByTruncatingHead;
     host.toolTip = @"Show the full address (⌘L)";
     [container addSubview:host];

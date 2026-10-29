@@ -29,6 +29,11 @@
     it, the link opens as a tab) and are not tied to any tab. A new one opens
     in the middle of the screen with the pointer, at the size you last gave
     one.
+  - **Downloads** work in every Little Eclipse window as in a tab: a file the
+    window cannot show, or a link marked `download`, goes to `~/Downloads`
+    and the Downloads list. A window that was opened only for the file (a
+    link to a `.zip` or `.dmg` from Mail or Slack, or a popup that turned out
+    to be a file) closes once the download starts, rather than staying empty.
 - **Little Eclipse windows for sign-in popups.** When a web page opens a
   popup window (`window.open` with a size, a position, the `popup` feature
   or turned-off toolbars, as sign-in and payment flows do) in response to a
@@ -38,7 +43,9 @@
   post its result back and close itself, which makes "Sign in with …" popups
   work.
   - The top bar shows a lock and the host of the page actually on screen,
-    or "Not Secure" for plain http. The page has no control over it: a page
+    or "Not Secure" for plain http. When the host is too long for the bar it
+    loses its start (the end, the site's own domain, stays) and "Not Secure"
+    always stays in view. The page has no control over it: a page
     that is still loading, or that never finishes loading, is not shown as
     the host until it is actually on screen. The window title (Mission
     Control, the Window menu) is the page title.

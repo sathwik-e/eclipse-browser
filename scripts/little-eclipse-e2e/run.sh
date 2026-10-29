@@ -71,7 +71,7 @@ scenarios=("$@")
 if [[ ${#scenarios[@]} -eq 0 ]]; then
     scenarios=(legit popupkw widthonly notoolbar plainopen stopwrite nocontent blankthen eclipse sameorigin nogesture five nested
                openernav sheet print2 printclose refocus focus resize menu linktab openin openkey standalone
-               address addreclipse)
+               address addreclipse longhost dlstandalone dlpopup dllink dlattr dlnotab)
 fi
 
 for scenario in "${scenarios[@]}"; do
@@ -203,6 +203,42 @@ for scenario in "${scenarios[@]}"; do
         check "$out" "so is javascript:" "LOAD javascript:alert\(1\) ok=0"
         check "$out" "the window stays on its page" \
             "WINDOW .* host=\"Not Secure — $victim\" url=http://$victim/pop.html " "url=(eclipse|javascript)" ;;
+    longhost)
+        # The host loses its start; the security state never does.
+        for when in default narrow; do
+            check "$out" "a long http host keeps \"Not Secure\" ($when width)" \
+                "HOSTFIT $when title=\"Not Secure — …[ab.]*b\.localhost:$((port + 1))\" fits=1 whole=0"
+        done
+        check "$out" "and shows the whole label when there is room" "HOSTFIT wide title=.* fits=1 whole=1"
+        check "$out" "the accessibility label keeps the whole host" \
+            "full=\"Address: Not Secure — …a*\.b{26}\.localhost:$((port + 1))\"" ;;
+    dlstandalone)
+        check "$out" "a link from another app to a file opens a window" "STANDALONE ok=1"
+        check "$out" "the browser's download path takes the file" "TAB-TAKES-DOWNLOAD response"
+        check "$out" "it downloads under its own name" \
+            "DOWNLOAD-START url=http://$victim/dl/slow-standalone.zip name=slow-standalone.zip"
+        check "$out" "the empty window closes, and the download finishes after that" \
+            "DOWNLOAD-DONE url=http://$victim/dl/slow-standalone.zip ok=1 size=4096 little=0"
+        check "$out" "no window is left" "RESULT .* little=0 " "little_window_new_tab" ;;
+    dlpopup)
+        check "$out" "the popup's file goes to the browser's download path" "TAB-TAKES-DOWNLOAD response"
+        check "$out" "and downloads" "DOWNLOAD-DONE url=http://$opener/dl/slow-popup.zip ok=1 size=4096 little=0"
+        check "$out" "the empty popup closes" "RESULT .* little=0 fallbacks=0" ;;
+    dllink)
+        check "$out" "a download link in the window downloads" \
+            "DOWNLOAD-DONE url=http://$victim/dl/link.zip ok=1 size=4096 little=1"
+        check "$out" "the window stays on its page" \
+            "WINDOW title=\"Downloads\" host=\"Not Secure — $victim\" url=http://$victim/dl.html " ;;
+    dlattr)
+        check "$out" "an <a download> link is a download" "TAB-TAKES-DOWNLOAD action"
+        check "$out" "saved under the name the page gave" "DOWNLOAD-START url=http://$victim/pop.html name=saved.html"
+        check "$out" "it finishes" "DOWNLOAD-DONE url=http://$victim/pop.html ok=1 size=[1-9][0-9]* little=1"
+        check "$out" "the window stays on its page" \
+            "WINDOW title=\"Save page\" host=\"Not Secure — $victim\" url=http://$victim/dla.html " ;;
+    dlnotab)
+        check "$out" "with no tab to take the download, the file opens as a tab" \
+            "ACTION little_window_new_tab:http://$victim/dl/notab.zip" "DOWNLOAD-START"
+        check "$out" "and the empty window closes" "RESULT .* little=0 " ;;
     *)
         echo "  unknown scenario"; failures=$((failures + 1)) ;;
     esac

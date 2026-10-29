@@ -35,7 +35,10 @@ var S = {
   openin: function () { window.open(V + '/pop.html', 'x', 'width=480,height=600'); },
   openkey: function () { window.open(V + '/pop.html', 'x', 'width=480,height=600'); },
   // Standalone windows are opened by the harness itself (no opener).
-  standalone: function () {}, address: function () {}, addreclipse: function () {},
+  standalone: function () {}, address: function () {}, addreclipse: function () {}, longhost: function () {},
+  dlstandalone: function () {}, dlnotab: function () {}, dllink: function () {}, dlattr: function () {},
+  // A popup whose page turns out to be a file.
+  dlpopup: function () { window.open('/dl/slow-popup.zip', 'x', 'popup'); },
   // The second click reopens the popup by name / focuses it.
   refocus: function () { clicks++; window.open(V + '/pop.html?n=' + clicks, 'x', 'width=480,height=600'); },
   focus: function () { clicks++; if (clicks === 1) popup = window.open(V + '/pop.html', 'x', 'width=480,height=600'); else { popup.focus(); report('focused'); } },

@@ -87,13 +87,73 @@ static void menu_action(const char *action) {
     });
 }
 
+static NSArray<NSWindow *> *little_windows(void);
+
+/* Stands in for wry's download delegate and tab.rs's download handlers: the
+   file goes to ~/Downloads (the harness's own home) under WebKit's name. */
+@interface HarnessDownloadDelegate : NSObject <WKDownloadDelegate>
+@end
+
+@implementation HarnessDownloadDelegate
+- (void)download:(WKDownload *)download
+    decideDestinationUsingResponse:(NSURLResponse *)response
+                 suggestedFilename:(NSString *)suggestedFilename
+                 completionHandler:(void (^)(NSURL *))completionHandler {
+    (void)response;
+    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *path = [dir stringByAppendingPathComponent:suggestedFilename];
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    printf("DOWNLOAD-START url=%s name=%s little=%lu\n", download.originalRequest.URL.absoluteString.UTF8String,
+           suggestedFilename.UTF8String, (unsigned long)little_windows().count);
+    completionHandler([NSURL fileURLWithPath:path isDirectory:NO]);
+}
+- (void)downloadDidFinish:(WKDownload *)download {
+    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"];
+    NSString *name = download.originalRequest.URL.lastPathComponent;
+    NSDictionary *attributes = nil;
+    for (NSString *file in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([file isEqualToString:name] || [file isEqualToString:@"saved.html"]) {
+            attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:[dir stringByAppendingPathComponent:file]
+                                                                          error:nil];
+        }
+    }
+    // little=: the Little Eclipse windows still open when the file is done.
+    printf("DOWNLOAD-DONE url=%s ok=1 size=%llu little=%lu\n", download.originalRequest.URL.absoluteString.UTF8String,
+           attributes.fileSize, (unsigned long)little_windows().count);
+}
+- (void)download:(WKDownload *)download didFailWithError:(NSError *)error resumeData:(NSData *)resumeData {
+    (void)resumeData;
+    printf("DOWNLOAD-DONE url=%s ok=0 error=%s\n", download.originalRequest.URL.absoluteString.UTF8String,
+           error.localizedDescription.UTF8String);
+}
+@end
+
+static HarnessDownloadDelegate *gDownloadDelegate;
+
 /* Stands in for wry's navigation delegate and the Rust policy for eclipse://
    URLs: a navigation another webview started is refused (tab.rs refuses
-   eclipse:// for it unless it is the browser's own load or back/forward). */
+   eclipse:// for it unless it is the browser's own load or back/forward).
+   Like wry's, it hands a download that started in its webview to the download
+   delegate, ignoring the webview and navigation it is told about. */
 @interface HarnessNavigationDelegate : NSObject <WKNavigationDelegate>
 @end
 
 @implementation HarnessNavigationDelegate
+- (void)webView:(WKWebView *)webView
+    navigationResponse:(WKNavigationResponse *)navigationResponse
+     didBecomeDownload:(WKDownload *)download {
+    (void)webView; (void)navigationResponse;
+    printf("TAB-TAKES-DOWNLOAD response\n");
+    download.delegate = gDownloadDelegate;
+}
+- (void)webView:(WKWebView *)webView
+    navigationAction:(WKNavigationAction *)navigationAction
+    didBecomeDownload:(WKDownload *)download {
+    (void)webView; (void)navigationAction;
+    printf("TAB-TAKES-DOWNLOAD action\n");
+    download.delegate = gDownloadDelegate;
+}
 - (void)webView:(WKWebView *)webView
     decidePolicyForNavigationAction:(WKNavigationAction *)action
                     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
@@ -108,6 +168,13 @@ static void menu_action(const char *action) {
     printf("POLICY %s ctx=%d allow=%d\n", url.absoluteString.UTF8String, context, allow);
     decisionHandler(allow ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
 }
+@end
+
+/* A tab navigation delegate that cannot take downloads over. */
+@interface HarnessPlainNavigationDelegate : NSObject <WKNavigationDelegate>
+@end
+
+@implementation HarnessPlainNavigationDelegate
 @end
 
 @interface HarnessUIDelegate : NSObject <WKUIDelegate>
@@ -286,6 +353,7 @@ int main(int argc, char **argv) {
         HarnessNavigationDelegate *navigationDelegate = [[HarnessNavigationDelegate alloc] init];
         gTab.UIDelegate = uiDelegate;
         gTab.navigationDelegate = navigationDelegate;
+        gDownloadDelegate = [[HarnessDownloadDelegate alloc] init];
         gTabWindow.contentView = gTab;
         eclipse_configure_window((__bridge void *)gTabWindow);
         [NSApp activateIgnoringOtherApps:YES];
@@ -434,6 +502,65 @@ int main(int argc, char **argv) {
                     NSView *host = window_control(w, @"eclipse-little-host");
                     if (host != nil) click(w, host);
                     type_in_address(w, @"javascript:alert(1)", @selector(insertNewline:));
+                });
+            } else if ([scenario isEqualToString:@"longhost"]) {
+                // A plain-http host too long for the bar, at the default and
+                // at the narrowest width: "Not Secure" must stay visible.
+                NSString *longHost = [NSString stringWithFormat:@"http://%@.%@.localhost:%d/pop.html",
+                                      [@"" stringByPaddingToLength:40 withString:@"a" startingAtIndex:0],
+                                      [@"" stringByPaddingToLength:26 withString:@"b" startingAtIndex:0], port + 1];
+                eclipse_open_standalone_little_window(longHost.UTF8String, "", 0, 0);
+                void (^fit)(const char *) = ^(const char *when) {
+                    NSWindow *w = little_windows().firstObject;
+                    NSButton *host = (NSButton *)window_control(w, @"eclipse-little-host");
+                    BOOL fits = host.cell.cellSize.width <= NSWidth(host.frame) + 0.5;
+                    // whole: the title is the whole label (accessibilityLabel minus "Address: ").
+                    BOOL whole = [[@"Address: " stringByAppendingString:host.title]
+                        isEqualToString:host.accessibilityLabel];
+                    printf("HOSTFIT %s title=\"%s\" fits=%d whole=%d full=\"%s\"\n", when, host.title.UTF8String,
+                           fits, whole, host.accessibilityLabel.UTF8String ?: "");
+                };
+                after(1.5, ^{
+                    fit("default");
+                    NSWindow *w = little_windows().firstObject;
+                    NSRect frame = w.frame;
+                    // The narrowest a user can make it.
+                    frame.size.width = [w frameRectForContentRect:NSMakeRect(0, 0, w.contentMinSize.width, 100)]
+                                           .size.width;
+                    [w setFrame:frame display:YES];
+                });
+                after(2.0, ^{ fit("narrow"); });
+                after(2.2, ^{
+                    NSWindow *w = little_windows().firstObject;
+                    NSRect frame = w.frame;
+                    frame.size.width = 1400;
+                    [w setFrame:frame display:YES];
+                });
+                after(2.7, ^{ fit("wide"); });
+            } else if ([scenario isEqualToString:@"dlstandalone"]) {
+                // A link from another app to a file: it downloads, and the
+                // empty window closes while the download goes on.
+                printf("STANDALONE ok=%d\n",
+                       eclipse_open_standalone_little_window(
+                           [NSString stringWithFormat:@"http://localhost:%d/dl/slow-standalone.zip", port + 1]
+                               .UTF8String,
+                           "", 0, 0));
+            } else if ([scenario isEqualToString:@"dlnotab"]) {
+                // No tab can take a download: the file opens as a tab.
+                static HarnessPlainNavigationDelegate *plain;
+                plain = [[HarnessPlainNavigationDelegate alloc] init];
+                gTab.navigationDelegate = plain;
+                eclipse_open_standalone_little_window(
+                    [NSString stringWithFormat:@"http://localhost:%d/dl/notab.zip", port + 1].UTF8String, "", 0, 0);
+            } else if ([scenario isEqualToString:@"dllink"] || [scenario isEqualToString:@"dlattr"]) {
+                // A download link clicked in a standalone window's page.
+                NSString *page = [scenario isEqualToString:@"dllink"] ? @"dl.html" : @"dla.html";
+                eclipse_open_standalone_little_window(
+                    [NSString stringWithFormat:@"http://localhost:%d/%@", port + 1, page].UTF8String, "", 0, 0);
+                after(1.5, ^{
+                    NSWindow *w = little_windows().firstObject;
+                    WKWebView *webView = window_webview(w);
+                    if (webView != nil) click(w, webView);
                 });
             } else if ([scenario isEqualToString:@"linktab"]) {
                 after(1.5, ^{

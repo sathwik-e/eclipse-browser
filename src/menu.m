@@ -3384,9 +3384,11 @@ void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double
    (`url` empty, `focusAddress`). Built on a fresh configuration that shares
    the tabs' website data store (wry's tabs use the default store), with the
    tabs' `userAgent` (empty: WebKit's) and, if `adblock`, the native content
-   blocker; no tab scripts or IPC. 1 when it opened, 0 when it may not (the
-   overall limit) or the URL is not a web address: Rust then opens a tab. */
-int eclipse_open_standalone_little_window(const char *url, const char *userAgent, int adblock, int focusAddress) {
+   blocker; no tab scripts or IPC. The new window's id (as in
+   eclipse_little_window_load) when it opened, 0 when it may not (the overall
+   limit) or the URL is not a web address: Rust then opens a tab. */
+uint64_t eclipse_open_standalone_little_window(const char *url, const char *userAgent, int adblock,
+                                               int focusAddress) {
     @autoreleasepool {
         NSURL *target = nil;
         if (url != NULL && url[0] != '\0') {
@@ -3413,7 +3415,7 @@ int eclipse_open_standalone_little_window(const char *url, const char *userAgent
         } else {
             [lw.window makeFirstResponder:lw.webView];
         }
-        return 1;
+        return lw.serial;
     }
 }
 
@@ -3425,9 +3427,10 @@ static EclipseLittleWindow *eclipse_little_window_with_serial(uint64_t serial) {
 }
 
 /* Loads `url` (Rust's resolution of what was typed in the address field of
-   window `windowId`) into that window. Only http(s) addresses with a host
-   load; anything else (NULL: Rust found nothing to load) beeps. 1 when the
-   load started. */
+   window `windowId`, or the next Shift-hover link preview) into that window
+   and brings it to the front. Only http(s) addresses with a host load;
+   anything else (NULL: Rust found nothing to load) beeps. 1 when the load
+   started, 0 also when the window has closed. */
 int eclipse_little_window_load(uint64_t windowId, const char *url) {
     @autoreleasepool {
         EclipseLittleWindow *lw = eclipse_little_window_with_serial(windowId);
@@ -3439,6 +3442,7 @@ int eclipse_little_window_load(uint64_t windowId, const char *url) {
             return 0;
         }
         [lw.webView loadRequest:[NSURLRequest requestWithURL:target]];
+        [lw.window makeKeyAndOrderFront:nil];
         [lw.window makeFirstResponder:lw.webView];
         return 1;
     }

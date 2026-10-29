@@ -31,8 +31,8 @@ extern int eclipse_navigation_policy_context(void);
 extern int eclipse_little_window_count_for_view(void *viewPtr);
 extern void eclipse_install_menu(void (*callback)(const char *action));
 extern void eclipse_configure_window(void *windowPtr);
-extern int eclipse_open_standalone_little_window(const char *url, const char *userAgent, int adblock,
-                                                 int focusAddress);
+extern uint64_t eclipse_open_standalone_little_window(const char *url, const char *userAgent, int adblock,
+                                                      int focusAddress);
 extern int eclipse_little_window_load(uint64_t windowId, const char *url);
 extern void eclipse_set_little_window_theme(double red, double green, double blue, int dark);
 extern int eclipse_show_little_command_bar(const char *const *titles, const char *const *urls, size_t count,
@@ -101,7 +101,7 @@ static void menu_action(const char *action) {
             printf("COMMANDBAR ok=%d\n", ok);
         } else if ([command hasPrefix:@"little_command_bar_open:"]) {
             NSString *text = [command substringFromIndex:@"little_command_bar_open:".length];
-            int ok = eclipse_open_standalone_little_window(text.UTF8String, "", 0, 0);
+            int ok = eclipse_open_standalone_little_window(text.UTF8String, "", 0, 0) != 0;
             printf("BAROPEN %s ok=%d\n", text.UTF8String, ok);
         }
     });
@@ -578,11 +578,11 @@ int main(int argc, char **argv) {
                 printf("STANDALONE ok=%d\n",
                        eclipse_open_standalone_little_window(
                            [NSString stringWithFormat:@"http://localhost:%d/pop.html", port + 1].UTF8String,
-                           "EclipseHarness/1.0", 0, 0));
+                           "EclipseHarness/1.0", 0, 0) != 0);
                 printf("STANDALONE-ECLIPSE ok=%d\n",
-                       eclipse_open_standalone_little_window("eclipse://localhost/settings", "", 0, 0));
+                       eclipse_open_standalone_little_window("eclipse://localhost/settings", "", 0, 0) != 0);
                 printf("STANDALONE-FILE ok=%d\n",
-                       eclipse_open_standalone_little_window("file:///etc/passwd", "", 0, 0));
+                       eclipse_open_standalone_little_window("file:///etc/passwd", "", 0, 0) != 0);
                 after(1.5, ^{
                     print_key();
                     WKWebView *webView = littleWebView(@"/pop.html");
@@ -704,7 +704,7 @@ int main(int argc, char **argv) {
             } else if ([scenario isEqualToString:@"address"]) {
                 // A blank standalone window (what ⌥⌘N opens without its bar),
                 // address field focused.
-                printf("NEWLITTLE ok=%d\n", eclipse_open_standalone_little_window("", "", 0, 1));
+                printf("NEWLITTLE ok=%d\n", eclipse_open_standalone_little_window("", "", 0, 1) != 0);
                 after(1.0, ^{
                     NSWindow *w = little_windows().firstObject;
                     print_key();
@@ -791,7 +791,7 @@ int main(int argc, char **argv) {
                        eclipse_open_standalone_little_window(
                            [NSString stringWithFormat:@"http://localhost:%d/dl/slow-standalone.zip", port + 1]
                                .UTF8String,
-                           "", 0, 0));
+                           "", 0, 0) != 0);
             } else if ([scenario isEqualToString:@"dlnotab"]) {
                 // No tab can take a download: the file opens as a tab.
                 static HarnessPlainNavigationDelegate *plain;

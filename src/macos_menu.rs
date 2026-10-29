@@ -50,7 +50,7 @@ unsafe extern "C" {
         user_agent: *const c_char,
         adblock: i32,
         focus_address: i32,
-    ) -> i32;
+    ) -> u64;
     fn eclipse_little_window_load(window_id: u64, url: *const c_char) -> i32;
     fn eclipse_show_little_command_bar(
         titles: *const *const c_char,
@@ -374,25 +374,29 @@ pub fn open_little_window(
 /// website data store, `user_agent` and (if `adblock`) the native content
 /// blocker, no tab scripts or IPC. `url` is an http(s) address, or empty for
 /// a blank window with its address field focused (`focus_address` focuses it
-/// either way). `false` when no window opened (the overall limit, or `url` is
-/// not a web address); the caller then opens a tab.
-pub fn open_standalone_little_window(url: &str, user_agent: &str, adblock: bool, focus_address: bool) -> bool {
+/// either way). The new window's id (for `little_window_load`), or `None`
+/// when no window opened (the overall limit, or `url` is not a web address);
+/// the caller then opens a tab.
+pub fn open_standalone_little_window(url: &str, user_agent: &str, adblock: bool, focus_address: bool) -> Option<u64> {
     let (Ok(url), Ok(user_agent)) = (CString::new(url), CString::new(user_agent)) else {
-        return false;
+        return None;
     };
-    unsafe {
+    let id = unsafe {
         eclipse_open_standalone_little_window(
             url.as_ptr(),
             user_agent.as_ptr(),
             i32::from(adblock),
             i32::from(focus_address),
-        ) != 0
-    }
+        )
+    };
+    (id != 0).then_some(id)
 }
 
 /// Loads `url` (what the user typed in the address field of Little Eclipse
-/// window `window_id`, resolved by `app::little_window_url_from_input`) into
-/// that window; `None` refuses (menu.m beeps). menu.m loads only http(s).
+/// window `window_id`, resolved by `app::little_window_url_from_input`, or the
+/// next link preview) into that window and brings it to the front; `None`
+/// refuses (menu.m beeps). menu.m loads only http(s). `false` also when the
+/// window has closed.
 pub fn little_window_load(window_id: u64, url: Option<&str>) -> bool {
     let url = url.and_then(|url| CString::new(url).ok());
     let ptr = url.as_ref().map_or(std::ptr::null(), |url| url.as_ptr());

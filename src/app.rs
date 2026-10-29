@@ -146,6 +146,9 @@ pub struct BrowserApp {
     download_sources: HashMap<usize, (String, String)>,
     /// When the last Shift-hover link preview opened.
     last_link_preview: Option<Instant>,
+    /// The Little Eclipse window the last link preview opened in (menu.m's
+    /// id; it may have closed since).
+    link_preview_window: Option<u64>,
     /// The frame colour last given to Little Eclipse windows.
     little_theme_pushed: Option<([u8; 3], bool)>,
 }
@@ -287,6 +290,7 @@ impl BrowserApp {
             custom_titles: HashMap::new(),
             download_sources: HashMap::new(),
             last_link_preview: None,
+            link_preview_window: None,
         };
         app.last_broadcast_memory_mb = app.memory_mb;
 
@@ -445,7 +449,7 @@ impl BrowserApp {
                 if self.perf {
                     eprintln!("[little] link from another app");
                 }
-                if !self.open_standalone_little_window(&url, false) {
+                if self.open_standalone_little_window(&url, false).is_none() {
                     self.open_external_link_in_tab(&url);
                 }
             }
@@ -466,8 +470,8 @@ impl BrowserApp {
 
     /// Opens a standalone Little Eclipse window for `url` (empty: a blank one
     /// with its address field focused) with the current Space's user agent
-    /// and ad blocking. `false` when none opened.
-    fn open_standalone_little_window(&mut self, url: &str, focus_address: bool) -> bool {
+    /// and ad blocking. Its window id, or `None` when none opened.
+    fn open_standalone_little_window(&mut self, url: &str, focus_address: bool) -> Option<u64> {
         #[cfg(target_os = "macos")]
         {
             let user_agent = crate::tab::space_user_agent(&self.config, &self.current_workspace);
@@ -477,7 +481,7 @@ impl BrowserApp {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = (url, focus_address);
-            false
+            None
         }
     }
 
@@ -488,11 +492,14 @@ impl BrowserApp {
     fn new_little_window(&mut self) {
         #[cfg(target_os = "macos")]
         {
+            // Titles as the sidebar shows them (a tab's own name, tidied).
+            let titles: Vec<String> = self.tabs.iter().map(|tab| self.display_title(tab)).collect();
             let tabs: Vec<CommandBarTab> = self
                 .tabs
                 .iter()
-                .map(|tab| CommandBarTab {
-                    title: &tab.title,
+                .zip(&titles)
+                .map(|(tab, title)| CommandBarTab {
+                    title,
                     url: &tab.url,
                     current_space: tab.workspace == self.current_workspace,
                     last_active: tab.last_active,
@@ -504,7 +511,7 @@ impl BrowserApp {
                 return;
             }
         }
-        if !self.open_standalone_little_window("", true) {
+        if self.open_standalone_little_window("", true).is_none() {
             self.create_tab("eclipse://newtab", true);
         }
     }
@@ -2484,7 +2491,7 @@ impl BrowserApp {
         if let Some(text) = action.strip_prefix("little_command_bar_open:") {
             match little_window_url_from_input(text, &self.config) {
                 Some(url) => {
-                    if !self.open_standalone_little_window(&url, false) {
+                    if self.open_standalone_little_window(&url, false).is_none() {
                         self.open_external_link_in_tab(&url);
                     }
                 }
@@ -2672,7 +2679,9 @@ impl BrowserApp {
     /// tab of the focused browser window, that Shift really is held (read
     /// from the window server), a plain http(s) address, and at most one
     /// preview per `max::PREVIEW_COOLDOWN`. The preview window takes focus,
-    /// so the next one needs the browser window in front again.
+    /// so the next one needs the browser window in front again; it then
+    /// loads into the preview window if that is still open, so there is one
+    /// preview at a time.
     fn preview_link(&mut self, source_tab_id: Option<usize>, url: &str) {
         if !self.config.link_previews || source_tab_id != Some(self.active_tab_id) || !self.window.is_focused() {
             return;
@@ -2694,7 +2703,14 @@ impl BrowserApp {
         if self.perf {
             eprintln!("[preview] {}", truncate_message(&url, 120));
         }
-        if !self.open_standalone_little_window(&url, false) {
+        #[cfg(target_os = "macos")]
+        if let Some(id) = self.link_preview_window
+            && crate::macos_menu::little_window_load(id, Some(&url))
+        {
+            return;
+        }
+        self.link_preview_window = self.open_standalone_little_window(&url, false);
+        if self.link_preview_window.is_none() {
             self.show_toast("Close a Little Eclipse window to preview more links");
         }
     }

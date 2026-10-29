@@ -25,7 +25,9 @@
     you typed first; ↑/↓ choose (the chosen row in your accent colour) and
     Return opens it in a new Little Eclipse window, loading an address as
     typed or searching for anything else. Escape, the × button, ⌘W or a
-    click anywhere else closes the bar.
+    click anywhere else closes the bar. The sidebar's "+" menu and the
+    command bar's New Little Eclipse Window open the same bar, and tabs show
+    there with the names the sidebar gives them.
   - **The top bar looks like Arc's.** Faint diagonal stripes over the
     Space's colour; on the left an "i" button and the full address of the
     page on screen in a small monospaced font, the host brighter than the
@@ -48,32 +50,6 @@
     and the Downloads list. A window that was opened only for the file (a
     link to a `.zip` or `.dmg` from Mail or Slack, or a popup that turned out
     to be a file) closes once the download starts, rather than staying empty.
-- **Max**, Arc's Max features done without an AI service. A new Max section
-  in Settings switches each one (all on by default):
-  - **Tidy Tabs:** the Tidy button, now a broom, shows in the sidebar once
-    the Space has more than six tabs. ⇧⌘Y and the command bar tidy at any
-    time, and ⇧⌘T still brings back a duplicate it closed.
-  - **Instant Links:** Shift+Return on a search in the command bar or the
-    address field goes straight to the top result, through DuckDuckGo's
-    `!ducky` whatever the search engine (Google's "I'm Feeling Lucky" often
-    stops on a redirect notice). Searches separated by commas or semicolons
-    open one tab each, up to six. A web address opens as typed.
-  - **5-Second Previews:** holding Shift over a link for about 0.6 s opens it
-    in a Little Eclipse window. No summary is made.
-  - **Tidy Tab Titles:** pinned tabs and new favorites show their title
-    without the site's name, a signed-in address or unread counts
-    ("(3) Never Gonna Give You Up - YouTube" shows as "Never Gonna Give You
-    Up"). **Rename Tab** in the command bar gives any tab a name of its own
-    (an empty name gives the page title back); names survive a restart.
-  - **Tidy Downloads:** a finished download with a junk name (`download`,
-    `file`, numbers, a UUID, a hash or random token) is renamed after the
-    page in front when it started, or after the site and the date, keeping
-    its extension. It never replaces a file (an existing name gets " (2)"),
-    and the Downloads list shows "Renamed from …".
-  - **ChatGPT in the Command Bar:** type "chatgpt" or "claude" (or the start
-    of it) and press Tab to ask a question; Return opens it on chatgpt.com or
-    claude.ai in a new tab. The command bar also offers "Ask ChatGPT" and
-    "Ask Claude" rows for a search. Nothing is sent until you choose one.
 - **Little Eclipse windows for sign-in popups.** When a web page opens a
   popup window (`window.open` with a size, a position, the `popup` feature
   or turned-off toolbars, as sign-in and payment flows do) in response to a
@@ -117,6 +93,33 @@
     all) still open as tabs. Such a popup with no address (the page meant to
     write into it) shows "Pop-up window blocked" instead of leaving an empty
     tab behind.
+- **Max**, Arc's Max features done without an AI service. A new Max section
+  in Settings switches each one (all on by default):
+  - **Tidy Tabs:** the Tidy button, now a broom, shows in the sidebar once
+    the Space has more than six tabs. ⇧⌘Y and the command bar tidy at any
+    time, and ⇧⌘T still brings back a duplicate it closed.
+  - **Instant Links:** Shift+Return on a search in the command bar or the
+    address field goes straight to the top result, through DuckDuckGo's
+    `!ducky` whatever the search engine (Google's "I'm Feeling Lucky" often
+    stops on a redirect notice). Searches separated by commas or semicolons
+    open one tab each, up to six. A web address opens as typed.
+  - **5-Second Previews:** holding Shift over a link for about 0.6 s opens it
+    in a Little Eclipse window. The next preview loads into that window
+    while it is open, so there is one at a time. No summary is made.
+  - **Tidy Tab Titles:** pinned tabs and new favorites show their title
+    without the site's name, a signed-in address or unread counts
+    ("(3) Never Gonna Give You Up - YouTube" shows as "Never Gonna Give You
+    Up"). **Rename Tab** in the command bar gives any tab a name of its own
+    (an empty name gives the page title back); names survive a restart.
+  - **Tidy Downloads:** a finished download with a junk name (`download`,
+    `file`, numbers, a UUID, a hash or random token) is renamed after the
+    page in front when it started, or after the site and the date, keeping
+    its extension. It never replaces a file (an existing name gets " (2)"),
+    and the Downloads list shows "Renamed from …".
+  - **ChatGPT in the Command Bar:** type "chatgpt" or "claude" (or the start
+    of it) and press Tab to ask a question; Return opens it on chatgpt.com or
+    claude.ai in a new tab. The command bar also offers "Ask ChatGPT" and
+    "Ask Claude" rows for a search. Nothing is sent until you choose one.
 
 ### Changed
 - **The sidebar is laid out like Arc's.**
@@ -131,19 +134,21 @@
     more rows, the selected one is highlighted, and the grid disappears
     when there are none.
   - Below the grid: the Space's name and icon (click for the next Space),
-    "+ New Tab" (Tidy appears beside it on hover) and the Space's tabs, one
-    line each, with the host in the tooltip.
+    "+ New Tab" (with more than six tabs, the Tidy broom appears beside it
+    on hover) and the Space's tabs, one line each, with the host in the
+    tooltip.
   - The bottom bar has the Library at the left (Downloads with the number
     still downloading, Reopen Closed Tab, Quick Notes, Easel, Preferences
     and memory use), a dot per Space to switch between them, and a "+"
-    menu at the right: New Tab, Little Eclipse window, Note, Easel and Tidy
-    Tabs. These replace the row of icons and the Space buttons.
+    menu at the right: New Tab, New Little Eclipse Window (the ⌥⌘N bar),
+    Note, Easel and Tidy Tabs. These replace the row of icons and the
+    Space buttons.
   - Right-clicking a tab or a pinned tab's tile opens a menu to pin or unpin
     it, copy its link or close it.
   - Light (Daylight Sol) and dark themes both use the theme colours for the
     new menus and for the site controls popover, which was dark on the
     light theme before.
-- The command bar has New Little Eclipse Window and Copy Link.
+- The command bar has New Little Eclipse Window, Copy Link and Rename Tab.
 
 ### Accessibility
 - Every sidebar button has a name for VoiceOver, keyboard focus is always

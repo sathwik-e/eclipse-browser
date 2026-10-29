@@ -24,13 +24,14 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     favourites as a grid of icon tiles; the Space's name, "+ New Tab" and
     its tabs; and a bottom bar with the Library (Downloads, Reopen Closed Tab,
     Notes, Easel, Preferences, memory use), dots to switch Space and a "+"
-    menu (new tab, Little Eclipse window, note, easel, Tidy Tabs).
+    menu (new tab, the New Little Eclipse Window bar, note, easel, Tidy Tabs).
   - Right-click a tab to pin, copy its link or close it. Tabs, tiles and
     menus work from the keyboard.
 - **Spaces.** Separate tab sets (Work, Personal, …), each with its own theme,
   accent colour and ad-blocking choice. Favourites and pinned tabs show in
   every Space.
-- **Command bar (⌘K).** Jump to an open tab, a favourite, a command, or search.
+- **Command bar (⌘K).** Jump to an open tab, a favourite, a command (copy the
+  page's link, rename a tab, open a Little Eclipse window, …), or search.
   It runs in the browser's own sidebar, never inside the web page.
 - **Ad and tracker blocking.**
   - Network-level blocking with a native `WKContentRuleList`.
@@ -53,7 +54,8 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     URL…" bar at the top right of the screen, as in Arc, also while the
     browser window is hidden. It suggests your open tabs and favourites;
     type to filter or to enter an address or search, ↑/↓ to choose and
-    Return to open it in a new Little Eclipse window. Escape, the × or a
+    Return to open it in a new Little Eclipse window. The sidebar's "+" menu
+    and the command bar open the same bar. Escape, the × or a
     click elsewhere closes the bar.
   - The top bar looks like Arc's: faint diagonal stripes over the Space's
     colour, an "i" button for site information (whether the connection is
@@ -84,7 +86,8 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     whatever your search engine, as it is the only one that redirects
     straight to the result.
   - **5-Second Previews.** Hold Shift over a link for a moment to open it
-    in a Little Eclipse window.
+    in a Little Eclipse window. The next preview loads into the same window
+    while it is open, so there is one at a time.
   - **Tidy Tab Titles.** Pinned tabs and new favorites lose the site's name
     and unread counts ("(3) Inbox - Gmail" shows as "Inbox"). Any tab can be
     renamed with "Rename Tab" in the command bar.
@@ -121,7 +124,7 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     it is on the same site. It cannot load internal `eclipse://` resources
     or send its opener tab to internal pages.
   - A Little Eclipse window opened for a link from another app (or with
-    ⌥⌘N) has no channel to the browser at all: no page bridge and no
+    ⌥⌘N, or for a link preview) has no channel to the browser at all: no page bridge and no
     injected scripts. It only shares the tabs' website data (cookies and
     sign-ins), user agent and content blocker.
   - Only the sidebar and internal pages can change settings, install
@@ -206,6 +209,7 @@ cargo clippy --all-targets -- -D warnings
 | ⇧⌘N / ⇧⌘E | New note / new easel |
 | ⇧⌘Y | Tidy tabs |
 | ⇧↩ (command bar, address field) | Open the top result (Instant Links) |
+| "chatgpt" or "claude", then Tab (command bar) | Ask ChatGPT or Claude |
 | Shift + point at a link | Preview it in a Little Eclipse window |
 | ⌘P | Print |
 | ⌘, | Settings |
@@ -224,7 +228,8 @@ src/max.rs         Max: title and download-name tidying, Instant Links, previews
 src/tab.rs         one WKWebView per tab, injected scripts, navigation policy, downloads
 src/config.rs      settings model, load/repair/save, settings patches
 src/events.rs      event-loop events, IPC commands, UI state types
-src/bridge.js      page bridge: find in page, SPA URL, favicon, audio, links
+src/bridge.js      page bridge: find in page, SPA URL, favicon, audio, links,
+                   Shift-hover link previews
 src/shields.js     cosmetic filtering and YouTube ad skipping
 src/menu.m         AppKit menu, window styling, edge hover, content blocker,
                    navigation-failure hooks, JavaScript dialogs, Little

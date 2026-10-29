@@ -470,10 +470,11 @@ impl BrowserApp {
         }
     }
 
-    /// ⌥⌘N: the New Little Eclipse Window bar (menu.m), suggesting open tabs
-    /// and favourites. Without it, a blank standalone window with its address
-    /// field focused, and past the window limit a new tab.
-    fn show_little_command_bar(&mut self) {
+    /// ⌥⌘N (and the sidebar's "+" menu / command bar): the New Little Eclipse
+    /// Window bar (menu.m), suggesting open tabs and favourites. Without it, a
+    /// blank standalone window with its address field focused, and past the
+    /// window limit a new tab.
+    fn new_little_window(&mut self) {
         #[cfg(target_os = "macos")]
         {
             let tabs: Vec<CommandBarTab> = self
@@ -1486,6 +1487,8 @@ impl BrowserApp {
                         "open_notes" => self.open_notes_tab(),
                         "open_easel" => self.open_easel_tab(),
                         "open_downloads" => self.open_downloads_panel(),
+                        // The sidebar's "+" menu and the command bar.
+                        "new_little_window" => self.new_little_window(),
                         _ => {}
                     }
                 } else if let Some(url) = url {
@@ -2465,9 +2468,7 @@ impl BrowserApp {
             "new_tab" => {
                 self.create_tab("eclipse://newtab", true);
             }
-            "new_little_window" => {
-                self.show_little_command_bar();
-            }
+            "new_little_window" => self.new_little_window(),
             // Handled by menu.m while a Little Eclipse window is in front
             // (the menu item is disabled otherwise).
             "open_in_eclipse" => {}
@@ -2962,6 +2963,17 @@ impl BrowserApp {
                 return el.value !== undefined ? el.value : el.textContent;
             }
             var drawer = document.getElementById('settings-drawer');
+            var grid = document.getElementById('pinned-container');
+            // Rows whose content is wider than the row (clipped icons or text).
+            var overflowing = Array.prototype.filter.call(
+                document.querySelectorAll('.arc-header-row, .arc-omnibar-row, .arc-space-row, .arc-newtab-row, .arc-bottom-bar'),
+                function (row) { return row.scrollWidth > row.clientWidth + 1; }
+            ).map(function (row) { return row.className; });
+            var unlabeled = Array.prototype.filter.call(document.querySelectorAll('button'), function (b) {
+                return b.getAttribute('aria-hidden') !== 'true' && !b.getAttribute('aria-label')
+                    && !b.textContent.trim() && !b.title;
+            }).length;
+            var activeDot = document.querySelector('#space-dots .space-dot.active');
             return JSON.stringify({
                 tokenBridge: !!window.__eclipseIpc,
                 stateHandler: typeof window.updateBrowserState,
@@ -2969,12 +2981,19 @@ impl BrowserApp {
                 commandBarElement: !!document.getElementById('arc-command-bar'),
                 tabCards: document.querySelectorAll('#tab-container .tab-card').length,
                 pinnedItems: document.querySelectorAll('#pinned-container .pinned-item').length,
+                favoriteColumns: grid ? getComputedStyle(grid).gridTemplateColumns.split(' ').length : 0,
                 omnibar: text('omnibar'),
                 ram: text('ram-text'),
                 workspace: text('workspace-label'),
+                spaceIcon: !!document.querySelector('#workspace-icon svg'),
+                spaceDots: document.querySelectorAll('#space-dots .space-dot').length,
+                activeSpaceDot: activeDot ? activeDot.dataset.space : null,
+                bottomBar: ['btn-library', 'btn-new-menu'].every(function (id) { return !!document.getElementById(id); }),
                 drawer: drawer ? getComputedStyle(drawer).display : null,
                 sidebarWidth: window.innerWidth,
-                overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+                overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+                overflowingRows: overflowing,
+                unlabeledButtons: unlabeled
             });
         })()"#;
         let _ = self
@@ -4361,6 +4380,42 @@ mod tests {
         ];
         for json in denied {
             assert!(!is_command_allowed(IpcSender::Web, &command(json)), "{json}");
+        }
+    }
+
+    #[test]
+    fn only_trusted_chrome_may_open_a_little_window_through_ipc() {
+        let json = r#"{"action":"command_bar_open_url","command":"new_little_window"}"#;
+        assert!(matches!(
+            command(json),
+            IpcCommand::CommandBarOpenUrl { command: Some(ref c), url: None, tab_id: None } if c == "new_little_window"
+        ));
+        assert!(is_command_allowed(IpcSender::Sidebar, &command(json)));
+        assert!(is_command_allowed(IpcSender::Internal, &command(json)));
+        assert!(!is_command_allowed(IpcSender::Web, &command(json)));
+        assert!(!is_command_allowed(IpcSender::LittleWindow, &command(json)));
+    }
+
+    /// Every action the sidebar sends names a real command: a typo would
+    /// otherwise be dropped silently by `parse_ipc`.
+    #[test]
+    fn sidebar_actions_are_known_commands() {
+        let html = crate::ui_assets::SIDEBAR_HTML;
+        let mut actions = Vec::new();
+        for marker in ["action: '", "data-zoom-action=\"", "downloadAction = '"] {
+            for (start, _) in html.match_indices(marker) {
+                let rest = &html[start + marker.len()..];
+                let end = rest.find(['\'', '"']).unwrap();
+                actions.push(&rest[..end]);
+            }
+        }
+        assert!(actions.len() > 40, "found only {} actions", actions.len());
+        for action in actions {
+            let err = serde_json::from_str::<IpcCommand>(&format!(r#"{{"action":"{action}"}}"#))
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(!err.contains("unknown variant"), "{action}: {err}");
         }
     }
 

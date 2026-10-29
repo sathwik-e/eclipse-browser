@@ -92,6 +92,38 @@
     write into it) shows "Pop-up window blocked" instead of leaving an empty
     tab behind.
 
+### Changed
+- **The sidebar is laid out like Arc's.**
+  - The top row has the window controls, the sidebar toggle right after
+    them, and back, forward and reload on the right.
+  - The address field is a rounded "Search or Enter URL…" pill. It shows
+    only the host of the page on screen (in punycode for look-alike
+    domains), with the lock beside it; click it to edit the full address.
+    Hovering it shows a Copy Link button.
+  - Favourites are a three-column grid of large rounded tiles showing just
+    the site's icon; the name is the tooltip. More favourites wrap onto
+    more rows, the selected one is highlighted, and the grid disappears
+    when there are none.
+  - Below the grid: the Space's name and icon (click for the next Space),
+    "+ New Tab" (Tidy appears beside it on hover) and the Space's tabs, one
+    line each, with the host in the tooltip.
+  - The bottom bar has the Library at the left (Downloads with the number
+    still downloading, Reopen Closed Tab, Quick Notes, Easel, Preferences
+    and memory use), a dot per Space to switch between them, and a "+"
+    menu at the right: New Tab, Little Eclipse window, Note, Easel and Tidy
+    Tabs. These replace the row of icons and the Space buttons.
+  - Right-clicking a tab or a pinned tab's tile opens a menu to pin or unpin
+    it, copy its link or close it.
+  - Light (Daylight Sol) and dark themes both use the theme colours for the
+    new menus and for the site controls popover, which was dark on the
+    light theme before.
+- The command bar has New Little Eclipse Window and Copy Link.
+
+### Accessibility
+- Every sidebar button has a name for VoiceOver, keyboard focus is always
+  visible, and tabs, favourite tiles and the new menus work from the
+  keyboard (Return or Space to open, arrow keys and Escape in menus).
+
 ### Security
 - A page in a popup window is never taken for the tab that opened it. The
   popup posts through its opener tab's channel, but Eclipse marks its messages,
@@ -112,6 +144,10 @@
 - Tab hibernation counts a tab's idle time from when you leave it, not from
   when you last selected it, so a tab you read for a long time is not
   discarded seconds after you switch away.
+- The site controls popover cut the site's name down to its first letter
+  next to "Secure Connection (HTTPS)", and squeezed "Space Profile" into a
+  few letters in a narrow sidebar. It now opens right under the address
+  pill wherever that is.
 
 ## 1.0.0 — 2026-10-28
 

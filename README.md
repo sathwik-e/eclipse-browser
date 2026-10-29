@@ -18,6 +18,15 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
 - **Vertical tabs in a hide-away sidebar.** Move the pointer to the left edge
   to reveal it. It stays open while you type in it or use a menu, then slides
   away again. Pin it open with ⌘S.
+  - Laid out like Arc's: window controls, the sidebar toggle and back /
+    forward / reload on top; an address pill that shows the site's host
+    (click it to edit the full address, hover it to copy the link);
+    favourites as a grid of icon tiles; the Space's name, "+ New Tab" and
+    its tabs; and a bottom bar with the Library (Downloads, Reopen Closed Tab,
+    Notes, Easel, Preferences, memory use), dots to switch Space and a "+"
+    menu (new tab, Little Eclipse window, note, easel, Tidy Tabs).
+  - Right-click a tab to pin, copy its link or close it. Tabs, tiles and
+    menus work from the keyboard.
 - **Spaces.** Separate tab sets (Work, Personal, …), each with its own theme,
   accent colour and ad-blocking choice. Favourites and pinned tabs show in
   every Space.

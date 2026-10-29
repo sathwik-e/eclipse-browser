@@ -1116,9 +1116,12 @@ static BOOL eclipse_method_is_wrapped(Class cls, SEL sel, IMP wrapper) {
 enum {
     ECLIPSE_POPUP_REQUEST = 1,
     ECLIPSE_POPUP_USER_INITIATED = 2,
+    ECLIPSE_POPUP_WANTS_POPUP = 4,
 };
 
 static int gPopupRequestContext = 0;
+/* The window features of that request (a width without a height, say). */
+static WKWindowFeatures *gPopupRequestFeatures = nil;
 
 /* WebKit's -[WKNavigationAction _isUserInitiated] (SPI, present since macOS
    10.12): the navigation, or the window.open, runs from a user gesture. An
@@ -1127,6 +1130,20 @@ static BOOL eclipse_action_user_initiated(WKNavigationAction *action) {
     SEL sel = NSSelectorFromString(@"_isUserInitiated");
     if (action == nil || ![action respondsToSelector:sel]) return NO;
     return ((BOOL (*)(id, SEL))objc_msgSend)(action, sel);
+}
+
+/* Whether window.open asked for a popup window rather than a tab, by the
+   HTML rule browsers use (WebKit's -[WKWindowFeatures _wantsPopup]): a
+   "popup" feature, a size or position, or turned-off toolbars/location/menu
+   bar. window.open(url) and window.open(url, name) with no features, and
+   target=_blank links, are tabs. */
+static BOOL eclipse_features_want_popup(WKWindowFeatures *features) {
+    if (features == nil) return NO;
+    SEL sel = NSSelectorFromString(@"_wantsPopup");
+    if ([features respondsToSelector:sel]) return ((BOOL (*)(id, SEL))objc_msgSend)(features, sel);
+    // Older WebKit: any size or position, or toolbars explicitly off.
+    if (features.width != nil || features.height != nil || features.x != nil || features.y != nil) return YES;
+    return features.toolbarsVisibility != nil && !features.toolbarsVisibility.boolValue;
 }
 
 typedef WKWebView *(*EclipseCreateWebViewIMP)(id, SEL, WKWebView *, WKWebViewConfiguration *,
@@ -1138,14 +1155,18 @@ static WKWebView *eclipse_create_web_view(id self, SEL _cmd, WKWebView *webView,
     IMP original = eclipse_original_method(object_getClass(self), _cmd);
     if (original == NULL) return nil;
     int previous = gPopupRequestContext;
+    WKWindowFeatures *previousFeatures = gPopupRequestFeatures;
+    gPopupRequestFeatures = features;
     gPopupRequestContext = ECLIPSE_POPUP_REQUEST |
-                           (eclipse_action_user_initiated(action) ? ECLIPSE_POPUP_USER_INITIATED : 0);
+                           (eclipse_action_user_initiated(action) ? ECLIPSE_POPUP_USER_INITIATED : 0) |
+                           (eclipse_features_want_popup(features) ? ECLIPSE_POPUP_WANTS_POPUP : 0);
     WKWebView *created = nil;
     @try {
         created = ((EclipseCreateWebViewIMP)original)(self, _cmd, webView, configuration, action, features);
     } @finally {
         // Never left set for a later request.
         gPopupRequestContext = previous;
+        gPopupRequestFeatures = previousFeatures;
     }
     return created;
 }
@@ -1573,6 +1594,9 @@ static const NSUInteger kEclipseLittleMaxPerTab = 3;
 static const NSUInteger kEclipseLittleMaxTotal = 10;
 static const CGFloat kEclipseLittleMinWidth = 360.0;
 static const CGFloat kEclipseLittleMinHeight = 260.0;
+/* For a popup that gave no width or height ("popup", or position only). */
+static const CGFloat kEclipseLittleDefaultWidth = 500.0;
+static const CGFloat kEclipseLittleDefaultHeight = 640.0;
 static const NSUInteger kEclipseLittleMaxHostLength = 64;
 
 static BOOL eclipse_is_web_scheme(NSString *scheme) {
@@ -1792,9 +1816,9 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     if (self.closed) return nil;
     NSURL *url = action.request.URL;
     WKWebView *opener = self.opener;
-    // A sized window.open with a user gesture nests another Little Eclipse
+    // A popup window.open with a user gesture nests another Little Eclipse
     // window, as it would from a tab (within the same limits).
-    if (features.width != nil && features.height != nil && opener != nil &&
+    if (eclipse_features_want_popup(features) && opener != nil &&
         eclipse_action_user_initiated(action) && eclipse_little_initial_url_allowed(url)) {
         BOOL hasPosition = features.x != nil && features.y != nil;
         NSPoint topLeft = hasPosition ? NSMakePoint(features.x.doubleValue, features.y.doubleValue) : NSZeroPoint;
@@ -1803,9 +1827,9 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
             hasPosition, topLeft);
         if (nested != nil) return nested.webView;
     }
-    // Anything else (a target=_blank link, window.open without a size or a
-    // gesture, a popup over the limit): a web page opens as a tab, as it
-    // would from a tab.
+    // Anything else (a target=_blank link, window.open without popup
+    // features or a gesture, a popup over the limit): a web page opens as a
+    // tab, as it would from a tab.
     if (eclipse_is_web_scheme(url.scheme) && gCallback != NULL) {
         NSString *command = [@"little_window_new_tab:" stringByAppendingString:url.absoluteString];
         gCallback(command.UTF8String);
@@ -2055,8 +2079,11 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     NSRect visible = screen.visibleFrame;
 
     NSSize maxSize = eclipse_little_max_content_size(visible);
-    CGFloat width = isfinite(requested.width) ? requested.width : kEclipseLittleMinWidth;
-    CGFloat height = isfinite(requested.height) ? requested.height : kEclipseLittleMinHeight;
+    // A missing dimension (0) gets the default size.
+    CGFloat width = isfinite(requested.width) && requested.width > 0 ? requested.width
+                                                                      : kEclipseLittleDefaultWidth;
+    CGFloat height = isfinite(requested.height) && requested.height > 0 ? requested.height
+                                                                         : kEclipseLittleDefaultHeight;
     width = MIN(MAX(width, kEclipseLittleMinWidth), maxSize.width);
     height = MIN(MAX(height, kEclipseLittleMinHeight), maxSize.height);
     NSRect contentRect = NSMakeRect(0, 0, width, height);
@@ -2172,6 +2199,12 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
    Returns the popup's WKWebView retained (+1; the caller owns that
    reference and hands it to WebKit), or NULL when no window may or could be
    made (the caller then opens the URL as a tab). */
+/* Whether the window.open being decided (inside wry's new-window handler)
+   asked for a popup window; see eclipse_features_want_popup. */
+int eclipse_popup_request_wants_popup(void) {
+    return (gPopupRequestContext & ECLIPSE_POPUP_WANTS_POPUP) != 0;
+}
+
 void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double width, double height,
                                  int hasPosition, double x, double y) {
     if (configurationPtr == NULL || openerPtr == NULL) return NULL;
@@ -2186,6 +2219,11 @@ void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double
             if (eclipse_perf_enabled()) fprintf(stderr, "[little] no user gesture, opening as a tab\n");
             return NULL;
         }
+        // A popup that gave only a width or a height keeps it (wry reports
+        // a size only when both are given; the other gets the default).
+        WKWindowFeatures *features = gPopupRequestFeatures;
+        if (width <= 0 && features.width != nil) width = features.width.doubleValue;
+        if (height <= 0 && features.height != nil) height = features.height.doubleValue;
         EclipseLittleWindow *lw = eclipse_little_window_create(
             configuration, opener, NSMakeSize(width, height), hasPosition != 0, NSMakePoint(x, y));
         if (lw == nil) return NULL;

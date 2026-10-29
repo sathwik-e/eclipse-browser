@@ -14,6 +14,12 @@ var S = {
   nocontent: function () { var w = window.open(V + '/generate_204', 'x', 'width=480,height=600'); setTimeout(function () { fake(w); }, 800); },
   blankthen: function () { var w = window.open('', 'x', 'width=480,height=600'); w.location = V + '/slow'; setTimeout(function () { fake(w); }, 800); },
   legit: function () { window.open(V + '/pop.html', 'x', 'width=480,height=600'); },
+  // Popup windows that give no (or only part of a) size, and a plain
+  // window.open, which is a tab.
+  popupkw: function () { window.open(V + '/pop.html', 'x', 'popup'); },
+  widthonly: function () { window.open(V + '/pop.html', 'x', 'width=520'); },
+  notoolbar: function () { window.open(V + '/pop.html', 'x', 'toolbar=no,location=no,menubar=no'); },
+  plainopen: function () { window.open(V + '/pop.html', 'x'); },
   eclipse: function () { window.open('/eimg.html', 'x', 'width=480,height=600'); },
   sameorigin: function () { window.open('/same.html', 'x', 'width=480,height=600'); },
   five: function () { for (var i = 0; i < 5; i++) window.open('/pop.html?n=' + i, 'w' + i, 'width=400,height=300'); },

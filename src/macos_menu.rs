@@ -35,6 +35,7 @@ unsafe extern "C" {
     fn eclipse_navigation_policy_context() -> i32;
     fn eclipse_script_message_from_little_window() -> i32;
     fn eclipse_little_window_count_for_view(view_ptr: *mut std::ffi::c_void) -> i32;
+    fn eclipse_popup_request_wants_popup() -> i32;
     fn eclipse_open_little_window(
         configuration: *mut std::ffi::c_void,
         opener: *mut std::ffi::c_void,
@@ -304,12 +305,24 @@ pub fn little_window_count_for_view(view_ptr: *mut std::ffi::c_void) -> usize {
 /// native window could not be made; the caller then opens it as a tab.
 /// Must be called from wry's new-window handler (menu.m reads the gesture
 /// state of the request being handled).
+/// Whether the window.open wry's new-window handler is deciding asked for a
+/// popup window rather than a tab, by WebKit's reading of the HTML rule: a
+/// `popup` feature, a size or position, or turned-off toolbars. Plain
+/// `window.open(url)` and target=_blank links are tabs. Outside the handler
+/// this is false.
+pub fn popup_request_wants_popup() -> bool {
+    unsafe { eclipse_popup_request_wants_popup() != 0 }
+}
+
 pub fn open_little_window(
     features: &wry::NewWindowFeatures,
 ) -> Option<objc2::rc::Retained<objc2_web_kit::WKWebView>> {
     use objc2::rc::Retained;
 
-    let size = features.size?;
+    // A popup that gave no size gets menu.m's default size (0 x 0 here).
+    let (width, height) = features
+        .size
+        .map_or((0.0, 0.0), |size| (size.width, size.height));
     let (has_position, x, y) = match features.position {
         Some(position) => (1, position.x, position.y),
         None => (0, 0.0, 0.0),
@@ -326,8 +339,8 @@ pub fn open_little_window(
         eclipse_open_little_window(
             configuration,
             opener,
-            size.width,
-            size.height,
+            width,
+            height,
             has_position,
             x,
             y,

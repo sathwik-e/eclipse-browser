@@ -587,17 +587,25 @@ impl Tab {
             // requests away from wry's eclipse:// handler.
             .with_new_window_req_handler(move |url, features| {
                 #[cfg(target_os = "macos")]
-                if opens_little_window(
-                    &nav_popup.popup_opener_url(),
-                    features.size.is_some(),
-                    &url,
-                ) && let Some(webview) = crate::macos_menu::open_little_window(&features)
+                let wants_popup = features.size.is_some() || {
+                    #[cfg(target_os = "macos")]
+                    {
+                        crate::macos_menu::popup_request_wants_popup()
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        false
+                    }
+                };
+                #[cfg(target_os = "macos")]
+                if opens_little_window(&nav_popup.popup_opener_url(), wants_popup, &url)
+                    && let Some(webview) = crate::macos_menu::open_little_window(&features)
                 {
                     return NewWindowResponse::Create { webview };
                 }
                 #[cfg(not(target_os = "macos"))]
                 let _ = &nav_popup;
-                let sized = features.size.is_some();
+                let sized = wants_popup;
                 let _ = proxy_newwin.send_event(UserEvent::NewWindowRequested { url, sized });
                 NewWindowResponse::Deny
             })
@@ -1158,15 +1166,17 @@ fn is_http_url(url: &str) -> bool {
 /// Whether a `window.open` request opens in a Little Eclipse window (a small
 /// native window that keeps `window.opener`, see menu.m) instead of a tab:
 /// the opener's committed document is a web page (`opener_document` is
-/// empty for internal pages and the error page), the page asked for a size
-/// (sign-in and payment popups do; plain `target=_blank` links do not), and
-/// the target is a web page or blank (popups often open empty and navigate
-/// once the opener has written to them).
-pub(crate) fn opens_little_window(opener_document: &str, has_size: bool, target_url: &str) -> bool {
+/// empty for internal pages and the error page), the page asked for a popup
+/// window (`wants_popup`: a size, a position, the `popup` feature or
+/// turned-off toolbars, as sign-in and payment popups do; plain
+/// `window.open(url)` and `target=_blank` links do not), and the target is a
+/// web page or blank (popups often open empty and navigate once the opener
+/// has written to them).
+pub(crate) fn opens_little_window(opener_document: &str, wants_popup: bool, target_url: &str) -> bool {
     let is_web = |url: &str| {
         Url::parse(url).is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
     };
-    has_size
+    wants_popup
         && is_web(opener_document)
         && (target_url.is_empty() || target_url == "about:blank" || is_web(target_url))
 }

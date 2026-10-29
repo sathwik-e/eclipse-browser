@@ -68,7 +68,7 @@ run() {
 
 scenarios=("$@")
 if [[ ${#scenarios[@]} -eq 0 ]]; then
-    scenarios=(legit stopwrite nocontent blankthen eclipse sameorigin nogesture five nested
+    scenarios=(legit popupkw widthonly notoolbar plainopen stopwrite nocontent blankthen eclipse sameorigin nogesture five nested
                openernav sheet print2 printclose refocus focus resize menu linktab)
 fi
 
@@ -84,6 +84,16 @@ for scenario in "${scenarios[@]}"; do
     case "$scenario" in
     legit)
         check "$out" "a committed page shows its host" "subtitle=\"Not Secure — $victim\"" ;;
+    popupkw | notoolbar)
+        # Popup windows by WebKit's reading of the features, with or without
+        # a full size, open as Little Eclipse windows.
+        check "$out" "a popup window opens as a Little Eclipse window" "RESULT .* little=1 fallbacks=0"
+        check "$out" "it shows the popup's host" "subtitle=\"Not Secure — $victim\"" ;;
+    widthonly)
+        check "$out" "a popup that gave only a width keeps it" "RESULT .* little=1 fallbacks=0"
+        check "$out" "and gets the default height" "WINDOW .* frame=[0-9-]+,[0-9-]+,520x672" ;;
+    plainopen)
+        check "$out" "window.open(url, name) opens as a tab" "RESULT .* little=0 fallbacks=1" ;;
     stopwrite | nocontent | blankthen)
         # The opener wrote a fake page into the popup's initial document
         # after its load to the other site was stopped / got a 204.

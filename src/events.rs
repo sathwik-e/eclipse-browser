@@ -21,7 +21,8 @@ pub enum UserEvent {
     PageFinished { tab_id: usize, url: String },
     TitleChanged { tab_id: usize, title: String },
     /// A window.open or target=_blank that opens no Little Eclipse window.
-    /// `sized`: the page asked for a window size.
+    /// `sized`: the page asked for a popup window (a size, a position, the
+    /// `popup` feature or turned-off toolbars), not a tab.
     NewWindowRequested { url: String, sized: bool },
     /// `seq` identifies the download across its start and completion events.
     DownloadStarted {

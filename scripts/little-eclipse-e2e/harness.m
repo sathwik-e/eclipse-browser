@@ -23,6 +23,7 @@ extern void eclipse_register_tab_view(void *viewPtr, uint64_t tabId);
 extern void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double width, double height,
                                         int hasPosition, double x, double y);
 extern int eclipse_script_message_from_little_window(void);
+extern int eclipse_popup_request_wants_popup(void);
 extern int eclipse_navigation_policy_context(void);
 extern int eclipse_little_window_count_for_view(void *viewPtr);
 extern void eclipse_install_menu(void (*callback)(const char *action));
@@ -94,10 +95,13 @@ static void menu_action(const char *action) {
     createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
                forNavigationAction:(WKNavigationAction *)action
                     windowFeatures:(WKWindowFeatures *)features {
+    // As tab.rs: a size, or anything else WebKit reads as a popup window.
     void *raw = NULL;
-    if (features.width != nil && features.height != nil) {
+    BOOL sized = features.width != nil && features.height != nil;
+    if (sized || eclipse_popup_request_wants_popup()) {
         raw = eclipse_open_little_window((__bridge void *)configuration, (__bridge void *)webView,
-                                         features.width.doubleValue, features.height.doubleValue, 0, 0, 0);
+                                         sized ? features.width.doubleValue : 0,
+                                         sized ? features.height.doubleValue : 0, 0, 0, 0);
     }
     if (raw == NULL) {
         gTabFallbacks++;

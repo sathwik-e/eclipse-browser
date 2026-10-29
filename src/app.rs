@@ -2026,7 +2026,7 @@ impl BrowserApp {
     }
 
     /// window.open / target=_blank from a page that did not open a Little
-    /// Eclipse window (`sized`: the page asked for a window size). Pages may
+    /// Eclipse window (`sized`: the page asked for a popup window). Pages may
     /// not open internal eclipse:// pages.
     pub fn handle_new_window(&mut self, url: String, sized: bool) {
         match new_window_fallback(&url, sized) {

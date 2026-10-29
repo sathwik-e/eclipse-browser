@@ -30,8 +30,12 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # Same minimum OS as scripts/package_macos.sh, so release-only link
+      # failures (e.g. @available above the target) show up here.
       - name: Build
         run: cargo build --release --locked
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
 
       - name: Test
         run: cargo test --locked

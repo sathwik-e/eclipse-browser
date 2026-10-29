@@ -2059,8 +2059,11 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     webView.customUserAgent = opener.customUserAgent;
     webView.allowsMagnification = YES;
-    if (@available(macOS 13.3, *)) {
-        webView.inspectable = YES;
+    // respondsToSelector rather than @available: the 13.3 check is above the
+    // 11.0 deployment target and would need compiler-rt, which rustc's link
+    // line does not include.
+    if ([webView respondsToSelector:@selector(setInspectable:)]) {
+        [webView setValue:@YES forKey:@"inspectable"];
     }
     window.contentView = webView;
 

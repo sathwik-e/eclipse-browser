@@ -12,6 +12,7 @@ use crate::config::{
     normalize_site_domain, write_atomic,
 };
 use crate::events::{BrowserUiState, DocumentTrust, IpcCommand, UserEvent};
+use crate::max;
 use crate::tab::{
     LOADING_TITLE, NavigationError, Tab, canonicalize_eclipse_url, classify_navigation_error,
     downloads_dir, generate_ipc_token, get_default_favicon, get_favicon_url,
@@ -138,6 +139,13 @@ pub struct BrowserApp {
     download_items: HashMap<u64, usize>,
     /// Links other apps asked Eclipse to open, opened from `pump`.
     pending_external_links: Vec<String>,
+    /// Names the user gave tabs (command bar "Rename Tab"), by tab id.
+    custom_titles: HashMap<usize, String>,
+    /// Download id to the title and URL of the page in front when it
+    /// started, which Tidy Downloads names a junk-named file after.
+    download_sources: HashMap<usize, (String, String)>,
+    /// When the last Shift-hover link preview opened.
+    last_link_preview: Option<Instant>,
     /// The frame colour last given to Little Eclipse windows.
     little_theme_pushed: Option<([u8; 3], bool)>,
 }
@@ -276,6 +284,9 @@ impl BrowserApp {
             download_items: HashMap::new(),
             pending_external_links: Vec::new(),
             little_theme_pushed: None,
+            custom_titles: HashMap::new(),
+            download_sources: HashMap::new(),
+            last_link_preview: None,
         };
         app.last_broadcast_memory_mb = app.memory_mb;
 
@@ -710,6 +721,7 @@ impl BrowserApp {
     fn retire_tab(&mut self, tab: Tab) {
         tab.set_visible(false);
         let id = tab.id;
+        self.custom_titles.remove(&id);
         let proxy = self.proxy.clone();
         let flushing = tab.flush_internal_page(move |_| {
             let _ = proxy.send_event(UserEvent::PageFlushed { tab_id: id });
@@ -1608,6 +1620,12 @@ impl BrowserApp {
             IpcCommand::TidyTabs => {
                 self.tidy_tabs();
             }
+            IpcCommand::InstantLinks {
+                query,
+                replace_current,
+            } => self.open_instant_links(&query, replace_current),
+            IpcCommand::RenameTab { id, title } => self.rename_tab(id, &title),
+            IpcCommand::PreviewLink { url } => self.preview_link(source_tab_id, &url),
             IpcCommand::OpenDownload { id } => {
                 if let Some(dl) = self.config.downloads.iter().find(|d| d.id == id) {
                     if !dl.path.is_empty() {
@@ -2166,6 +2184,17 @@ impl BrowserApp {
         let id = self.next_download_id;
         self.next_download_id += 1;
         self.download_items.insert(seq, id);
+        // Downloads start from a click in the page in front (a Little
+        // Eclipse window aside): Tidy Downloads names junk after that page.
+        if let Some(tab) = self.tabs.iter().find(|tab| tab.id == self.active_tab_id)
+            && is_http_url(&tab.url)
+        {
+            let title = if tab.title == LOADING_TITLE { String::new() } else { tab.title.clone() };
+            if self.download_sources.len() >= 64 {
+                self.download_sources.clear();
+            }
+            self.download_sources.insert(id, (title, tab.url.clone()));
+        }
         let item = DownloadItem {
             id,
             file_name: file_name.clone(),
@@ -2173,6 +2202,7 @@ impl BrowserApp {
             path,
             status: "downloading".into(),
             timestamp: now_unix_secs(),
+            original_name: String::new(),
         };
         self.config.downloads.insert(0, item);
         if self.config.downloads.len() > 50 {
@@ -2206,10 +2236,17 @@ impl BrowserApp {
             .or_else(|| find_download_for_completion(&self.config.downloads, &url, &file_name));
         let display_name = match index {
             Some(index) => {
+                let source = self.download_sources.remove(&self.config.downloads[index].id);
                 let item = &mut self.config.downloads[index];
                 item.status = status.into();
                 if let Some(p) = path.filter(|p| !p.is_empty()) {
                     item.path = p;
+                }
+                if success
+                    && self.config.tidy_downloads
+                    && let Some((title, page_url)) = source
+                {
+                    tidy_download(item, &title, &page_url);
                 }
                 item.file_name.clone()
             }
@@ -2225,6 +2262,7 @@ impl BrowserApp {
                         path: path.unwrap_or_default(),
                         status: status.into(),
                         timestamp: now_unix_secs(),
+                        original_name: String::new(),
                     },
                 );
                 file_name
@@ -2560,11 +2598,116 @@ impl BrowserApp {
         }
     }
 
+    /// The title the sidebar shows for `tab`: the name the user gave it, or
+    /// for a pinned tab or a favorite's tab with Tidy Tab Titles on, the
+    /// page's title without the site's name and counts.
+    fn display_title(&self, tab: &Tab) -> String {
+        if let Some(name) = self.custom_titles.get(&tab.id) {
+            return name.clone();
+        }
+        let pinned = tab.is_pinned || tab.favorite_index.is_some();
+        if pinned && self.config.tidy_tab_titles && tab.title != LOADING_TITLE && is_http_url(&tab.url) {
+            return max::tidy_tab_title(&tab.title, &tab.url);
+        }
+        tab.title.clone()
+    }
+
+    /// Command bar "Rename Tab": an empty name gives the tab its page title
+    /// back.
+    fn rename_tab(&mut self, id: usize, title: &str) {
+        if !self.tabs.iter().any(|tab| tab.id == id) {
+            return;
+        }
+        match clean_custom_title(title) {
+            Some(name) => self.custom_titles.insert(id, name),
+            None => self.custom_titles.remove(&id),
+        };
+        self.broadcast_state();
+    }
+
+    /// Instant Links (Shift+Return in the command bar or the address field):
+    /// each query, "a, b; c" being three (at most six), opens its top result
+    /// (see `max::instant_link_url`). The first one replaces the active tab
+    /// when `replace_current` (the address field) or that tab is a new-tab
+    /// page, and is selected; the others open as background tabs.
+    fn open_instant_links(&mut self, input: &str, replace_current: bool) {
+        let queries = if self.config.instant_links {
+            max::split_instant_queries(input)
+        } else {
+            Vec::new()
+        };
+        let Some((first, rest)) = queries.split_first() else {
+            // Off (or nothing to open): what Return does.
+            if !input.trim().is_empty() {
+                self.navigate_active(input);
+            }
+            return;
+        };
+        let first_url = max::instant_link_url(first, &self.config);
+        let active_is_new_tab = self
+            .tabs
+            .iter()
+            .find(|t| t.id == self.active_tab_id)
+            .is_some_and(|t| t.url.is_empty() || t.url.starts_with("eclipse://newtab"));
+        let first_id = if replace_current || active_is_new_tab {
+            self.navigate_active(&first_url);
+            self.active_tab_id
+        } else {
+            self.create_tab(&first_url, true)
+        };
+        for query in rest {
+            let url = max::instant_link_url(query, &self.config);
+            self.create_tab(&url, false);
+        }
+        if self.active_tab_id != first_id {
+            self.select_tab(first_id);
+        }
+        self.broadcast_state();
+    }
+
+    /// 5-Second Previews: Shift held over a link in the page in front opens
+    /// it in a Little Eclipse window. The page's bridge only names the link
+    /// (after a 600 ms Shift-hover); everything else is checked here, out of
+    /// the page's reach: the setting, that the message came from the active
+    /// tab of the focused browser window, that Shift really is held (read
+    /// from the window server), a plain http(s) address, and at most one
+    /// preview per `max::PREVIEW_COOLDOWN`. The preview window takes focus,
+    /// so the next one needs the browser window in front again.
+    fn preview_link(&mut self, source_tab_id: Option<usize>, url: &str) {
+        if !self.config.link_previews || source_tab_id != Some(self.active_tab_id) || !self.window.is_focused() {
+            return;
+        }
+        let Some(url) = max::preview_target(url) else {
+            return;
+        };
+        if !max::shift_key_held() {
+            if self.perf {
+                eprintln!("[preview] ignored: Shift is not held");
+            }
+            return;
+        }
+        let now = Instant::now();
+        if !max::preview_cooldown_over(self.last_link_preview, now) {
+            return;
+        }
+        self.last_link_preview = Some(now);
+        if self.perf {
+            eprintln!("[preview] {}", truncate_message(&url, 120));
+        }
+        if !self.open_standalone_little_window(&url, false) {
+            self.show_toast("Close a Little Eclipse window to preview more links");
+        }
+    }
+
     pub fn favorite_active_tab(&mut self) {
         if let Some(tab) = self.tabs.iter().find(|tab| tab.id == self.active_tab_id) {
             let url = tab.url.clone();
             let title = if tab.title.trim().is_empty() {
                 url.clone()
+            } else if let Some(name) = self.custom_titles.get(&tab.id) {
+                name.clone()
+            } else if self.config.tidy_tab_titles {
+                max::tidy_tab_title(&tab.title, &url)
             } else {
                 tab.title.clone()
             };
@@ -2752,14 +2895,22 @@ impl BrowserApp {
 
         let active_tab = self.tabs.iter().find(|tab| tab.id == self.active_tab_id);
         let active_url = active_tab.map(|tab| tab.url.clone()).unwrap_or_default();
-        let active_title = active_tab.map(|tab| tab.title.clone()).unwrap_or_default();
+        let active_title = active_tab.map(|tab| self.display_title(tab)).unwrap_or_default();
         let is_loading = active_tab.map(|tab| tab.is_loading).unwrap_or(false);
         let can_go_back = active_tab.map(Tab::can_go_back).unwrap_or(false);
         let can_go_forward = active_tab.map(Tab::can_go_forward).unwrap_or(false);
         self.last_broadcast_memory_mb = self.memory_mb;
 
         let mut ui_state = BrowserUiState {
-            tabs: self.tabs.iter().map(Tab::to_state).collect(),
+            tabs: self
+                .tabs
+                .iter()
+                .map(|tab| {
+                    let mut state = tab.to_state();
+                    state.title = self.display_title(tab);
+                    state
+                })
+                .collect(),
             active_tab_id: self.active_tab_id,
             active_url,
             active_title: active_title.clone(),
@@ -2855,6 +3006,7 @@ impl BrowserApp {
                     .and_then(|index| self.config.favorites.get(index))
                     .map(|favorite| favorite.url.clone()),
                 zoom: tab.zoom,
+                custom_title: self.custom_titles.get(&tab.id).cloned(),
             });
         }
         let Ok(json) = serde_json::to_string_pretty(&session) else {
@@ -2908,6 +3060,9 @@ impl BrowserApp {
             self.next_tab_id += 1;
             if position == active_position {
                 active_id = Some(id);
+            }
+            if let Some(name) = record.custom_title.as_deref().and_then(clean_custom_title) {
+                self.custom_titles.insert(id, name);
             }
             self.tabs.push(hibernated_tab(id, record, favorite_index));
         }
@@ -3166,7 +3321,8 @@ fn is_plausible_page_report(command: &IpcCommand, frame_origin: &str, committed_
         IpcCommand::UrlChanged { url } => is_plausible_url_report(url, frame_origin, committed_url),
         IpcCommand::UpdateFavicon { .. }
         | IpcCommand::SetAudible { .. }
-        | IpcCommand::UpdateScroll { .. } => is_same_tuple_origin(frame_origin, committed_url),
+        | IpcCommand::UpdateScroll { .. }
+        | IpcCommand::PreviewLink { .. } => is_same_tuple_origin(frame_origin, committed_url),
         _ => true,
     }
 }
@@ -3196,6 +3352,8 @@ pub fn is_command_allowed(sender: IpcSender, command: &IpcCommand) -> bool {
             | IpcCommand::SetAudible { .. }
             | IpcCommand::UpdateScroll { .. } => true,
             IpcCommand::NewTab { url: Some(url), .. } => is_http_url(url.trim()),
+            // Shift-hover link previews; preview_link checks the rest.
+            IpcCommand::PreviewLink { url } => max::preview_target(url).is_some(),
             _ => false,
         },
         IpcSender::LittleWindow => {
@@ -3399,6 +3557,43 @@ fn find_download_for_completion(downloads: &[DownloadItem], url: &str, file_name
 }
 
 /// A restored tab without a webview; `select_tab` builds it on demand.
+/// A name the user gave a tab, cleaned: whitespace collapsed, at most 120
+/// characters. None when nothing is left (the page title is used again).
+fn clean_custom_title(title: &str) -> Option<String> {
+    let name: String = title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(120)
+        .collect();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Tidy Downloads: renames a finished download with a junk name after the
+/// page it came from (`max::tidy_download_name`), in its own folder and
+/// without replacing anything, and keeps the old name for the list.
+fn tidy_download(item: &mut DownloadItem, page_title: &str, page_url: &str) {
+    if item.path.is_empty() {
+        return;
+    }
+    let path = PathBuf::from(&item.path);
+    let Some(current) = path.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    let Some(new_name) = max::tidy_download_name(current, page_title, page_url, &max::local_date()) else {
+        return;
+    };
+    if let Some(renamed) = max::rename_download(&path, &new_name)
+        && let Some(name) = renamed.file_name().and_then(|name| name.to_str())
+    {
+        item.original_name = current.to_string();
+        item.file_name = name.to_string();
+        item.path = renamed.to_string_lossy().into_owned();
+    }
+}
+
 fn hibernated_tab(id: usize, record: SessionTab, favorite_index: Option<usize>) -> Tab {
     let title = if record.title.trim().is_empty() {
         title_for_url(&record.url)
@@ -4420,6 +4615,42 @@ mod tests {
     }
 
     #[test]
+    fn web_pages_may_ask_for_link_previews_of_web_links_only() {
+        let page = "https://shop.example/catalog";
+        let preview = command(r#"{"action":"preview_link","url":"https://other.example/item"}"#);
+        assert!(is_command_allowed(IpcSender::Web, &preview));
+        // Only the committed document, never a frame or page the tab left.
+        assert!(is_plausible_page_report(&preview, "https://shop.example/x", page));
+        assert!(!is_plausible_page_report(&preview, "https://ads.example/frame", page));
+        for json in [
+            r#"{"action":"preview_link","url":"eclipse://settings"}"#,
+            r#"{"action":"preview_link","url":"javascript:alert(1)"}"#,
+            r#"{"action":"preview_link","url":"https://user:pw@evil.example/"}"#,
+        ] {
+            assert!(!is_command_allowed(IpcSender::Web, &command(json)), "{json}");
+        }
+        // Little Eclipse popups and departing pages may not.
+        assert!(!is_command_allowed(IpcSender::LittleWindow, &preview));
+        assert!(!is_command_allowed(IpcSender::DepartingInternal, &preview));
+        // Instant Links and renaming are the browser's own UI.
+        for json in [
+            r#"{"action":"instant_links","query":"a, b"}"#,
+            r#"{"action":"rename_tab","id":1,"title":"x"}"#,
+        ] {
+            assert!(!is_command_allowed(IpcSender::Web, &command(json)), "{json}");
+            assert!(!is_command_allowed(IpcSender::LittleWindow, &command(json)), "{json}");
+            assert!(is_command_allowed(IpcSender::Sidebar, &command(json)), "{json}");
+        }
+    }
+
+    #[test]
+    fn custom_tab_titles_are_cleaned() {
+        assert_eq!(clean_custom_title("  My   Inbox \n"), Some("My Inbox".into()));
+        assert_eq!(clean_custom_title(" \t "), None);
+        assert_eq!(clean_custom_title(&"a".repeat(500)).unwrap().len(), 120);
+    }
+
+    #[test]
     fn internal_pages_may_not_drive_the_window() {
         assert!(is_command_allowed(
             IpcSender::Internal,
@@ -4473,6 +4704,7 @@ mod tests {
             path: format!("/Downloads/{name}"),
             status: status.into(),
             timestamp: 0,
+            original_name: String::new(),
         }
     }
 

@@ -197,6 +197,23 @@ pub enum IpcCommand {
         to_index: usize,
     },
     TidyTabs,
+    /// Shift+Return in the command bar (or, `replace_current`, the address
+    /// field): open the top result of each query.
+    InstantLinks {
+        query: String,
+        #[serde(default)]
+        replace_current: bool,
+    },
+    /// Command bar "Rename Tab"; an empty title restores the page title.
+    RenameTab {
+        id: usize,
+        title: String,
+    },
+    /// The bridge saw Shift held over a link: preview it in a Little Eclipse
+    /// window (the one command, besides page state, a website may send).
+    PreviewLink {
+        url: String,
+    },
     OpenDownload {
         id: usize,
     },

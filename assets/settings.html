@@ -387,6 +387,78 @@ textarea.code-input {
   transform: scale(1.2);
 }
 
+/* Max: one row per feature, with a small picture of it. */
+.max-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 0.5px solid var(--hairline);
+}
+
+.max-row:first-child {
+  padding-top: 4px;
+}
+
+.max-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.max-thumb {
+  width: 92px;
+  height: 58px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font: 600 8.5px -apple-system, BlinkMacSystemFont, sans-serif;
+  color: #1F2937;
+}
+
+.max-thumb .pill {
+  background: #fff;
+  border-radius: 6px;
+  padding: 4px 6px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
+}
+
+.max-thumb .bar {
+  display: block;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.max-thumb.tidy { background: #D9D2F2; color: #6D5BD0; }
+.max-thumb.instant { background: #D7ECF6; flex-direction: column; align-items: stretch; padding: 0 9px; }
+.max-thumb.preview { background: #C9C3EE; }
+.max-thumb.titles { background: #9E6E98; }
+.max-thumb.downloads { background: #3434E0; }
+.max-thumb.assistant { background: #5DBE84; }
+
+.max-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.max-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.max-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
 .ext-grid {
   display: flex;
   flex-direction: column;
@@ -622,6 +694,82 @@ textarea.code-input {
   <p class="hint">DRM and autoplay preferences apply only to tabs opened after the change. Content shields, search engine and tab suspension changes apply immediately.</p>
 </div>
 
+<div class="card" id="max-card">
+  <div class="card-header">
+    <h2>Max</h2>
+  </div>
+  <div class="max-row">
+    <div class="max-thumb tidy" aria-hidden="true">
+      <svg width="40" height="10" viewBox="0 0 40 10" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 5q2.5-4 5 0t5 0 5 0 5 0 5 0 5 0 5 0"/></svg>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 3l-7.5 7.5"/><path d="M10 9l5 5"/><path d="M10 9c-3 1-5 4-6 10 2.5 0 4.5-.5 6-1.5l1-2.5 1.5 1c1.5-1.5 2.3-3 2.5-4"/></svg>
+    </div>
+    <div class="max-text">
+      <div class="max-title">Tidy Tabs</div>
+      <div class="max-desc">Shows the broom in the sidebar whenever a Space has more than six tabs. Tidy groups tabs by site and closes duplicates (⇧⌘T brings one back); ⇧⌘Y tidies at any time.</div>
+    </div>
+    <input type="checkbox" id="chk-max-tidy-tabs" data-max-setting="tidy_tabs_button" checked />
+  </div>
+  <div class="max-row">
+    <div class="max-thumb instant" aria-hidden="true">
+      <span class="pill" style="margin-bottom:4px;">Searching the web…</span>
+      <span class="bar"></span>
+    </div>
+    <div class="max-text">
+      <div class="max-title">Instant Links</div>
+      <div class="max-desc">Press Shift+Return on a search in the command bar (⌘K) or the address field to go straight to the top result. Separate searches with commas to open each in its own tab (up to six). Uses DuckDuckGo's "!ducky", whatever your search engine.</div>
+    </div>
+    <input type="checkbox" id="chk-max-instant-links" data-max-setting="instant_links" checked />
+  </div>
+  <div class="max-row">
+    <div class="max-thumb preview" aria-hidden="true">
+      <span class="pill" style="width:58px;height:38px;padding:4px;display:flex;flex-direction:column;gap:3px;">
+        <span class="bar" style="background:#B7A27A;height:14px;"></span>
+        <span class="bar" style="background:#D1D5DB;height:3px;"></span>
+        <span class="bar" style="background:#D1D5DB;height:3px;width:70%;"></span>
+      </span>
+    </div>
+    <div class="max-text">
+      <div class="max-title">5-Second Previews</div>
+      <div class="max-desc">Hold Shift while pointing at a link for a moment to preview it in a Little Eclipse window; ⌘O moves the preview into a tab.</div>
+    </div>
+    <input type="checkbox" id="chk-max-link-previews" data-max-setting="link_previews" checked />
+  </div>
+  <div class="max-row">
+    <div class="max-thumb titles" aria-hidden="true">
+      <span class="pill" style="color:#6D28D9;">Design Book</span>
+    </div>
+    <div class="max-text">
+      <div class="max-title">Tidy Tab Titles</div>
+      <div class="max-desc">Pinned tabs and new favorites drop the site's name and unread counts from their titles ("(3) Inbox - Gmail" becomes "Inbox"). Rename any tab with "Rename Tab" in the command bar.</div>
+    </div>
+    <input type="checkbox" id="chk-max-tidy-titles" data-max-setting="tidy_tab_titles" checked />
+  </div>
+  <div class="max-row">
+    <div class="max-thumb downloads" aria-hidden="true">
+      <span class="pill" style="display:flex;flex-direction:column;gap:1px;font-weight:500;">
+        <span>Itinerary.pdf</span>
+        <span style="color:#9CA3AF;text-decoration:line-through;">387494876.pdf</span>
+      </span>
+    </div>
+    <div class="max-text">
+      <div class="max-title">Tidy Downloads</div>
+      <div class="max-desc">Files with meaningless names (download.pdf, 387494876.pdf, long hashes) are renamed after the page they came from, or the site and date. An existing file is never replaced.</div>
+    </div>
+    <input type="checkbox" id="chk-max-tidy-downloads" data-max-setting="tidy_downloads" checked />
+  </div>
+  <div class="max-row">
+    <div class="max-thumb assistant" aria-hidden="true">
+      <span class="pill"><span style="background:#10A37F;color:#fff;border-radius:4px;padding:1px 4px;">ChatGPT</span> Ask…</span>
+    </div>
+    <div class="max-text">
+      <div class="max-title">ChatGPT in the Command Bar</div>
+      <div class="max-desc">Type "chatgpt" or "claude" in the command bar and press Tab to ask a question. It opens chatgpt.com or claude.ai in a new tab, and nothing is sent until you press Return.</div>
+    </div>
+    <input type="checkbox" id="chk-max-assistants" data-max-setting="ai_in_command_bar" checked />
+  </div>
+  <p class="hint">Max runs inside Eclipse: no page, title or file name is sent to an AI service.</p>
+</div>
+
 <div class="card">
   <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
     <h2>Chrome Extensions &amp; Web Store</h2>
@@ -692,6 +840,12 @@ const DEFAULT_CONFIG = {
   autoplay_enabled: true,
   tab_hibernation_mins: 15,
   open_links_in_little_window: true,
+  tidy_tabs_button: true,
+  instant_links: true,
+  link_previews: true,
+  tidy_tab_titles: true,
+  tidy_downloads: true,
+  ai_in_command_bar: true,
   adblock_enabled: true,
   adblock_disabled_domains: [],
   webextensions_enabled: true,
@@ -856,6 +1010,9 @@ function renderUI() {
   document.getElementById('chk-autoplay').checked = cfg.autoplay_enabled !== false;
   document.getElementById('chk-little-links').checked = cfg.open_links_in_little_window !== false;
   document.getElementById('chk-extensions').checked = cfg.webextensions_enabled !== false;
+  document.querySelectorAll('input[data-max-setting]').forEach(input => {
+    input.checked = cfg[input.dataset.maxSetting] !== false;
+  });
   setTextIfIdle('txt-custom-js', 'custom_js');
   setTextIfIdle('txt-custom-css', 'custom_css');
 
@@ -1148,6 +1305,10 @@ document.getElementById('chk-autoplay').addEventListener('change', (e) => {
 
 document.getElementById('chk-little-links').addEventListener('change', (e) => {
   setSetting('open_links_in_little_window', e.target.checked);
+});
+
+document.querySelectorAll('input[data-max-setting]').forEach(input => {
+  input.addEventListener('change', () => setSetting(input.dataset.maxSetting, input.checked));
 });
 
 document.getElementById('chk-extensions').addEventListener('change', (e) => {

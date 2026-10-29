@@ -74,6 +74,27 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
   - Files download as they would from a tab, into `~/Downloads` and the
     Downloads list. A window opened only for a file (a link to a `.zip` from
     Mail, say) closes once the download starts.
+- **Max**, Arc's conveniences without an AI service (Settings > Max, each
+  on by default and switchable):
+  - **Tidy Tabs.** A broom in the sidebar once a Space has more than six tabs
+    groups them by site and closes duplicates (⇧⌘T undoes; ⇧⌘Y any time).
+  - **Instant Links.** Shift+Return on a search in the command bar or the
+    address field opens the top result directly; "rust book, tokio docs"
+    opens one tab per search (up to six). This uses DuckDuckGo's `!ducky`
+    whatever your search engine, as it is the only one that redirects
+    straight to the result.
+  - **5-Second Previews.** Hold Shift over a link for a moment to open it
+    in a Little Eclipse window.
+  - **Tidy Tab Titles.** Pinned tabs and new favorites lose the site's name
+    and unread counts ("(3) Inbox - Gmail" shows as "Inbox"). Any tab can be
+    renamed with "Rename Tab" in the command bar.
+  - **Tidy Downloads.** Files with junk names (`download.pdf`, numbers,
+    UUIDs, hashes) are renamed after the page they came from, or the site
+    and date, without ever replacing a file. The Downloads list shows the
+    old name.
+  - **ChatGPT in the Command Bar.** Type "chatgpt" or "claude" and press Tab
+    to ask; Return opens the question on chatgpt.com or claude.ai in a new
+    tab. Nothing is sent before that.
 - **Notes and Easel.** A notes page and a sketch-and-cards canvas, stored
   locally.
 - **Real browser plumbing:**
@@ -91,7 +112,10 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
 - Every web view gets its own random token. Rust also checks **who sent each
   message**, using the frame URL reported by WebKit rather than by the page:
   - A normal website can only report its URL, title icon, audio and scroll
-    position, and open http(s) links in new tabs.
+    position, open http(s) links in new tabs, and ask for a Shift-hover link
+    preview. Eclipse opens the preview only when Shift really is held (read
+    from the system, not the page), for the active tab of the focused
+    window, for a plain http(s) link, and at most once every 1.5 seconds.
   - A page in a Little Eclipse popup window can only open http(s) links in
     new tabs. WebKit tells its messages apart from the tab's own, even when
     it is on the same site. It cannot load internal `eclipse://` resources
@@ -181,6 +205,8 @@ cargo clippy --all-targets -- -D warnings
 | ⌘J | Downloads |
 | ⇧⌘N / ⇧⌘E | New note / new easel |
 | ⇧⌘Y | Tidy tabs |
+| ⇧↩ (command bar, address field) | Open the top result (Instant Links) |
+| Shift + point at a link | Preview it in a Little Eclipse window |
 | ⌘P | Print |
 | ⌘, | Settings |
 | ⌥⌘I | Web Inspector |
@@ -194,6 +220,7 @@ in a web app), the site wins.
 ```text
 src/main.rs        tao event loop, window, native menu, smoke-test hooks
 src/app.rs         tabs, Spaces, sessions, IPC trust model, state push to the sidebar
+src/max.rs         Max: title and download-name tidying, Instant Links, previews
 src/tab.rs         one WKWebView per tab, injected scripts, navigation policy, downloads
 src/config.rs      settings model, load/repair/save, settings patches
 src/events.rs      event-loop events, IPC commands, UI state types

@@ -73,6 +73,10 @@ pub struct DownloadItem {
     pub status: String,
     #[serde(default)]
     pub timestamp: u64,
+    /// The name the file arrived with when Tidy Downloads renamed it
+    /// ("Renamed from …" in the Downloads list); empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub original_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -298,6 +302,29 @@ pub struct BrowserConfig {
     /// in a standalone Little Eclipse window; off: a new tab.
     #[serde(default = "default_true")]
     pub open_links_in_little_window: bool,
+    // "Max" (Settings): Arc-style conveniences, all done locally.
+    /// Show the Tidy button in the sidebar when a Space has more than six
+    /// tabs (⇧⌘Y and the command bar work either way).
+    #[serde(default = "default_true")]
+    pub tidy_tabs_button: bool,
+    /// Shift+Return in the command bar or the address field opens the top
+    /// result of a search; "a, b; c" opens one tab per query.
+    #[serde(default = "default_true")]
+    pub instant_links: bool,
+    /// Holding Shift over a link previews it in a Little Eclipse window.
+    #[serde(default = "default_true")]
+    pub link_previews: bool,
+    /// Pinned tabs and new favorites drop site names and counts from their
+    /// titles.
+    #[serde(default = "default_true")]
+    pub tidy_tab_titles: bool,
+    /// Downloads with meaningless names are renamed after their page.
+    #[serde(default = "default_true")]
+    pub tidy_downloads: bool,
+    /// "chatgpt"/"claude" + Tab in the command bar asks that assistant (only
+    /// when Return is pressed does the question leave Eclipse).
+    #[serde(default = "default_true")]
+    pub ai_in_command_bar: bool,
 }
 
 impl Default for BrowserConfig {
@@ -326,6 +353,12 @@ impl Default for BrowserConfig {
             downloads: Vec::new(),
             rounded_corners_radius: default_rounded_corners_radius(),
             open_links_in_little_window: true,
+            tidy_tabs_button: true,
+            instant_links: true,
+            link_previews: true,
+            tidy_tab_titles: true,
+            tidy_downloads: true,
+            ai_in_command_bar: true,
         }
     }
 }
@@ -521,6 +554,12 @@ impl BrowserConfig {
         "custom_user_agent",
         "rounded_corners_radius",
         "open_links_in_little_window",
+        "tidy_tabs_button",
+        "instant_links",
+        "link_previews",
+        "tidy_tab_titles",
+        "tidy_downloads",
+        "ai_in_command_bar",
     ];
 
     /// Applies an `update_settings` patch. Only keys in `PATCHABLE_SETTINGS`
@@ -574,6 +613,12 @@ impl BrowserConfig {
             "open_links_in_little_window" => value
                 .as_bool()
                 .is_some_and(|b| set(&mut self.open_links_in_little_window, b)),
+            "tidy_tabs_button" => value.as_bool().is_some_and(|b| set(&mut self.tidy_tabs_button, b)),
+            "instant_links" => value.as_bool().is_some_and(|b| set(&mut self.instant_links, b)),
+            "link_previews" => value.as_bool().is_some_and(|b| set(&mut self.link_previews, b)),
+            "tidy_tab_titles" => value.as_bool().is_some_and(|b| set(&mut self.tidy_tab_titles, b)),
+            "tidy_downloads" => value.as_bool().is_some_and(|b| set(&mut self.tidy_downloads, b)),
+            "ai_in_command_bar" => value.as_bool().is_some_and(|b| set(&mut self.ai_in_command_bar, b)),
             "tab_hibernation_mins" => value
                 .as_u64()
                 .filter(|m| *m <= MAX_HIBERNATION_MINS)
@@ -658,6 +703,10 @@ pub struct SessionTab {
     pub favorite_url: Option<String>,
     #[serde(default = "default_zoom")]
     pub zoom: f64,
+    /// The name the user gave the tab (command bar "Rename Tab"), shown
+    /// instead of the page's title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_title: Option<String>,
 }
 
 /// Open tabs and spaces, saved to `session.json` next to the config.
@@ -744,7 +793,7 @@ fn is_header_safe(s: &str) -> bool {
     !s.chars().any(char::is_control)
 }
 
-fn urlencode(input: &str) -> String {
+pub(crate) fn urlencode(input: &str) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut encoded = String::with_capacity(input.len());
     for byte in input.bytes() {
@@ -848,6 +897,23 @@ mod tests {
         let changed = config.apply_settings_patch(&patch(r#"{"open_links_in_little_window": "yes"}"#));
         assert!(changed.is_empty());
         assert!(!config.open_links_in_little_window);
+    }
+
+    #[test]
+    fn max_features_are_on_by_default_and_patchable() {
+        let config = BrowserConfig::default();
+        assert!(config.tidy_tabs_button && config.instant_links && config.link_previews);
+        assert!(config.tidy_tab_titles && config.tidy_downloads && config.ai_in_command_bar);
+        // A config saved before Max existed gets the defaults.
+        let old: BrowserConfig = serde_json::from_str(r#"{"theme": "void"}"#).unwrap();
+        assert!(old.link_previews && old.tidy_downloads);
+        let mut config = BrowserConfig::default();
+        let changed = config.apply_settings_patch(&patch(
+            r#"{"link_previews": false, "tidy_downloads": "no", "ai_in_command_bar": 0}"#,
+        ));
+        assert_eq!(changed, vec!["link_previews"]);
+        assert!(!config.link_previews);
+        assert!(config.tidy_downloads && config.ai_in_command_bar);
     }
 
     #[test]
@@ -1005,7 +1071,9 @@ mod tests {
                 "tab_hibernation_mins": 0, "adblock_enabled": false,
                 "adblock_disabled_domains": ["a.example"], "webextensions_enabled": false,
                 "custom_js": "1", "custom_css": "a{}", "custom_user_agent": "UA/2",
-                "rounded_corners_radius": 4, "open_links_in_little_window": false
+                "rounded_corners_radius": 4, "open_links_in_little_window": false,
+                "tidy_tabs_button": false, "instant_links": false, "link_previews": false,
+                "tidy_tab_titles": false, "tidy_downloads": false, "ai_in_command_bar": false
             }"##,
         );
         let changed = config.apply_settings_patch(&samples);

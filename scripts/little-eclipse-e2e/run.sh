@@ -7,7 +7,8 @@
 #
 # HARNESS_PORT (default 8831) and HARNESS_PORT+1 must be free. Set
 # GUARD_MALLOC=1 to run the harness under libgmalloc, VERBOSE=1 to print what
-# the harness printed.
+# the harness printed, SNAPSHOT_DIR=<dir> to save a picture of each window
+# the harness has open at the end of a scenario.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -40,6 +41,8 @@ done
 
 victim="localhost:$((port + 1))"
 opener="127.0.0.1:$port"
+# The bar shows the committed page's full address; plain http is marked.
+insecure="Not Secure — http://"
 failures=0
 
 # check <output> <description> <extended regex that must match> [regex that must not match]
@@ -59,19 +62,22 @@ check() {
 }
 
 # The harness keeps WebKit's caches (menu.m's content rule list) out of the
-# real home folder.
+# real home folder, and Copy Link off the user's clipboard.
 mkdir -p "$work/home"
 run() {
-    local env=(HARNESS_PORT="$port" HOME="$work/home" CFFIXED_USER_HOME="$work/home")
+    local env=(HARNESS_PORT="$port" HOME="$work/home" CFFIXED_USER_HOME="$work/home"
+               ECLIPSE_TEST_PASTEBOARD="eclipse-little-e2e-$$")
+    if [[ -n "${SNAPSHOT_DIR:-}" ]]; then env+=(HARNESS_SNAPSHOT_DIR="$SNAPSHOT_DIR"); fi
     if [[ "${GUARD_MALLOC:-}" == 1 ]]; then env+=(DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib); fi
     env "${env[@]}" "$work/harness" "$1" 2>/dev/null || true
 }
 
 scenarios=("$@")
 if [[ ${#scenarios[@]} -eq 0 ]]; then
-    scenarios=(legit popupkw widthonly notoolbar plainopen stopwrite nocontent blankthen eclipse sameorigin nogesture five nested
-               openernav sheet print2 printclose refocus focus resize menu linktab openin openkey standalone
-               address addreclipse longhost dlstandalone dlpopup dllink dlattr dlnotab)
+    scenarios=(legit popupkw widthonly notoolbar plainopen noopener blanklink stopwrite nocontent blankthen eclipse
+               sameorigin nogesture five nested openernav sheet print2 printclose refocus focus resize menu linktab
+               openin openkey copylink siteinfo standalone address addreclipse longhost longpath commandbar
+               commandbarpick commandbarclose dlstandalone dlpopup dllink dlattr dlnotab)
 fi
 
 for scenario in "${scenarios[@]}"; do
@@ -86,24 +92,34 @@ for scenario in "${scenarios[@]}"; do
     fi
     case "$scenario" in
     legit)
-        check "$out" "the top bar shows the committed page's host" "host=\"Not Secure — $victim\"" ;;
+        check "$out" "the top bar shows the committed page's address" "host=\"$insecure$victim/pop.html\""
+        check "$out" "with its host brightest" "WINDOW .* bright=\"$victim\"" ;;
     popupkw | notoolbar)
         # Popup windows by WebKit's reading of the features, with or without
         # a full size, open as Little Eclipse windows.
         check "$out" "a popup window opens as a Little Eclipse window" "RESULT .* little=1 fallbacks=0"
-        check "$out" "it shows the popup's host" "host=\"Not Secure — $victim\"" ;;
+        check "$out" "it shows the popup's address" "host=\"$insecure$victim/pop.html\"" ;;
     widthonly)
         check "$out" "a popup that gave only a width keeps it" "RESULT .* little=1 fallbacks=0"
         # The window is the page area plus the top bar (36) and margins (6).
         check "$out" "and gets the default height" "WINDOW .* frame=[0-9-]+,[0-9-]+,532x682" ;;
     plainopen)
-        check "$out" "window.open(url, name) opens as a tab" "RESULT .* little=0 fallbacks=1" ;;
+        # As in Arc: a window.open with no features keeps its opener, which
+        # only a window of its own can.
+        check "$out" "window.open(url, name) opens as a Little Eclipse window" "RESULT .* little=1 fallbacks=0"
+        check "$out" "which keeps window.opener" "OPENER yes"
+        check "$out" "it shows the popup's address" "host=\"$insecure$victim/pop.html\"" ;;
+    noopener)
+        check "$out" "window.open(url, '_blank', 'noopener') opens as a tab" "RESULT .* little=0 fallbacks=1" ;;
+    blanklink)
+        check "$out" "a clicked target=_blank link opens as a tab" "RESULT .* little=0 fallbacks=1"
+        check "$out" "for the link's address" "TAB-FALLBACK http://$victim/pop.html$" ;;
     stopwrite | nocontent | blankthen)
         # The opener wrote a fake page into the popup's initial document
         # after its load to the other site was stopped / got a 204.
         check "$out" "the opener wrote into the popup" "MSG opener:wrote:Sign in"
-        check "$out" "the top bar shows the document's real host" \
-            "WINDOW title=\"Sign in\" host=\"Not Secure — $opener\"" "$victim" ;;
+        check "$out" "the top bar shows the document's real address" \
+            "WINDOW title=\"Sign in\" host=\"$insecure$opener/op.html\?s=[^\"]*\" .* bright=\"$opener\"" "$victim" ;;
     eclipse)
         check "$out" "eclipse:// subresources fail in the popup" "MSG popup:img=error&fetch=err little=1"
         check "$out" "the scheme handler never sees the popup's view" "unsafe_scheme=0" "UNSAFE" ;;
@@ -166,7 +182,7 @@ for scenario in "${scenarios[@]}"; do
         check "$out" "a clicked link opens a tab" "ACTION little_window_new_tab:http://$victim/pop.html\?terms"
         check "$out" "and brings the browser window forward" "KEY tab" ;;
     openin)
-        check "$out" "the bar shows the popup's host" "HOST \"Not Secure — $victim\""
+        check "$out" "the bar shows the popup's address" "HOST \"$insecure$victim/pop.html\""
         check "$out" "Open in Eclipse opens the page as a tab" "ACTION little_window_new_tab:http://$victim/pop.html$"
         check "$out" "and closes the window" "RESULT .* little=0 "
         check "$out" "and brings the browser window forward" "KEY tab" ;;
@@ -175,6 +191,17 @@ for scenario in "${scenarios[@]}"; do
         check "$out" "⌘O opens the page as a tab" "ACTION little_window_new_tab:http://$victim/pop.html$"
         check "$out" "and closes the window" "RESULT .* little=0 "
         check "$out" "⌘O is not sent to the browser" "KEY tab" "ACTION open_in_eclipse" ;;
+    copylink)
+        check "$out" "Copy Link copies the committed address" "COPY pasteboard=\"http://$victim/pop.html\""
+        check "$out" "and says \"Copied\" for a moment" "COPY pasteboard=.* copied_shown=1"
+        check "$out" "which then goes away" "COPY later copied_shown=0" ;;
+    siteinfo)
+        check "$out" "the site-information button warns of plain http" \
+            "INFO button=1 label=\"Not secure: site information\""
+        check "$out" "its popover says so and shows the host" \
+            "INFO heading=\"Connection is not secure\" host=\"$victim\""
+        check "$out" "Copy Link in it copies the address" "INFO copied pasteboard=\"http://$victim/pop.html\""
+        check "$out" "and closes it" "INFO after popover=0" ;;
     standalone)
         check "$out" "a standalone window opens" "STANDALONE ok=1"
         check "$out" "but never for eclipse://" "STANDALONE-ECLIPSE ok=0"
@@ -182,11 +209,10 @@ for scenario in "${scenarios[@]}"; do
         check "$out" "it is key" "KEY little"
         check "$out" "it has no opener and the given user agent" "PAGE null EclipseHarness/1.0"
         check "$out" "it stays open when the tab goes away, and counts for no tab" "RESULT .* little=1 .*count=0"
-        check "$out" "it shows the page's host" \
-            "WINDOW title=\"Popup page\" host=\"Not Secure — $victim\" url=http://$victim/pop.html " ;;
+        check "$out" "it shows the page's address" \
+            "WINDOW title=\"Popup page\" host=\"$insecure$victim/pop.html\" url=http://$victim/pop.html " ;;
     address)
-        check "$out" "⌥⌘N asks for a new Little Eclipse window" "ACTION new_little_window"
-        check "$out" "it opens, key" "NEWLITTLE ok=1"
+        check "$out" "a blank standalone window opens, key" "NEWLITTLE ok=1"
         check "$out" "with the empty address field focused" "EDITING new field=1 focused=1 host_hidden=1 text=\"\""
         check "$out" "Return hands the typed address to the browser" \
             "ACTION little_window_address:[0-9]+:http://$victim/pop.html\?typed"
@@ -197,21 +223,53 @@ for scenario in "${scenarios[@]}"; do
         check "$out" "Escape cancels editing" "EDITING escaped field=0 focused=0 host_hidden=0" \
             "little_window_address:[0-9]+:http://localhost:1/"
         check "$out" "the window shows the typed page" \
-            "WINDOW .* host=\"Not Secure — $victim\" url=http://$victim/pop.html\?typed " ;;
+            "WINDOW .* host=\"$insecure$victim/pop.html\?typed\" url=http://$victim/pop.html\?typed " ;;
     addreclipse)
         check "$out" "eclipse:// typed in the address field is refused" "LOAD eclipse://localhost/settings ok=0"
         check "$out" "so is javascript:" "LOAD javascript:alert\(1\) ok=0"
         check "$out" "the window stays on its page" \
-            "WINDOW .* host=\"Not Secure — $victim\" url=http://$victim/pop.html " "url=(eclipse|javascript)" ;;
+            "WINDOW .* host=\"$insecure$victim/pop.html\" url=http://$victim/pop.html " "url=(eclipse|javascript)" ;;
     longhost)
-        # The host loses its start; the security state never does.
+        # The path and scheme go first, then the host loses its start; the
+        # security state never goes.
         for when in default narrow; do
             check "$out" "a long http host keeps \"Not Secure\" ($when width)" \
-                "HOSTFIT $when title=\"Not Secure — …[ab.]*b\.localhost:$((port + 1))\" fits=1 whole=0"
+                "HOSTFIT $when title=\"Not Secure — …[ab.]*localhost:$((port + 1))\" fits=1 whole=0"
         done
-        check "$out" "and shows the whole label when there is room" "HOSTFIT wide title=.* fits=1 whole=1"
-        check "$out" "the accessibility label keeps the whole host" \
-            "full=\"Address: Not Secure — …a*\.b{26}\.localhost:$((port + 1))\"" ;;
+        check "$out" "and shows the whole address when there is room" "HOSTFIT wide title=.* fits=1 whole=1"
+        check "$out" "the accessibility label keeps the whole address" \
+            "full=\"Address: ${insecure}…a*\.b{26}\.localhost:$((port + 1))/pop.html\"" ;;
+    longpath)
+        check "$out" "a long path is cut from its end, the host kept whole" \
+            "PATHFIT title=\"$insecure$victim/pop\.html\?u=[^\"]*…\" fits=1"
+        check "$out" "only the host is bright, not a site name in the path" "PATHFIT .* bright=\"$victim\"" ;;
+    commandbar)
+        check "$out" "⌥⌘N asks for a new Little Eclipse window" "ACTION new_little_window"
+        check "$out" "the bar shows, also with the browser window hidden" "COMMANDBAR ok=1"
+        check "$out" "it is key" "KEY bar"
+        check "$out" "near the top right of the screen, its field focused, suggestions listed" \
+            "BAR shown shown=1 key=1 right=16 top=16 focused=1 placeholder=\"Search or Enter URL…\" text=\"\" rows=\[\*Popup page — localhost\]\[Downloads — localhost\]\[Save page — localhost\]$"
+        check "$out" "typed text is the first row, chosen" "BAR typed .*rows=\[\*http://$victim/pop.html\?bar — Open\]"
+        check "$out" "Return hands it to the browser" "ACTION little_command_bar_open:http://$victim/pop.html\?bar$"
+        check "$out" "which opens a standalone window" "BAROPEN http://$victim/pop.html\?bar ok=1"
+        check "$out" "the bar is gone" "BAR returned shown=0"
+        check "$out" "the new window is key" "KEY little"
+        check "$out" "and shows the page" \
+            "WINDOW title=\"Popup page\" host=\"$insecure$victim/pop.html\?bar\" url=http://$victim/pop.html\?bar " ;;
+    commandbarpick)
+        check "$out" "typing filters the suggestions" \
+            "BAR filtered .*text=\"down\" rows=\[\*down — Search\]\[Downloads — localhost\]$"
+        check "$out" "↓ chooses the next row" "BAR down .*rows=\[down — Search\]\[\*Downloads — localhost\]$"
+        check "$out" "Return opens the chosen suggestion" "ACTION little_command_bar_open:http://$victim/dl.html$"
+        check "$out" "in a standalone window" "WINDOW title=\"Downloads\" host=\"$insecure$victim/dl.html\"" ;;
+    commandbarclose)
+        check "$out" "the bar shows" "BAR open1 shown=1"
+        check "$out" "Escape closes it" "BAR escaped shown=0"
+        check "$out" "the × button closes it" "BAR closed shown=0" "NO CLOSE BUTTON"
+        check "$out" "⌘W closes it, and not a tab" "BAR cmdw shown=0" "ACTION close_tab"
+        check "$out" "a click elsewhere closes it" "BAR clickedaway shown=0"
+        check "$out" "it reopened each time" "BAR open4 shown=1"
+        check "$out" "nothing opened" "RESULT .* little=0 " "little_command_bar_open" ;;
     dlstandalone)
         check "$out" "a link from another app to a file opens a window" "STANDALONE ok=1"
         check "$out" "the browser's download path takes the file" "TAB-TAKES-DOWNLOAD response"
@@ -228,13 +286,13 @@ for scenario in "${scenarios[@]}"; do
         check "$out" "a download link in the window downloads" \
             "DOWNLOAD-DONE url=http://$victim/dl/link.zip ok=1 size=4096 little=1"
         check "$out" "the window stays on its page" \
-            "WINDOW title=\"Downloads\" host=\"Not Secure — $victim\" url=http://$victim/dl.html " ;;
+            "WINDOW title=\"Downloads\" host=\"$insecure$victim/dl.html\" url=http://$victim/dl.html " ;;
     dlattr)
         check "$out" "an <a download> link is a download" "TAB-TAKES-DOWNLOAD action"
         check "$out" "saved under the name the page gave" "DOWNLOAD-START url=http://$victim/pop.html name=saved.html"
         check "$out" "it finishes" "DOWNLOAD-DONE url=http://$victim/pop.html ok=1 size=[1-9][0-9]* little=1"
         check "$out" "the window stays on its page" \
-            "WINDOW title=\"Save page\" host=\"Not Secure — $victim\" url=http://$victim/dla.html " ;;
+            "WINDOW title=\"Save page\" host=\"$insecure$victim/dla.html\" url=http://$victim/dla.html " ;;
     dlnotab)
         check "$out" "with no tab to take the download, the file opens as a tab" \
             "ACTION little_window_new_tab:http://$victim/dl/notab.zip" "DOWNLOAD-START"

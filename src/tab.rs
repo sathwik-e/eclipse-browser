@@ -589,10 +589,11 @@ impl Tab {
             .with_document_title_changed_handler(move |title| {
                 let _ = proxy_title.send_event(UserEvent::TitleChanged { tab_id, title });
             })
-            // Sized popups a web page opens on a user gesture (sign-in and
-            // payment flows) open in a Little Eclipse window that keeps
-            // `window.opener`, within per-tab and overall limits (menu.m);
-            // everything else opens as an ordinary tab without one. The
+            // Popups a web page opens on a user gesture (sign-in and payment
+            // flows, and any window.open that keeps its opener, as in Arc)
+            // open in a Little Eclipse window that keeps `window.opener`,
+            // within per-tab and overall limits (menu.m); links and noopener
+            // windows open as an ordinary tab without one. The
             // popup's webview is built on the configuration WebKit hands
             // over, which shares this tab's WKUserContentController: it runs
             // this tab's init scripts and its messages reach this tab's IPC
@@ -601,26 +602,18 @@ impl Tab {
             // requests away from wry's eclipse:// handler.
             .with_new_window_req_handler(move |url, features| {
                 #[cfg(target_os = "macos")]
-                let wants_popup = features.size.is_some() || {
-                    #[cfg(target_os = "macos")]
-                    {
-                        crate::macos_menu::popup_request_wants_popup()
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        false
-                    }
-                };
+                let popup = features.size.is_some() || crate::macos_menu::popup_request_wants_popup();
+                #[cfg(not(target_os = "macos"))]
+                let popup = features.size.is_some();
                 #[cfg(target_os = "macos")]
-                if opens_little_window(&nav_popup.popup_opener_url(), wants_popup, &url)
+                if opens_little_window(&nav_popup.popup_opener_url(), popup, &url)
                     && let Some(webview) = crate::macos_menu::open_little_window(&features)
                 {
                     return NewWindowResponse::Create { webview };
                 }
                 #[cfg(not(target_os = "macos"))]
                 let _ = &nav_popup;
-                let sized = wants_popup;
-                let _ = proxy_newwin.send_event(UserEvent::NewWindowRequested { url, sized });
+                let _ = proxy_newwin.send_event(UserEvent::NewWindowRequested { url, popup });
                 NewWindowResponse::Deny
             })
             .with_custom_protocol("eclipse".into(), move |_id, req| {
@@ -1180,17 +1173,18 @@ fn is_http_url(url: &str) -> bool {
 /// Whether a `window.open` request opens in a Little Eclipse window (a small
 /// native window that keeps `window.opener`, see menu.m) instead of a tab:
 /// the opener's committed document is a web page (`opener_document` is
-/// empty for internal pages and the error page), the page asked for a popup
-/// window (`wants_popup`: a size, a position, the `popup` feature or
-/// turned-off toolbars, as sign-in and payment popups do; plain
-/// `window.open(url)` and `target=_blank` links do not), and the target is a
+/// empty for internal pages and the error page), the page asked for a window
+/// of its own (`popup`: a size, a position, the `popup` feature or
+/// turned-off toolbars, as sign-in and payment popups do, or, as in Arc, a
+/// `window.open(url, name)` with no features whose page keeps its opener;
+/// `target=_blank` links and `noopener` windows do not), and the target is a
 /// web page or blank (popups often open empty and navigate once the opener
 /// has written to them).
-pub(crate) fn opens_little_window(opener_document: &str, wants_popup: bool, target_url: &str) -> bool {
+pub(crate) fn opens_little_window(opener_document: &str, popup: bool, target_url: &str) -> bool {
     let is_web = |url: &str| {
         Url::parse(url).is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
     };
-    wants_popup
+    popup
         && is_web(opener_document)
         && (target_url.is_empty() || target_url == "about:blank" || is_web(target_url))
 }
@@ -2035,8 +2029,10 @@ mod tests {
     use crate::config::ExtensionConfig;
 
     #[test]
-    fn sized_popups_from_web_pages_open_little_windows() {
+    fn popups_from_web_pages_open_little_windows() {
         let page = "https://shop.example/checkout";
+        // A sized sign-in popup, or window.open(url, name) with no features
+        // (menu.m reports both as a popup: each keeps its opener).
         assert!(opens_little_window(page, true, "https://accounts.example/oauth?x=1"));
         assert!(opens_little_window("http://127.0.0.1:8000/opener.html", true, "http://127.0.0.1:8000/popup.html"));
         // Popups that start blank and navigate later.
@@ -2047,7 +2043,8 @@ mod tests {
     #[test]
     fn other_popups_keep_opening_as_tabs() {
         let page = "https://shop.example/checkout";
-        // No size: an ordinary target=_blank link or window.open(url).
+        // Not a popup: a target=_blank link, or window.open(url, '_blank',
+        // 'noopener') (no opener to keep).
         assert!(!opens_little_window(page, false, "https://accounts.example/"));
         // Internal pages and the error page never get popups (their opener
         // URL is empty), nor does anything that is not a web page.

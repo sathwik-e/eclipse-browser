@@ -13,8 +13,11 @@
 // prints the policy context menu.m publishes for eclipse:// navigations.
 //
 // Usage: harness <scenario>   (run.sh builds and runs it; it prints MSG,
-// TAB-FALLBACK, ACTION, POLICY, KEY, RESULT and WINDOW lines and exits after
-// a few seconds; it exits with status 2 if it cannot become the key app)
+// TAB-FALLBACK, ACTION, POLICY, KEY, BAR, RESULT and WINDOW lines and exits
+// after a few seconds; it exits with status 2 if it cannot become the key
+// app). With HARNESS_SNAPSHOT_DIR set it also saves a PNG of each of its
+// windows (other than the tab's) just before it exits, to look at the chrome
+// (in the light theme with HARNESS_LIGHT=1).
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
@@ -31,11 +34,15 @@ extern void eclipse_configure_window(void *windowPtr);
 extern int eclipse_open_standalone_little_window(const char *url, const char *userAgent, int adblock,
                                                  int focusAddress);
 extern int eclipse_little_window_load(uint64_t windowId, const char *url);
+extern void eclipse_set_little_window_theme(double red, double green, double blue, int dark);
+extern int eclipse_show_little_command_bar(const char *const *titles, const char *const *urls, size_t count,
+                                           double red, double green, double blue);
 
 static Class gFakeWryClass;
 static WKWebView *gTab;
 static NSWindow *gTabWindow;
 static int gUnsafeSchemeCalls = 0, gTabFallbacks = 0;
+static int gPort = 8831;
 
 static void scheme_start(id self, SEL _cmd, WKWebView *webView, id<WKURLSchemeTask> task) {
     (void)self; (void)_cmd;
@@ -64,9 +71,10 @@ static void ipc_receive(id self, SEL _cmd, WKUserContentController *controller, 
 }
 
 /* Stands in for Rust's handling of the menu callback: an address typed in a
-   Little Eclipse window is passed through unchanged (app.rs resolves it; this
-   checks menu.m's own refusal of anything but http(s)), and ⌥⌘N opens a
-   blank standalone window. Asynchronous, like the event loop. */
+   Little Eclipse window or in the ⌥⌘N bar is passed through unchanged (app.rs
+   resolves it; this checks menu.m's own refusal of anything but http(s)),
+   and ⌥⌘N shows the bar with three web suggestions and one internal page
+   (which menu.m must leave out). Asynchronous, like the event loop. */
 static void menu_action(const char *action) {
     printf("ACTION %s\n", action);
     NSString *command = @(action);
@@ -81,8 +89,20 @@ static void menu_action(const char *action) {
             int ok = eclipse_little_window_load(windowId, text.UTF8String);
             printf("LOAD %s ok=%d\n", text.UTF8String, ok);
         } else if ([command isEqualToString:@"new_little_window"]) {
-            int ok = eclipse_open_standalone_little_window("", "", 0, 1);
-            printf("NEWLITTLE ok=%d\n", ok);
+            NSString *base = [NSString stringWithFormat:@"http://localhost:%d", gPort + 1];
+            NSArray<NSString *> *urls = @[ [base stringByAppendingString:@"/pop.html"],
+                                           @"eclipse://localhost/settings",
+                                           [base stringByAppendingString:@"/dl.html"],
+                                           [base stringByAppendingString:@"/dla.html"] ];
+            const char *titles[] = {"Popup page", "Settings", "Downloads", "Save page"};
+            const char *urlStrings[4];
+            for (int i = 0; i < 4; i++) urlStrings[i] = urls[i].UTF8String;
+            int ok = eclipse_show_little_command_bar(titles, urlStrings, 4, 0.2, 0.4, 1.0);
+            printf("COMMANDBAR ok=%d\n", ok);
+        } else if ([command hasPrefix:@"little_command_bar_open:"]) {
+            NSString *text = [command substringFromIndex:@"little_command_bar_open:".length];
+            int ok = eclipse_open_standalone_little_window(text.UTF8String, "", 0, 0);
+            printf("BAROPEN %s ok=%d\n", text.UTF8String, ok);
         }
     });
 }
@@ -230,10 +250,112 @@ static NSArray<NSWindow *> *little_windows(void) {
     return out;
 }
 
-/* The host label on a Little Eclipse window's top bar. */
+/* The address on a Little Eclipse window's top bar. */
 static NSString *host_label(NSWindow *window) {
     NSButton *host = (NSButton *)window_control(window, @"eclipse-little-host");
     return host != nil ? host.title : @"(no label)";
+}
+
+/* The part of the address drawn brightest (the host). */
+static NSString *bright_part(NSWindow *window) {
+    NSButton *host = (NSButton *)window_control(window, @"eclipse-little-host");
+    NSAttributedString *title = host.attributedTitle;
+    NSMutableString *out = [NSMutableString string];
+    [title enumerateAttribute:NSForegroundColorAttributeName
+                      inRange:NSMakeRange(0, title.length)
+                      options:0
+                   usingBlock:^(id value, NSRange range, BOOL *stop) {
+                       (void)stop;
+                       if ([value isEqual:[NSColor labelColor]]) [out appendString:[title.string substringWithRange:range]];
+                   }];
+    return out;
+}
+
+/* The ⌥⌘N bar's panel, while it is on screen. */
+static NSWindow *command_bar(void) {
+    for (NSWindow *window in NSApp.windows) {
+        if (window.isVisible && [NSStringFromClass([window class]) isEqualToString:@"EclipseCommandBarPanel"]) {
+            return window;
+        }
+    }
+    return nil;
+}
+
+/* The bar's state: on screen, key, its distance from the top-right corner of
+   its screen, its rows ("Title — detail", the chosen one starred). */
+static void print_bar(const char *when) {
+    NSWindow *bar = command_bar();
+    if (bar == nil) {
+        printf("BAR %s shown=0\n", when);
+        return;
+    }
+    NSRect visible = bar.screen.visibleFrame;
+    NSTextField *field = (NSTextField *)window_control(bar, @"eclipse-commandbar-field");
+    BOOL focused = field.currentEditor != nil && bar.firstResponder == field.currentEditor;
+    NSMutableString *rows = [NSMutableString string];
+    for (int i = 0;; i++) {
+        NSView *row = window_control(bar, [NSString stringWithFormat:@"eclipse-commandbar-row-%d", i]);
+        if (row == nil) break;
+        NSTextField *label = nil;
+        for (NSView *child in row.subviews) {
+            if ([child isKindOfClass:[NSTextField class]] && ((NSTextField *)child).stringValue.length > 1) {
+                label = (NSTextField *)child;
+            }
+        }
+        CGColorRef background = row.layer.backgroundColor;
+        BOOL chosen = background != NULL && CGColorGetAlpha(background) > 0.5;
+        [rows appendFormat:@"[%@%@]", chosen ? @"*" : @"", label.stringValue ?: @""];
+    }
+    printf("BAR %s shown=1 key=%d right=%.0f top=%.0f focused=%d placeholder=\"%s\" text=\"%s\" rows=%s\n", when,
+           bar.isKeyWindow, NSMaxX(visible) - NSMaxX(bar.frame), NSMaxY(visible) - NSMaxY(bar.frame), focused,
+           field.placeholderString.UTF8String ?: "", field.stringValue.UTF8String ?: "", rows.UTF8String);
+}
+
+/* Types `text` into the bar's field as the keyboard would, then sends
+   `command` (moveDown:, insertNewline:, cancelOperation:; NULL: none). */
+static void type_in_bar(NSString *text, SEL command) {
+    NSWindow *bar = command_bar();
+    NSTextField *field = (NSTextField *)window_control(bar, @"eclipse-commandbar-field");
+    NSTextView *editor = (NSTextView *)field.currentEditor;
+    if (editor == nil) {
+        printf("NO BAR EDITOR\n");
+        return;
+    }
+    if (text != nil) [editor insertText:text replacementRange:editor.selectedRange];
+    if (command != NULL) [editor doCommandBySelector:command];
+}
+
+/* What Copy Link put on the test pasteboard (ECLIPSE_TEST_PASTEBOARD). */
+static NSString *pasteboard_text(void) {
+    const char *name = getenv("ECLIPSE_TEST_PASTEBOARD");
+    if (name == NULL) return @"(no test pasteboard)";
+    return [[NSPasteboard pasteboardWithName:@(name)] stringForType:NSPasteboardTypeString] ?: @"(empty)";
+}
+
+/* A control in any window (the site-information popover has its own). */
+static NSView *any_control(NSString *identifier) {
+    for (NSWindow *window in NSApp.windows) {
+        NSView *view = window_control(window, identifier);
+        if (view != nil && window.isVisible) return view;
+    }
+    return nil;
+}
+
+static void snapshot_windows(NSString *scenario) {
+    const char *dir = getenv("HARNESS_SNAPSHOT_DIR");
+    if (dir == NULL) return;
+    int n = 0;
+    for (NSWindow *window in NSApp.windows) {
+        if (window == gTabWindow || !window.isVisible || window.contentView == nil) continue;
+        NSView *view = window.contentView.superview ?: window.contentView;
+        NSBitmapImageRep *rep = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
+        if (rep == nil) continue;
+        [view cacheDisplayInRect:view.bounds toBitmapImageRep:rep];
+        NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        NSString *path = [NSString stringWithFormat:@"%s/%@-%d.png", dir, scenario, n++];
+        [png writeToFile:path atomically:YES];
+        printf("SNAPSHOT %s\n", path.UTF8String);
+    }
 }
 
 static void print_editing(NSWindow *window, const char *when) {
@@ -290,6 +412,7 @@ static const char *key_window_name(void) {
     if (key == nil) return "none";
     if (key == gTabWindow) return "tab";
     if (key.isSheet) return "sheet";
+    if (key == command_bar()) return "bar";
     return [little_windows() containsObject:key] ? "little" : "other";
 }
 
@@ -319,9 +442,12 @@ int main(int argc, char **argv) {
         NSString *scenario = argc > 1 ? @(argv[1]) : @"legit";
         const char *portEnv = getenv("HARNESS_PORT");
         int port = portEnv != NULL ? atoi(portEnv) : 8831;
+        gPort = port;
         [NSApplication sharedApplication];
         NSApp.activationPolicy = NSApplicationActivationPolicyAccessory;
         eclipse_install_menu(menu_action);
+        // HARNESS_LIGHT=1: the light (Sol) frame instead of the default dark one.
+        if (getenv("HARNESS_LIGHT") != NULL) eclipse_set_little_window_theme(0.94, 0.945, 0.957, 0);
 
         // objc2 names classes "<module path>::<type><crate version>".
         gFakeWryClass = objc_allocateClassPair([WKWebView class],
@@ -468,9 +594,117 @@ int main(int argc, char **argv) {
                 });
                 // The tab goes away: a standalone window has no opener to follow.
                 after(2.0, ^{ [gTab removeFromSuperview]; });
-            } else if ([scenario isEqualToString:@"address"]) {
-                // ⌥⌘N: a blank standalone window, address field focused.
+            } else if ([scenario isEqualToString:@"plainopen"]) {
+                after(1.5, ^{
+                    WKWebView *webView = littleWebView(@"/pop.html");
+                    [webView evaluateJavaScript:@"window.opener ? 'yes' : 'no'"
+                              completionHandler:^(id result, NSError *error) {
+                                  (void)error;
+                                  printf("OPENER %s\n", [[result description] UTF8String] ?: "(error)");
+                              }];
+                });
+            } else if ([scenario isEqualToString:@"copylink"]) {
+                // The bar's Copy Link button.
+                after(1.5, ^{
+                    WKWebView *webView = littleWebView(@"/pop.html");
+                    NSView *copy = window_control(webView.window, @"eclipse-little-copy");
+                    if (copy != nil) click(webView.window, copy);
+                    else printf("NO COPY BUTTON\n");
+                    NSView *copied = window_control(webView.window, @"eclipse-little-copied");
+                    printf("COPY pasteboard=\"%s\" copied_shown=%d\n", pasteboard_text().UTF8String,
+                           copied != nil && !copied.hidden);
+                });
+                after(3.5, ^{
+                    WKWebView *webView = littleWebView(@"/pop.html");
+                    NSView *copied = window_control(webView.window, @"eclipse-little-copied");
+                    printf("COPY later copied_shown=%d\n", copied != nil && !copied.hidden);
+                });
+            } else if ([scenario isEqualToString:@"siteinfo"]) {
+                // The "i" button's popover, and Copy Link in it.
+                after(1.5, ^{
+                    WKWebView *webView = littleWebView(@"/pop.html");
+                    NSView *info = window_control(webView.window, @"eclipse-little-info");
+                    printf("INFO button=%d label=\"%s\"\n", info != nil, info.accessibilityLabel.UTF8String ?: "");
+                    if (info != nil) click(webView.window, info);
+                });
+                after(2.3, ^{
+                    NSTextField *heading = (NSTextField *)any_control(@"eclipse-little-info-heading");
+                    NSTextField *host = (NSTextField *)any_control(@"eclipse-little-info-host");
+                    printf("INFO heading=\"%s\" host=\"%s\"\n", heading.stringValue.UTF8String ?: "(none)",
+                           host.stringValue.UTF8String ?: "(none)");
+                    snapshot_windows(@"siteinfo-shown");
+                    NSButton *copy = (NSButton *)any_control(@"eclipse-little-info-copy");
+                    if (copy != nil) [copy performClick:nil];
+                    printf("INFO copied pasteboard=\"%s\"\n", pasteboard_text().UTF8String);
+                });
+                after(3.0, ^{
+                    printf("INFO after popover=%d\n", any_control(@"eclipse-little-info-heading") != nil);
+                });
+            } else if ([scenario isEqualToString:@"commandbar"]) {
+                // ⌥⌘N with the browser window hidden: the bar, then an
+                // address typed into it opens a standalone window.
+                [gTabWindow orderOut:nil];
                 press(@"n", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+                after(0.8, ^{
+                    print_key();
+                    print_bar("shown");
+                    snapshot_windows(@"commandbar-shown");
+                    type_in_bar([NSString stringWithFormat:@"http://localhost:%d/pop.html?bar", port + 1], NULL);
+                    print_bar("typed");
+                    type_in_bar(nil, @selector(insertNewline:));
+                    print_bar("returned");
+                });
+                after(2.5, ^{ print_key(); });
+            } else if ([scenario isEqualToString:@"commandbarpick"]) {
+                // Typing filters the suggestions; ↓ and Return open one.
+                press(@"n", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+                after(0.8, ^{
+                    type_in_bar(@"down", NULL);
+                    print_bar("filtered");
+                    type_in_bar(nil, @selector(moveDown:));
+                    print_bar("down");
+                    type_in_bar(nil, @selector(insertNewline:));
+                });
+            } else if ([scenario isEqualToString:@"commandbarclose"]) {
+                // Escape, the × button, ⌘W and a click elsewhere each close
+                // the bar without opening anything.
+                press(@"n", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+                after(0.6, ^{
+                    print_bar("open1");
+                    type_in_bar(@"pop", @selector(cancelOperation:));
+                });
+                after(0.9, ^{
+                    print_bar("escaped");
+                    press(@"n", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+                });
+                after(1.5, ^{
+                    print_bar("open2");
+                    NSWindow *bar = command_bar();
+                    NSView *close = window_control(bar, @"eclipse-commandbar-close");
+                    if (close != nil) click(bar, close);
+                    else printf("NO CLOSE BUTTON\n");
+                });
+                after(1.8, ^{
+                    print_bar("closed");
+                    press(@"n", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+                });
+                after(2.4, ^{
+                    print_bar("open3");
+                    press(@"w", NSEventModifierFlagCommand);
+                });
+                after(2.7, ^{
+                    print_bar("cmdw");
+                    press(@"n", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+                });
+                after(3.2, ^{
+                    print_bar("open4");
+                    [gTabWindow makeKeyAndOrderFront:nil];
+                });
+                after(3.5, ^{ print_bar("clickedaway"); });
+            } else if ([scenario isEqualToString:@"address"]) {
+                // A blank standalone window (what ⌥⌘N opens without its bar),
+                // address field focused.
+                printf("NEWLITTLE ok=%d\n", eclipse_open_standalone_little_window("", "", 0, 1));
                 after(1.0, ^{
                     NSWindow *w = little_windows().firstObject;
                     print_key();
@@ -537,6 +771,19 @@ int main(int argc, char **argv) {
                     [w setFrame:frame display:YES];
                 });
                 after(2.7, ^{ fit("wide"); });
+            } else if ([scenario isEqualToString:@"longpath"]) {
+                // A path far too long for the bar, with another site's name
+                // in it: the path is shortened, never the host.
+                NSString *longPath = [NSString stringWithFormat:@"http://localhost:%d/pop.html?u=accounts.example.com/%@",
+                                      port + 1, [@"" stringByPaddingToLength:200 withString:@"x" startingAtIndex:0]];
+                eclipse_open_standalone_little_window(longPath.UTF8String, "", 0, 0);
+                after(1.5, ^{
+                    NSWindow *w = little_windows().firstObject;
+                    NSButton *host = (NSButton *)window_control(w, @"eclipse-little-host");
+                    BOOL fits = host.cell.cellSize.width <= NSWidth(host.frame) + 0.5;
+                    printf("PATHFIT title=\"%s\" fits=%d bright=\"%s\"\n", host.title.UTF8String, fits,
+                           bright_part(w).UTF8String);
+                });
             } else if ([scenario isEqualToString:@"dlstandalone"]) {
                 // A link from another app to a file: it downloads, and the
                 // empty window closes while the download goes on.
@@ -576,14 +823,15 @@ int main(int argc, char **argv) {
                        scenario.UTF8String, (unsigned long)windows.count, gTabFallbacks, gUnsafeSchemeCalls,
                        eclipse_little_window_count_for_view((__bridge void *)gTab));
                 printf("TABURL %s\n", gTab.URL.absoluteString.UTF8String ?: "(nil)");
+                snapshot_windows(scenario);
                 CGFloat top = NSMaxY([NSScreen screens].firstObject.frame);
                 for (NSWindow *window in windows) {
                     WKWebView *webView = window_webview(window);
                     NSRect frame = window.frame;
-                    printf("WINDOW title=\"%s\" host=\"%s\" url=%s frame=%.0f,%.0f,%.0fx%.0f\n",
+                    printf("WINDOW title=\"%s\" host=\"%s\" url=%s frame=%.0f,%.0f,%.0fx%.0f bright=\"%s\"\n",
                            window.title.UTF8String, host_label(window).UTF8String,
                            webView.URL.absoluteString.UTF8String ?: "(nil)", NSMinX(frame), top - NSMaxY(frame),
-                           NSWidth(frame), NSHeight(frame));
+                           NSWidth(frame), NSHeight(frame), bright_part(window).UTF8String);
                 }
                 fflush(stdout);
                 exit(0);

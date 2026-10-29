@@ -3,6 +3,7 @@ mod config;
 mod events;
 #[cfg(target_os = "macos")]
 mod macos_menu;
+mod max;
 mod tab;
 mod ui_assets;
 

@@ -8,7 +8,8 @@
  * the token is spliced into the JSON text instead of being put on an object.
  * Rust still decides what each message may do from the posting frame's URL
  * (reported by WebKit, not by the page), so a website can only ever report
- * its own scroll, favicon, audio and URL, and open http(s) links in tabs.
+ * its own scroll, favicon, audio and URL, open http(s) links in tabs, and
+ * ask for a Shift-hover link preview (which Rust checks on its own).
  * Internal eclipse:// pages get a narrow helper so their own UI can post.
  */
 (function () {
@@ -480,6 +481,99 @@
     },
     true
   );
+
+  /* --------------------------------------------- Shift-hover link previews */
+  // 5-Second Previews: Shift held over a link for a moment asks for a
+  // preview in a Little Eclipse window, once per Shift press. Only trusted
+  // events count, and Rust checks the rest itself (the setting, the active
+  // tab, that Shift really is held, a cool-down), so a page that fakes or
+  // replays this gains nothing.
+  var PREVIEW_DELAY_MS = 600;
+  var hoveredLink = null;
+  var previewTimer = null;
+  var previewSent = false;
+
+  function linkHref(target) {
+    var anchor = target && target.closest ? target.closest('a[href], area[href]') : null;
+    var href = anchor && anchor.href;
+    return isHttpUrl(href) ? href : null;
+  }
+
+  function cancelPreview() {
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = null;
+  }
+
+  function armPreview() {
+    cancelPreview();
+    if (previewSent || !hoveredLink) return;
+    var href = hoveredLink;
+    previewTimer = setTimeout(function () {
+      previewTimer = null;
+      if (previewSent || hoveredLink !== href) return;
+      previewSent = true;
+      var payload = message('preview_link');
+      payload.url = href;
+      post(payload);
+    }, PREVIEW_DELAY_MS);
+  }
+
+  if (!internal) {
+    document.addEventListener(
+      'mouseover',
+      function (event) {
+        if (!event.isTrusted) return;
+        var href = linkHref(event.target);
+        if (href !== hoveredLink) {
+          hoveredLink = href;
+          cancelPreview();
+        }
+        if (href && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && !previewTimer) {
+          armPreview();
+        }
+      },
+      true
+    );
+    document.addEventListener(
+      'mouseout',
+      function (event) {
+        if (!event.isTrusted || linkHref(event.relatedTarget) === hoveredLink) return;
+        hoveredLink = null;
+        cancelPreview();
+      },
+      true
+    );
+    window.addEventListener(
+      'keydown',
+      function (event) {
+        if (!event.isTrusted) return;
+        // Any other key means typing (Shift for a capital), not a preview.
+        if (event.key === 'Shift' && !event.repeat) {
+          previewSent = false;
+          armPreview();
+        } else {
+          cancelPreview();
+        }
+      },
+      true
+    );
+    window.addEventListener(
+      'keyup',
+      function (event) {
+        if (!event.isTrusted || event.key !== 'Shift') return;
+        previewSent = false;
+        cancelPreview();
+      },
+      true
+    );
+    ['mousedown', 'wheel'].forEach(function (type) {
+      window.addEventListener(type, cancelPreview, { capture: true, passive: true });
+    });
+    window.addEventListener('blur', function () {
+      previewSent = false;
+      cancelPreview();
+    });
+  }
 
   /* ----------------------------------------------------------- find in page */
   var FIND_CSS = [

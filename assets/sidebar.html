@@ -2147,6 +2147,25 @@ body.is-collapsed-state:not(.floating-popout) *::after {
   text-overflow: ellipsis;
 }
 
+.arc-cmd-mode-chip {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.arc-cmd-mode-chip[data-mode="chatgpt"] {
+  background: #10A37F;
+}
+
+.arc-cmd-mode-chip[data-mode="claude"] {
+  background: #D97757;
+}
+
 .arc-cmd-section-title {
   font-size: 9.5px;
   text-transform: uppercase;
@@ -2168,11 +2187,12 @@ body.is-collapsed-state:not(.floating-popout) *::after {
         <circle cx="11" cy="11" r="7"/>
         <path d="m20 20-3.5-3.5"/>
       </svg>
+      <span id="arc-cmd-mode-chip" class="arc-cmd-mode-chip" style="display: none;"></span>
       <input type="text" id="arc-cmd-input" class="arc-cmd-input" placeholder="Search or type a URL..." spellcheck="false" autocomplete="off" />
       <button id="arc-cmd-close" class="arc-cmd-close-btn" title="Close (esc)">&times;</button>
     </div>
     <div class="arc-cmd-hint-row">
-      <span><kbd>↵</kbd> open in new tab</span>
+      <span id="arc-cmd-hint-main"><kbd>↵</kbd> open in new tab</span>
       <span><kbd>esc</kbd> cancel</span>
     </div>
     <div id="arc-cmd-results" class="arc-cmd-results"></div>
@@ -2358,7 +2378,8 @@ body.is-collapsed-state:not(.floating-popout) *::after {
     <span>New Tab</span>
   </button>
   <button type="button" class="arc-tidy-btn" id="btn-tidy-tabs" title="Tidy Tabs: Auto-group &amp; deduplicate open tabs (⇧⌘Y)">
-    <span>✨ Tidy</span>
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 3l-7.5 7.5"/><path d="M10 9l5 5"/><path d="M10 9c-3 1-5 4-6 10 2.5 0 4.5-.5 6-1.5l1-2.5 1.5 1c1.5-1.5 2.3-3 2.5-4"/></svg>
+    <span>Tidy</span>
   </button>
 </div>
 
@@ -2777,7 +2798,13 @@ omnibar.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     const val = omnibar.value.trim();
     if (val) {
-      sendCommand({ action: 'navigate', url: val });
+      // Max > Instant Links: Shift+Return opens the top result ("a, b"
+      // opens one tab per query).
+      if (e.shiftKey && currentConfig.instant_links !== false) {
+        sendCommand({ action: 'instant_links', query: val, replace_current: true });
+      } else {
+        sendCommand({ action: 'navigate', url: val });
+      }
       omnibarDirty = false;
       omnibar.blur();
     }
@@ -3490,7 +3517,18 @@ window.updateBrowserState = function(state) {
 
   renderPinned();
   renderTabs();
+  updateTidyButton();
 };
+
+// Max > Tidy Tabs: the Tidy button shows once this Space has more than six
+// tabs (⇧⌘Y and the command bar tidy at any time).
+function updateTidyButton() {
+  const btn = document.getElementById('btn-tidy-tabs');
+  if (!btn) return;
+  const count = currentTabs.filter(t => !t.is_pinned && t.favorite_index == null && (t.workspace || 'Default') === currentWorkspace).length;
+  const display = currentConfig.tidy_tabs_button !== false && count > 6 ? '' : 'none';
+  if (btn.style.display !== display) btn.style.display = display;
+}
 
 let draggedFavIndex = null;
 let draggedTabId = null;
@@ -3874,7 +3912,7 @@ function renderDownloadsDrawer() {
   const list = document.getElementById('downloads-list-container');
   if (!list) return;
   const dls = currentConfig.downloads || [];
-  const sig = dls.map(d => `${d.id}\u0001${d.status}\u0001${d.file_name}`).join('\u0002');
+  const sig = dls.map(d => `${d.id}\u0001${d.status}\u0001${d.file_name}\u0001${d.original_name || ''}`).join('\u0002');
   if (sig === lastDownloadsSig) return;
   lastDownloadsSig = sig;
   list.replaceChildren();
@@ -3888,6 +3926,8 @@ function renderDownloadsDrawer() {
     const row = el('div', 'fav-manager-item download-row');
     const top = el('div', 'download-row-top');
     top.append(el('div', 'fav-manager-title download-name', d.file_name), el('span', 'download-status ' + statusClass, statusLabel));
+    // Max > Tidy Downloads renamed a junk-named file after its page.
+    const renamed = d.original_name ? el('div', 'fav-manager-url download-renamed', `Renamed from ${d.original_name}`) : null;
     const actions = el('div', 'download-row-actions');
     const openBtn = el('button', 'btn-small', 'Open');
     openBtn.dataset.downloadAction = 'open_download';
@@ -3896,7 +3936,9 @@ function renderDownloadsDrawer() {
     revealBtn.dataset.downloadAction = 'reveal_download';
     revealBtn.dataset.downloadId = String(d.id);
     actions.append(openBtn, revealBtn);
-    row.append(top, actions);
+    row.append(top);
+    if (renamed) row.append(renamed);
+    row.append(actions);
     list.appendChild(row);
   });
 }
@@ -4112,9 +4154,22 @@ window.popoutSidebar = function(show) {
 // it keeps the sidebar held open until command_bar_closed.
 const cmdOverlay = document.getElementById('arc-command-bar');
 const cmdInput = document.getElementById('arc-cmd-input');
+const cmdModeChip = document.getElementById('arc-cmd-mode-chip');
+const CMD_PLACEHOLDER = cmdInput.placeholder;
 let cmdActiveIndex = 0;
 let cmdItemsList = [];
 let commandBarOpenedAt = 0;
+// A mode replaces the suggestions with one action for what is typed:
+// { kind: 'chatgpt' | 'claude' } (Max > ChatGPT in the Command Bar) or
+// { kind: 'rename', tabId } ("Rename Tab").
+let cmdMode = null;
+
+// Nothing is sent to an assistant until its row is chosen: the question
+// then opens as that site's own page in a new tab.
+const CMD_ASSISTANTS = {
+  chatgpt: { name: 'ChatGPT', url: q => q ? `https://chatgpt.com/?q=${encodeURIComponent(q)}` : 'https://chatgpt.com/' },
+  claude: { name: 'Claude', url: q => q ? `https://claude.ai/new?q=${encodeURIComponent(q)}` : 'https://claude.ai/new' }
+};
 
 const CMD_ICONS = {
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="#5E9EFF" stroke-width="2.2" width="14" height="14"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
@@ -4131,8 +4186,53 @@ const CMD_COMMANDS = [
   { title: 'Downloads', sub: '⌘J', command: { action: 'command_bar_open_url', command: 'open_downloads' } },
   { title: 'Notes', sub: 'Open Eclipse Notes', command: { action: 'open_notes_tab' } },
   { title: 'Easel', sub: 'Open Eclipse Easel', command: { action: 'open_easel_tab' } },
-  { title: 'Tidy Tabs', sub: 'Group & deduplicate open tabs', command: { action: 'tidy_tabs' } }
+  { title: 'Tidy Tabs', sub: 'Group & deduplicate open tabs', command: { action: 'tidy_tabs' } },
+  { title: 'Rename Tab', sub: 'Give the current tab a name of its own', mode: 'rename' }
 ];
+
+function assistantsEnabled() {
+  return currentConfig.ai_in_command_bar !== false;
+}
+
+// "chatg", "ChatGPT", "clau"… + Tab switches to asking that assistant.
+function assistantForInput(text) {
+  const typed = text.trim().toLowerCase();
+  if (!assistantsEnabled() || typed.length < 3) return null;
+  return Object.keys(CMD_ASSISTANTS).find(key => key.startsWith(typed)) || null;
+}
+
+function setCommandMode(mode) {
+  cmdMode = mode;
+  cmdActiveIndex = 0;
+  if (!mode) {
+    cmdModeChip.style.display = 'none';
+    cmdInput.placeholder = CMD_PLACEHOLDER;
+    return;
+  }
+  const label = mode.kind === 'rename' ? 'Rename Tab' : `Ask ${CMD_ASSISTANTS[mode.kind].name}`;
+  cmdModeChip.textContent = label;
+  cmdModeChip.dataset.mode = mode.kind;
+  cmdModeChip.style.display = '';
+  cmdInput.placeholder = mode.kind === 'rename' ? 'Tab name (empty: the page title)' : `${label} anything…`;
+}
+
+function modeSuggestions(q) {
+  if (cmdMode.kind === 'rename') {
+    return [{
+      title: q ? `Rename to "${q}"` : 'Use the page title',
+      sub: 'Current tab',
+      icon: 'tab',
+      command: { action: 'rename_tab', id: cmdMode.tabId, title: q }
+    }];
+  }
+  const assistant = CMD_ASSISTANTS[cmdMode.kind];
+  return [{
+    title: q ? `Ask ${assistant.name}: ${q}` : `Open ${assistant.name}`,
+    sub: `Opens ${new URL(assistant.url('')).host} in a new tab`,
+    icon: 'command',
+    command: { action: 'new_tab', url: assistant.url(q) }
+  }];
+}
 
 function looksLikeUrl(q) {
   return !/\s/.test(q) && (/^[a-z][a-z0-9+.-]*:\/\//i.test(q) || q.includes('.') || q.startsWith('localhost'));
@@ -4160,29 +4260,41 @@ function renderCommandSuggestions(query) {
   const matches = (...fields) => !lower || fields.some(f => String(f || '').toLowerCase().includes(lower));
   const sections = [];
 
-  if (q) {
+  if (cmdMode) {
+    sections.push({ title: '', items: modeSuggestions(q) });
+  } else if (q) {
     const direct = [];
     if (looksLikeUrl(q)) {
       direct.push({ title: `Open ${q}`, sub: q, icon: 'globe', command: { action: 'navigate_or_new_tab', url: q } });
     }
-    direct.push({ title: `Search for "${q}"`, sub: 'Search the web', icon: 'search', command: { action: 'navigate_or_new_tab', url: searchUrlFor(q) } });
+    const instant = currentConfig.instant_links !== false;
+    direct.push({ title: `Search for "${q}"`, sub: instant ? 'Search the web · ⇧↵ opens the top result' : 'Search the web', icon: 'search', command: { action: 'navigate_or_new_tab', url: searchUrlFor(q) } });
+    const typedAssistant = assistantForInput(q);
+    if (typedAssistant) {
+      direct.unshift({ title: `Ask ${CMD_ASSISTANTS[typedAssistant].name}…`, sub: 'Press Tab to ask a question', icon: 'command', mode: typedAssistant });
+    } else if (assistantsEnabled() && !looksLikeUrl(q)) {
+      Object.keys(CMD_ASSISTANTS).forEach(key => {
+        const assistant = CMD_ASSISTANTS[key];
+        direct.push({ title: `Ask ${assistant.name}: ${q}`, sub: `Opens ${new URL(assistant.url('')).host} in a new tab`, icon: 'command', command: { action: 'new_tab', url: assistant.url(q) } });
+      });
+    }
     sections.push({ title: '', items: direct });
   }
 
-  const favs = (currentConfig.favorites || [])
+  const favs = cmdMode ? [] : (currentConfig.favorites || [])
     .map((f, idx) => ({ title: f.title, sub: f.url, icon: 'star', command: { action: 'open_favorite', index: idx } }))
     .filter(item => matches(item.title, item.sub));
   sections.push({ title: 'Favorites', items: favs });
 
-  const tabs = currentTabs
+  const tabs = cmdMode ? [] : currentTabs
     .filter(t => (t.is_pinned || t.favorite_index != null || (t.workspace || 'Default') === currentWorkspace) && matches(t.title, t.url))
     .slice(0, q ? 20 : 6)
     .map(t => ({ title: t.title || cleanUrl(t.url), sub: cleanUrl(t.url), icon: 'tab', command: { action: 'select_tab', id: t.id } }));
   sections.push({ title: 'Open Tabs', items: tabs });
 
-  const commands = CMD_COMMANDS
+  const commands = cmdMode ? [] : CMD_COMMANDS
     .filter(c => matches(c.title))
-    .map(c => ({ title: c.title, sub: c.sub, icon: 'command', command: c.command }));
+    .map(c => ({ title: c.title, sub: c.sub, icon: 'command', command: c.command, mode: c.mode }));
   sections.push({ title: 'Commands', items: commands });
 
   sections.forEach(section => {
@@ -4220,9 +4332,15 @@ window.showCommandBar = function() {
     commandBarOpen = true;
     commandBarOpenedAt = Date.now();
     cmdInput.value = '';
-    cmdActiveIndex = 0;
+    setCommandMode(null);
     renderCommandSuggestions('');
     cmdOverlay.style.display = 'flex';
+  }
+  const hint = document.getElementById('arc-cmd-hint-main');
+  if (hint) {
+    hint.replaceChildren(staticMarkup(currentConfig.instant_links !== false
+      ? '<span><kbd>↵</kbd> open · <kbd>⇧↵</kbd> top result · <kbd>,</kbd> several</span>'
+      : '<span><kbd>↵</kbd> open in new tab</span>'));
   }
   cmdInput.focus();
   cmdInput.select();
@@ -4236,6 +4354,7 @@ window.openCommandBar = function() {
 function closeCommandBar() {
   if (!commandBarOpen) return;
   commandBarOpen = false;
+  setCommandMode(null);
   cmdOverlay.style.display = 'none';
   if (document.activeElement === cmdInput) cmdInput.blur();
   sendCommand({ action: 'command_bar_closed' });
@@ -4244,6 +4363,24 @@ function closeCommandBar() {
 window.closeCommandBar = closeCommandBar;
 
 function executeCommandItem(item) {
+  if (item && CMD_ASSISTANTS[item.mode]) {
+    setCommandMode({ kind: item.mode });
+    cmdInput.value = '';
+    cmdInput.focus();
+    renderCommandSuggestions('');
+    return;
+  }
+  if (item && item.mode === 'rename') {
+    // Stays open: what is typed next is the tab's new name.
+    const tab = currentTabs.find(t => t.id === activeTabId);
+    if (!tab) return;
+    setCommandMode({ kind: 'rename', tabId: tab.id });
+    cmdInput.value = tab.title || '';
+    cmdInput.focus();
+    cmdInput.select();
+    renderCommandSuggestions(cmdInput.value);
+    return;
+  }
   // Close first: Rust releases the bar's hold and refocuses the page, then
   // runs the selection (which may itself re-open the sidebar, e.g. Preferences).
   closeCommandBar();
@@ -4268,6 +4405,20 @@ cmdInput.addEventListener('keydown', (e) => {
       cmdActiveIndex = (cmdActiveIndex - 1 + cmdItemsList.length) % cmdItemsList.length;
       updateCmdActiveClass();
     }
+  } else if (e.key === 'Tab' && !cmdMode && !e.shiftKey && assistantForInput(cmdInput.value)) {
+    // Max > ChatGPT in the Command Bar: "chatgpt" or "claude", then Tab.
+    e.preventDefault();
+    setCommandMode({ kind: assistantForInput(cmdInput.value) });
+    cmdInput.value = '';
+    renderCommandSuggestions('');
+  } else if (e.key === 'Backspace' && cmdMode && cmdInput.value === '') {
+    e.preventDefault();
+    setCommandMode(null);
+    renderCommandSuggestions('');
+  } else if (e.key === 'Enter' && e.shiftKey && !cmdMode && currentConfig.instant_links !== false && cmdInput.value.trim()) {
+    // Max > Instant Links: the top result of each query ("a, b; c").
+    e.preventDefault();
+    executeCommandItem({ command: { action: 'instant_links', query: cmdInput.value.trim() } });
   } else if (e.key === 'Enter') {
     e.preventDefault();
     const val = cmdInput.value.trim();
@@ -4279,7 +4430,14 @@ cmdInput.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     e.preventDefault();
     e.stopPropagation();
-    closeCommandBar();
+    if (cmdMode) {
+      // Leave the mode first; a second Escape closes the bar.
+      setCommandMode(null);
+      cmdInput.value = '';
+      renderCommandSuggestions('');
+    } else {
+      closeCommandBar();
+    }
   }
 });
 

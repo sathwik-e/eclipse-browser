@@ -34,6 +34,32 @@
     and the Downloads list. A window that was opened only for the file (a
     link to a `.zip` or `.dmg` from Mail or Slack, or a popup that turned out
     to be a file) closes once the download starts, rather than staying empty.
+- **Max**, Arc's Max features done without an AI service. A new Max section
+  in Settings switches each one (all on by default):
+  - **Tidy Tabs:** the Tidy button, now a broom, shows in the sidebar once
+    the Space has more than six tabs. ⇧⌘Y and the command bar tidy at any
+    time, and ⇧⌘T still brings back a duplicate it closed.
+  - **Instant Links:** Shift+Return on a search in the command bar or the
+    address field goes straight to the top result, through DuckDuckGo's
+    `!ducky` whatever the search engine (Google's "I'm Feeling Lucky" often
+    stops on a redirect notice). Searches separated by commas or semicolons
+    open one tab each, up to six. A web address opens as typed.
+  - **5-Second Previews:** holding Shift over a link for about 0.6 s opens it
+    in a Little Eclipse window. No summary is made.
+  - **Tidy Tab Titles:** pinned tabs and new favorites show their title
+    without the site's name, a signed-in address or unread counts
+    ("(3) Never Gonna Give You Up - YouTube" shows as "Never Gonna Give You
+    Up"). **Rename Tab** in the command bar gives any tab a name of its own
+    (an empty name gives the page title back); names survive a restart.
+  - **Tidy Downloads:** a finished download with a junk name (`download`,
+    `file`, numbers, a UUID, a hash or random token) is renamed after the
+    page in front when it started, or after the site and the date, keeping
+    its extension. It never replaces a file (an existing name gets " (2)"),
+    and the Downloads list shows "Renamed from …".
+  - **ChatGPT in the Command Bar:** type "chatgpt" or "claude" (or the start
+    of it) and press Tab to ask a question; Return opens it on chatgpt.com or
+    claude.ai in a new tab. The command bar also offers "Ask ChatGPT" and
+    "Ask Claude" rows for a search. Nothing is sent until you choose one.
 - **Little Eclipse windows for sign-in popups.** When a web page opens a
   popup window (`window.open` with a size, a position, the `popup` feature
   or turned-off toolbars, as sign-in and payment flows do) in response to a
@@ -84,6 +110,13 @@
   walked the tab on to Settings, Notes or Easel).
 - Websites' reports about a tab's page (favicon, audio, scroll position) are
   now accepted only from a frame on the same origin as the tab's document.
+- The one new command websites may send, `preview_link` (5-Second
+  Previews), opens nothing on the page's say-so: Eclipse reads the Shift key
+  from the system itself, and needs the setting on, the message from the
+  active tab's own document in the focused browser window, a plain http(s)
+  link without a user name or password, and 1.5 seconds since the last
+  preview. Popups and departing internal pages may not send it. Instant
+  Links and Rename Tab are the browser's own commands, never a page's.
 - A Little Eclipse window opened for a link from another app is built
   without the tab's page bridge or scripts, so its page cannot message the
   browser at all. Its address field loads only http(s) pages.

@@ -470,6 +470,8 @@ impl BrowserApp {
         let window = self.window.clone();
         let proxy = self.proxy.clone();
         let mut target_workspace = None;
+        let previous_id = self.active_tab_id;
+        let now = Instant::now();
 
         for tab in &mut self.tabs {
             if tab.id == id {
@@ -477,7 +479,7 @@ impl BrowserApp {
                 // Background tabs are not re-laid out on resize; catch up here.
                 tab.animate_bounds(bounds, 0.0);
                 tab.set_visible(true);
-                tab.last_active = Instant::now();
+                tab.last_active = now;
                 if is_http_url(&tab.url) {
                     self.last_web_url = tab.url.clone();
                 }
@@ -485,6 +487,11 @@ impl BrowserApp {
                     target_workspace = Some(tab.workspace.clone());
                 }
             } else {
+                // The tab being left was in use until now: its idle time
+                // (for hibernation) starts here, not when it was selected.
+                if tab.id == previous_id {
+                    tab.last_active = now;
+                }
                 tab.set_visible(false);
             }
         }
@@ -2018,17 +2025,24 @@ impl BrowserApp {
         }
     }
 
-    /// window.open / target=_blank from a page. Pages may not open internal
-    /// eclipse:// pages.
-    pub fn handle_new_window(&mut self, url: String) {
-        if url.is_empty() || url == "about:blank" {
-            self.create_tab("eclipse://newtab", true);
-            return;
-        }
-        if is_http_url(&url) {
-            self.create_tab(&url, true);
-        } else if url.starts_with("mailto:") || url.starts_with("tel:") {
-            let _ = std::process::Command::new("open").arg(&url).spawn();
+    /// window.open / target=_blank from a page that did not open a Little
+    /// Eclipse window (`sized`: the page asked for a window size). Pages may
+    /// not open internal eclipse:// pages.
+    pub fn handle_new_window(&mut self, url: String, sized: bool) {
+        match new_window_fallback(&url, sized) {
+            NewWindowFallback::NewTabPage => {
+                self.create_tab("eclipse://newtab", true);
+            }
+            NewWindowFallback::Tab => {
+                self.create_tab(&url, true);
+            }
+            NewWindowFallback::External => {
+                let _ = std::process::Command::new("open").arg(&url).spawn();
+            }
+            NewWindowFallback::Blocked => {
+                self.show_toast("Pop-up window blocked");
+            }
+            NewWindowFallback::Ignore => {}
         }
     }
 
@@ -2416,13 +2430,17 @@ impl BrowserApp {
         }
     }
 
-    /// Hibernates a background tab if it can safely lose its page state.
+    /// Hibernates a background tab if it can safely lose its page state. A
+    /// tab with Little Eclipse popups open stays awake: hibernating it would
+    /// close them (a sign-in in progress while the user fetches a code from
+    /// another tab).
     fn can_hibernate(tab: &Tab, active_id: usize) -> bool {
         tab.id != active_id
             && !tab.is_hibernated
             && tab.webview.is_some()
             && !tab.is_audible
             && !tab.is_loading
+            && !tab.has_little_windows()
     }
 
     /// "Clean memory": hibernate every background tab that is idle right now,
@@ -3062,6 +3080,43 @@ fn truncate_message(message: &str, limit: usize) -> String {
 
 /// Whether the app can exit now: quitting was requested (`deadline` is set)
 /// and nothing is still flushing, or the wait for it timed out.
+/// What a window.open or target=_blank link that did not open a Little
+/// Eclipse window does instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewWindowFallback {
+    /// Open the URL in a new tab.
+    Tab,
+    /// Open the new-tab page.
+    NewTabPage,
+    /// Hand the URL to the system (mailto:, tel:).
+    External,
+    /// Show that a popup was blocked.
+    Blocked,
+    /// Do nothing (internal pages, other schemes).
+    Ignore,
+}
+
+fn new_window_fallback(url: &str, sized: bool) -> NewWindowFallback {
+    if url.is_empty() || url == "about:blank" {
+        // A blank popup with a size (no user gesture, or over the popup
+        // limit) only makes sense to the script that opened it, and that
+        // script got null instead of a window: an empty tab would just be
+        // left behind.
+        return if sized {
+            NewWindowFallback::Blocked
+        } else {
+            NewWindowFallback::NewTabPage
+        };
+    }
+    if is_http_url(url) {
+        NewWindowFallback::Tab
+    } else if url.starts_with("mailto:") || url.starts_with("tel:") {
+        NewWindowFallback::External
+    } else {
+        NewWindowFallback::Ignore
+    }
+}
+
 fn quit_ready(deadline: Option<Instant>, flushes_pending: bool, now: Instant) -> bool {
     deadline.is_some_and(|deadline| !flushes_pending || now >= deadline)
 }
@@ -3476,6 +3531,24 @@ mod tests {
 
     fn config() -> BrowserConfig {
         BrowserConfig::default()
+    }
+
+    #[test]
+    fn popups_that_open_no_window_fall_back_to_tabs_unless_blank_and_sized() {
+        use NewWindowFallback::*;
+        // A sized blank popup the page got null for leaves no empty tab.
+        assert_eq!(new_window_fallback("", true), Blocked);
+        assert_eq!(new_window_fallback("about:blank", true), Blocked);
+        // Sized web popups (no gesture, over the limit) still open as tabs.
+        assert_eq!(new_window_fallback("https://accounts.example/", true), Tab);
+        // Unsized ones are unchanged.
+        assert_eq!(new_window_fallback("", false), NewTabPage);
+        assert_eq!(new_window_fallback("about:blank", false), NewTabPage);
+        assert_eq!(new_window_fallback("http://a.example/", false), Tab);
+        assert_eq!(new_window_fallback("mailto:a@b.example", false), External);
+        assert_eq!(new_window_fallback("tel:123", true), External);
+        assert_eq!(new_window_fallback("eclipse://localhost/settings", false), Ignore);
+        assert_eq!(new_window_fallback("javascript:alert(1)", true), Ignore);
     }
 
     #[test]

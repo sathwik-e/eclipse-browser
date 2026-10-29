@@ -14,12 +14,24 @@
     control over it: a page that is still loading, or that never finishes
     loading, is not shown as the host until it is actually on screen.
   - JavaScript dialogs appear as sheets on the popup. `window.close()` closes
-    it, and ⌘W closes it while it is in front.
+    it, and ⌘W closes it while it is in front, also while it shows a dialog.
+  - While a popup is in front, Reload, Stop, Back, Forward, Print, Zoom and
+    the Web Inspector act on the popup. Bookmark, Home and Find do nothing
+    there rather than act on the hidden tab behind it. Other shortcuts (New
+    Tab, Open Location, …) bring the browser window to the front first.
+  - `popup.focus()` and reopening a popup by name bring it to the front.
+    `resizeTo`/`moveTo` work within the popup's size limits, and the page
+    sees the window's real size and position.
+  - A link clicked in a popup opens in a new tab and brings the browser
+    window forward. A tab a popup's script opens stays behind it.
   - A popup can only show web pages, never internal `eclipse://` pages, and it
-    closes when the tab that opened it is closed or hibernated.
+    closes when the tab that opened it is closed or hibernated. A tab with a
+    popup open is never hibernated automatically or by "Clean memory".
   - Links without a size, popups from internal pages, popups a page opens
     without a click or key press, and popups beyond three per tab (ten in
-    all) still open as tabs.
+    all) still open as tabs. Such a popup with no address (the page meant to
+    write into it) shows "Pop-up window blocked" instead of leaving an empty
+    tab behind.
 
 ### Security
 - A page in a popup window is never taken for the tab that opened it. The
@@ -28,8 +40,16 @@
   change the tab's address, icon, scroll position or audio state, and it
   cannot load internal `eclipse://` resources. It can still open http(s)
   links in new tabs.
+- A popup cannot use `window.opener` to send its opener tab to internal
+  `eclipse://` pages, not even the new-tab page (from there it could have
+  walked the tab on to Settings, Notes or Easel).
 - Websites' reports about a tab's page (favicon, audio, scroll position) are
   now accepted only from a frame on the same origin as the tab's document.
+
+### Fixed
+- Tab hibernation counts a tab's idle time from when you leave it, not from
+  when you last selected it, so a tab you read for a long time is not
+  discarded seconds after you switch away.
 
 ## 1.0.0 — 2026-10-28
 

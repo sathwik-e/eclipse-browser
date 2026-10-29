@@ -112,13 +112,17 @@ impl NavState {
     /// started (exactly that URL, once; a subframe asking for the same URL
     /// neither gets nor spends the grant) or a main-frame back/forward
     /// navigation, which can only return to a page this tab already showed.
+    /// A navigation another webview started (a Little Eclipse popup through
+    /// `window.opener`) never reaches an internal page, not even the new-tab
+    /// page: from there it could walk the tab on to every other one.
     fn allows_navigation(&self, url: &str, context: PolicyContext) -> bool {
         if !is_eclipse_scheme(url) {
             return true;
         }
-        self.current_is_internal.load(Ordering::Relaxed)
+        let from_this_tab = !context.other_view
+            && (self.current_is_internal.load(Ordering::Relaxed) || is_newtab_url(url));
+        from_this_tab
             || (context.main_frame && context.back_forward)
-            || is_newtab_url(url)
             || (context.main_frame && self.take_browser_target(url))
     }
 
@@ -592,8 +596,9 @@ impl Tab {
                     return NewWindowResponse::Create { webview };
                 }
                 #[cfg(not(target_os = "macos"))]
-                let _ = (&nav_popup, features);
-                let _ = proxy_newwin.send_event(UserEvent::NewWindowRequested { url });
+                let _ = &nav_popup;
+                let sized = features.size.is_some();
+                let _ = proxy_newwin.send_event(UserEvent::NewWindowRequested { url, sized });
                 NewWindowResponse::Deny
             })
             .with_custom_protocol("eclipse".into(), move |_id, req| {
@@ -1009,6 +1014,24 @@ impl Tab {
         }
     }
 
+    /// Whether Little Eclipse popups opened from this tab (nested ones
+    /// included) are still open. They close when the tab's webview goes.
+    pub fn has_little_windows(&self) -> bool {
+        if self.webview.is_none() {
+            return false;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // The pointer is the live webview's (set when it was built).
+            let ptr = self.nav.view.load(Ordering::Relaxed) as *mut std::ffi::c_void;
+            !ptr.is_null() && crate::macos_menu::little_window_count_for_view(ptr) > 0
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
     pub fn hibernate(&mut self) {
         if self.webview.is_some() {
             self.pending_scroll_restore = Some((self.scroll_x, self.scroll_y));
@@ -1164,6 +1187,10 @@ pub struct PolicyContext {
     /// menu or `history.back()`): it can only reach an entry the tab already
     /// visited.
     pub back_forward: bool,
+    /// A script in another webview started the navigation: a Little Eclipse
+    /// popup setting `window.opener.location` (or targeting the tab by
+    /// name). Never the browser's own loads or the tab's own pages.
+    pub other_view: bool,
 }
 
 fn navigation_policy_context() -> PolicyContext {
@@ -2237,15 +2264,57 @@ mod tests {
     const MAIN: PolicyContext = PolicyContext {
         main_frame: true,
         back_forward: false,
+        other_view: false,
     };
     const BACK: PolicyContext = PolicyContext {
         main_frame: true,
         back_forward: true,
+        other_view: false,
     };
     const SUBFRAME: PolicyContext = PolicyContext {
         main_frame: false,
         back_forward: false,
+        other_view: false,
     };
+    /// A Little Eclipse popup navigating its opener tab.
+    const POPUP: PolicyContext = PolicyContext {
+        main_frame: true,
+        back_forward: false,
+        other_view: true,
+    };
+
+    #[test]
+    fn popups_cannot_walk_their_opener_into_internal_pages() {
+        let nav = NavState::default();
+        nav.note_commit("https://example.com/");
+        // opener.location = 'eclipse://localhost/newtab', then on to
+        // Settings once the tab shows an internal page.
+        assert!(!nav.allows_navigation("eclipse://localhost/newtab", POPUP));
+        nav.note_commit("eclipse://localhost/newtab");
+        assert!(!nav.allows_navigation("eclipse://localhost/settings", POPUP));
+        assert!(!nav.allows_navigation(
+            "eclipse://localhost/settings",
+            PolicyContext {
+                main_frame: false,
+                ..POPUP
+            }
+        ));
+        // The internal page itself still may, and the popup may still send
+        // the tab to a website.
+        assert!(nav.allows_navigation("eclipse://localhost/settings", MAIN));
+        assert!(nav.allows_navigation("https://example.com/", POPUP));
+        // The browser's own load and history navigations are unaffected.
+        nav.note_commit("https://example.com/");
+        nav.begin_browser_load("eclipse://localhost/settings");
+        assert!(nav.allows_navigation("eclipse://localhost/settings", POPUP));
+        assert!(nav.allows_navigation(
+            "eclipse://localhost/notes",
+            PolicyContext {
+                back_forward: true,
+                ..POPUP
+            }
+        ));
+    }
 
     #[test]
     fn web_pages_cannot_open_internal_pages() {

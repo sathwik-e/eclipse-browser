@@ -1,0 +1,8 @@
+<!doctype html><html><head><title>Resize</title></head><body><script>
+function post(m) { window.webkit.messageHandlers.ipc.postMessage('popup:' + m); }
+function geo() { return 'outer=' + outerWidth + 'x' + outerHeight + ' screen=' + screenX + ',' + screenY; }
+post('before ' + geo());
+resizeTo(800, 700);
+setTimeout(function () { post('resized ' + geo()); moveTo(200, 120); }, 300);
+setTimeout(function () { post('after ' + geo()); }, 800);
+</script></body></html>

@@ -1,0 +1,6 @@
+<!doctype html><html><head><title>Opener nav</title></head><body><script>
+// Served from the other site: tries to walk its opener tab into internal pages.
+function post(m) { window.webkit.messageHandlers.ipc.postMessage('popup:' + m); }
+setTimeout(function () { try { opener.location = 'eclipse://localhost/newtab'; post('nav1'); } catch (e) { post('nav1-err'); } }, 300);
+setTimeout(function () { try { opener.location = 'eclipse://localhost/settings'; post('nav2'); } catch (e) { post('nav2-err'); } }, 1000);
+</script></body></html>

@@ -24,7 +24,17 @@ static NSWindow *eclipse_browser_window(void) {
     return window != nil ? window : [NSApp mainWindow];
 }
 
-static BOOL eclipse_little_window_perform_action(NSWindow *key, NSString *action);
+static BOOL eclipse_is_little_window(NSWindow *window);
+static BOOL eclipse_little_window_perform_action(NSWindow *window, NSString *action);
+
+/* The window a shortcut is meant for: the key window, or the window a sheet
+   (a JavaScript dialog, a print or open panel) is attached to while that
+   sheet is key. */
+static NSWindow *eclipse_shortcut_window(void) {
+    NSWindow *window = [NSApp keyWindow];
+    while (window.sheetParent != nil) window = window.sheetParent;
+    return window;
+}
 
 @interface EclipseMenuTarget : NSObject
 - (void)performEclipseAction:(id)sender;
@@ -39,20 +49,32 @@ static BOOL eclipse_little_window_perform_action(NSWindow *key, NSString *action
     }
     if (![action isKindOfClass:[NSString class]] || action.length == 0) return;
 
-    // Reload, Stop, Back and Forward act on a Little Eclipse window when it
-    // is key (sign-in popups, see below).
-    if (eclipse_little_window_perform_action([NSApp keyWindow], action)) return;
+    NSWindow *key = eclipse_shortcut_window();
+    NSWindow *browser = gBrowserWindow;
+
+    // Page commands act on a Little Eclipse window when it is key (sign-in
+    // popups, see below), never on the hidden tab behind it.
+    if (eclipse_little_window_perform_action(key, action)) return;
 
     // ⌘W / ⇧⌘W in a secondary window (detached Web Inspector, About panel,
     // a Little Eclipse window) closes that window instead of a browser tab behind it.
     if ([action isEqualToString:@"close_tab"] || [action isEqualToString:@"close_window"]) {
-        NSWindow *key = [NSApp keyWindow];
-        NSWindow *browser = gBrowserWindow;
         if (key != nil && browser != nil && key != browser &&
             (key.styleMask & NSWindowStyleMaskClosable) != 0) {
+            // AppKit does not close a window while a sheet is attached; a
+            // popup's dialog is answered (Cancel) first.
+            NSWindow *sheet = key.attachedSheet;
+            if (sheet != nil && eclipse_is_little_window(key)) {
+                [key endSheet:sheet returnCode:NSModalResponseCancel];
+            }
             [key performClose:nil];
             return;
         }
+    }
+    // Everything else is about the browser window (tabs, sidebar, Settings):
+    // it comes to the front instead of changing out of sight behind a popup.
+    if (browser != nil && key != browser && eclipse_is_little_window(key)) {
+        [browser makeKeyAndOrderFront:nil];
     }
     gCallback(action.UTF8String);
 }
@@ -961,6 +983,9 @@ static void eclipse_did_fail_navigation(id self, SEL _cmd, WKWebView *webView,
 enum {
     ECLIPSE_POLICY_MAIN_FRAME = 1,
     ECLIPSE_POLICY_BACK_FORWARD = 2,
+    /* A script in another webview started the navigation (a Little Eclipse
+       popup setting window.opener.location, or targeting the tab by name). */
+    ECLIPSE_POLICY_OTHER_VIEW = 4,
 };
 
 typedef void (*EclipseDecidePolicyIMP)(id, SEL, WKWebView *, WKNavigationAction *,
@@ -993,6 +1018,13 @@ static void eclipse_decide_policy(id self, SEL _cmd, WKWebView *webView, WKNavig
         if (action.navigationType == WKNavigationTypeBackForward) {
             context |= ECLIPSE_POLICY_BACK_FORWARD;
         }
+    }
+    // The source frame is nil or this webview's own for the browser's loads
+    // and the tab's own pages. A frame whose webview is gone counts as
+    // another view.
+    WKFrameInfo *source = action.sourceFrame;
+    if (source != nil && source.webView != webView) {
+        context |= ECLIPSE_POLICY_OTHER_VIEW;
     }
     int previous = gPolicyContext;
     gPolicyContext = context;
@@ -1365,11 +1397,8 @@ static void eclipse_run_text_input_panel(id self, SEL _cmd, WKWebView *webView, 
     });
 }
 
-/* WebKit's private UI-delegate callback for window.print(). WebKit resumes
-   the page once this returns, so the print sheet starts on the next turn of
-   the run loop, when the page can render for it. */
-static void eclipse_print_frame(id self, SEL _cmd, WKWebView *webView, id frame) {
-    (void)self; (void)_cmd; (void)frame;
+/* Shows the print sheet for `webView` on the next turn of the run loop. */
+static void eclipse_print_webview(WKWebView *webView) {
     __weak WKWebView *weakWebView = webView;
     dispatch_async(dispatch_get_main_queue(), ^{
         WKWebView *wv = weakWebView;
@@ -1380,6 +1409,14 @@ static void eclipse_print_frame(id self, SEL _cmd, WKWebView *webView, id frame)
         operation.canSpawnSeparateThread = YES;
         [operation runOperationModalForWindow:window delegate:nil didRunSelector:NULL contextInfo:NULL];
     });
+}
+
+/* WebKit's private UI-delegate callback for window.print(). WebKit resumes
+   the page once this returns, so the print sheet starts on the next turn of
+   the run loop, when the page can render for it. */
+static void eclipse_print_frame(id self, SEL _cmd, WKWebView *webView, id frame) {
+    (void)self; (void)_cmd; (void)frame;
+    eclipse_print_webview(webView);
 }
 
 /* Adds `imp` for `sel` to `cls` unless the class (or a superclass) already
@@ -1580,6 +1617,7 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
                                                          NSPoint topLeft);
 
 static void eclipse_little_check_openers(void);
+static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect visible);
 
 @implementation EclipseLittleWindow
 
@@ -1737,6 +1775,12 @@ static void eclipse_little_check_openers(void);
     if (eclipse_is_web_scheme(url.scheme) && gCallback != NULL) {
         NSString *command = [@"little_window_new_tab:" stringByAppendingString:url.absoluteString];
         gCallback(command.UTF8String);
+        // A link the user clicked shows its tab; a script's tab stays
+        // behind, so a page cannot push its popup out of sight.
+        NSWindow *browser = gBrowserWindow;
+        if (browser != nil && eclipse_action_user_initiated(action)) {
+            [browser makeKeyAndOrderFront:nil];
+        }
     }
     return nil;
 }
@@ -1744,6 +1788,54 @@ static void eclipse_little_check_openers(void);
 - (void)webViewDidClose:(WKWebView *)webView {
     (void)webView;
     if (!self.closed) [self.window close];
+}
+
+/* WebKit's private UI-delegate methods (WKUIDelegatePrivate). */
+
+/* popup.focus() from the opener, or a window.open that reuses this popup's
+   name. WebKit only asks when the page may move focus (the opener, or a user
+   gesture). */
+- (void)_focusWebView:(WKWebView *)webView {
+    (void)webView;
+    if (!self.closed) [self.window makeKeyAndOrderFront:nil];
+}
+
+/* window.print() in the popup. */
+- (void)_webView:(WKWebView *)webView printFrame:(id)frame {
+    (void)frame;
+    if (!self.closed) eclipse_print_webview(webView);
+}
+
+/* outerWidth/outerHeight/screenX/screenY. WebKit converts between this
+   (AppKit screen coordinates, origin bottom-left) and the page's. */
+- (void)_webView:(WKWebView *)webView getWindowFrameWithCompletionHandler:(void (^)(CGRect))completionHandler {
+    (void)webView;
+    completionHandler(self.closed ? CGRectZero : NSRectToCGRect(self.window.frame));
+}
+
+/* resizeTo/resizeBy/moveTo/moveBy (WebKit allows them only for windows a
+   script opened), and the size and position window.open asked for. The
+   window keeps within the limits it was opened with and on screen. */
+- (void)_webView:(WKWebView *)webView setWindowFrame:(CGRect)requested {
+    (void)webView;
+    NSWindow *window = self.window;
+    if (self.closed || window == nil || (window.styleMask & NSWindowStyleMaskFullScreen) != 0) return;
+    NSRect frame = NSRectFromCGRect(requested);
+    if (!isfinite(frame.origin.x) || !isfinite(frame.origin.y) || !isfinite(frame.size.width) ||
+        !isfinite(frame.size.height)) {
+        return;
+    }
+    NSScreen *target = window.screen ?: [NSScreen mainScreen];
+    NSPoint center = NSMakePoint(NSMidX(frame), NSMidY(frame));
+    for (NSScreen *screen in [NSScreen screens]) {
+        if (NSPointInRect(center, screen.frame)) {
+            target = screen;
+            break;
+        }
+    }
+    if (target == nil) return;
+    frame = eclipse_little_fit_frame(window, frame, target.visibleFrame);
+    [window setFrame:frame display:YES];
 }
 
 /* Dialogs are sheets on the popup. The completion handler runs exactly once:
@@ -1876,6 +1968,27 @@ static NSRect eclipse_clamp_frame(NSRect frame, NSRect visible) {
     return frame;
 }
 
+/* The largest content size a popup may have on a screen whose visible frame
+   is `visible`. */
+static NSSize eclipse_little_max_content_size(NSRect visible) {
+    return NSMakeSize(MAX(kEclipseLittleMinWidth, floor(visible.size.width * 0.9)),
+                      MAX(kEclipseLittleMinHeight, floor(visible.size.height * 0.9)));
+}
+
+/* `frame` (a window frame a page asked for) with its content size within
+   the popup limits, its top-left corner where it was asked for, and moved
+   inside `visible`. */
+static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect visible) {
+    NSRect content = [window contentRectForFrameRect:frame];
+    NSSize max = eclipse_little_max_content_size(visible);
+    content.size.width = MIN(MAX(content.size.width, kEclipseLittleMinWidth), max.width);
+    content.size.height = MIN(MAX(content.size.height, kEclipseLittleMinHeight), max.height);
+    NSRect fitted = [window frameRectForContentRect:content];
+    fitted.origin.x = frame.origin.x;
+    fitted.origin.y = NSMaxY(frame) - fitted.size.height;
+    return eclipse_clamp_frame(fitted, visible);
+}
+
 /* Whether one more window may open for `opener` (a tab's webview). */
 static BOOL eclipse_little_has_room(WKWebView *opener) {
     NSUInteger total = 0, forOpener = 0;
@@ -1907,12 +2020,11 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     if (screen == nil) return nil;
     NSRect visible = screen.visibleFrame;
 
-    CGFloat maxWidth = MAX(kEclipseLittleMinWidth, floor(visible.size.width * 0.9));
-    CGFloat maxHeight = MAX(kEclipseLittleMinHeight, floor(visible.size.height * 0.9));
+    NSSize maxSize = eclipse_little_max_content_size(visible);
     CGFloat width = isfinite(requested.width) ? requested.width : kEclipseLittleMinWidth;
     CGFloat height = isfinite(requested.height) ? requested.height : kEclipseLittleMinHeight;
-    width = MIN(MAX(width, kEclipseLittleMinWidth), maxWidth);
-    height = MIN(MAX(height, kEclipseLittleMinHeight), maxHeight);
+    width = MIN(MAX(width, kEclipseLittleMinWidth), maxSize.width);
+    height = MIN(MAX(height, kEclipseLittleMinHeight), maxSize.height);
     NSRect contentRect = NSMakeRect(0, 0, width, height);
 
     NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
@@ -2044,25 +2156,92 @@ void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double
     }
 }
 
-/* Menu commands that act on the Little Eclipse window when it is key (the
-   rest go to the browser; ⌘W is handled with the other secondary windows). */
-static BOOL eclipse_little_window_perform_action(NSWindow *key, NSString *action) {
-    if (key == nil || gLittleWindows.count == 0) return NO;
+static EclipseLittleWindow *eclipse_little_window_for(NSWindow *window) {
+    if (window == nil) return nil;
     for (EclipseLittleWindow *lw in gLittleWindows) {
-        if (lw.closed || lw.window != key) continue;
-        WKWebView *webView = lw.webView;
-        if ([action isEqualToString:@"reload"]) {
-            [webView reload];
-        } else if ([action isEqualToString:@"stop_loading"]) {
-            [webView stopLoading];
-        } else if ([action isEqualToString:@"go_back"]) {
-            [webView goBack];
-        } else if ([action isEqualToString:@"go_forward"]) {
-            [webView goForward];
-        } else {
-            return NO;
-        }
+        if (!lw.closed && lw.window == window) return lw;
+    }
+    return nil;
+}
+
+static BOOL eclipse_is_little_window(NSWindow *window) {
+    return eclipse_little_window_for(window) != nil;
+}
+
+/* Menu commands while a Little Eclipse window is key (or one of its sheets
+   is). Page commands act on the popup; commands about a tab's page (Home,
+   Bookmark, Find, which needs the tab's in-page find bar) are refused rather
+   than sent to the hidden tab behind the popup. YES when the command was
+   handled here; the rest go to the browser (⌘W closes the popup, see
+   performEclipseAction:). */
+static BOOL eclipse_little_window_perform_action(NSWindow *window, NSString *action) {
+    EclipseLittleWindow *lw = eclipse_little_window_for(window);
+    if (lw == nil) return NO;
+    WKWebView *webView = lw.webView;
+    // While a dialog is up its page is paused: page commands wait.
+    BOOL dialog = lw.window.attachedSheet != nil;
+    static NSSet<NSString *> *pageCommands = nil;
+    static NSSet<NSString *> *tabCommands = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        pageCommands = [NSSet setWithArray:@[ @"reload", @"stop_loading", @"go_back", @"go_forward", @"print",
+                                              @"zoom_in", @"zoom_out", @"zoom_reset", @"open_devtools" ]];
+        tabCommands = [NSSet setWithArray:@[ @"home", @"favorite_tab", @"duplicate_tab", @"find", @"find_next",
+                                             @"find_prev" ]];
+    });
+    if ([tabCommands containsObject:action] || (dialog && [pageCommands containsObject:action])) {
+        NSBeep();
         return YES;
     }
-    return NO;
+    if (![pageCommands containsObject:action]) return NO;
+
+    if ([action isEqualToString:@"reload"]) {
+        [webView reload];
+    } else if ([action isEqualToString:@"stop_loading"]) {
+        [webView stopLoading];
+    } else if ([action isEqualToString:@"go_back"]) {
+        [webView goBack];
+    } else if ([action isEqualToString:@"go_forward"]) {
+        [webView goForward];
+    } else if ([action isEqualToString:@"print"]) {
+        eclipse_print_webview(webView);
+    } else if ([action hasPrefix:@"zoom_"]) {
+        if (@available(macOS 11.0, *)) {
+            // The same steps and limits as a tab (tab::MIN_ZOOM/MAX_ZOOM).
+            double zoom = webView.pageZoom;
+            if ([action isEqualToString:@"zoom_in"]) zoom += 0.1;
+            else if ([action isEqualToString:@"zoom_out"]) zoom -= 0.1;
+            else zoom = 1.0;
+            webView.pageZoom = MIN(MAX(round(zoom * 100.0) / 100.0, 0.5), 3.0);
+        }
+    } else if ([action isEqualToString:@"open_devtools"]) {
+        // The popup's own Web Inspector (WebKit's _inspector SPI).
+        SEL inspectorSel = NSSelectorFromString(@"_inspector");
+        id inspector = [webView respondsToSelector:inspectorSel]
+                           ? ((id (*)(id, SEL))objc_msgSend)(webView, inspectorSel)
+                           : nil;
+        SEL showSel = NSSelectorFromString(@"show");
+        if ([inspector respondsToSelector:showSel]) {
+            ((void (*)(id, SEL))objc_msgSend)(inspector, showSel);
+        } else {
+            NSBeep();
+        }
+    }
+    return YES;
+}
+
+/* How many Little Eclipse windows are open for the tab whose webview is (or
+   contains) `viewPtr`, nested popups included. Rust keeps such a tab awake:
+   hibernating it would close them. */
+int eclipse_little_window_count_for_view(void *viewPtr) {
+    if (viewPtr == NULL || gLittleWindows.count == 0) return 0;
+    @autoreleasepool {
+        WKWebView *webView = eclipse_find_wkwebview((__bridge NSView *)viewPtr);
+        if (webView == nil) return 0;
+        int count = 0;
+        for (EclipseLittleWindow *lw in gLittleWindows) {
+            if (!lw.closed && lw.opener == webView) count++;
+        }
+        return count;
+    }
 }

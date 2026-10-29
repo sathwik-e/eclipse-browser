@@ -1,0 +1,7 @@
+<!doctype html><html><head><title>Links</title>
+<style>html,body{margin:0;height:100%}a{display:block;width:100%;height:100%}</style></head>
+<body><a id=a target=_blank>terms</a><script>
+document.getElementById('a').href = 'http://localhost:' + (Number(location.port) + 1) + '/pop.html?terms';
+// Without a gesture: becomes a tab that stays behind the popup.
+window.open('/pop.html?auto');
+</script></body></html>

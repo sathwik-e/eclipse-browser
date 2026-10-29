@@ -24,7 +24,7 @@ cleanup() {
 trap cleanup EXIT
 
 clang -fobjc-arc -Wall -Wno-deprecated-declarations -c "$repo/src/menu.m" -o "$work/menu.o"
-clang -fobjc-arc -Wall "$here/harness.m" "$work/menu.o" \
+clang -fobjc-arc -Wall -Wno-deprecated-declarations "$here/harness.m" "$work/menu.o" \
     -framework Cocoa -framework WebKit -framework QuartzCore -o "$work/harness"
 
 for p in "$port" "$((port + 1))"; do
@@ -57,20 +57,30 @@ check() {
     echo "  ok: $description"
 }
 
+# The harness keeps WebKit's caches (menu.m's content rule list) out of the
+# real home folder.
+mkdir -p "$work/home"
 run() {
-    local env=(HARNESS_PORT="$port")
+    local env=(HARNESS_PORT="$port" HOME="$work/home" CFFIXED_USER_HOME="$work/home")
     if [[ "${GUARD_MALLOC:-}" == 1 ]]; then env+=(DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib); fi
-    env "${env[@]}" "$work/harness" "$1" 2>/dev/null
+    env "${env[@]}" "$work/harness" "$1" 2>/dev/null || true
 }
 
 scenarios=("$@")
 if [[ ${#scenarios[@]} -eq 0 ]]; then
-    scenarios=(legit stopwrite nocontent blankthen eclipse sameorigin nogesture five nested)
+    scenarios=(legit stopwrite nocontent blankthen eclipse sameorigin nogesture five nested
+               openernav sheet refocus focus resize menu linktab)
 fi
 
 for scenario in "${scenarios[@]}"; do
     echo "$scenario"
     out="$(run "$scenario")"
+    if grep -q "NOT KEY" <<<"$out"; then
+        # Synthetic clicks only reach WebKit in the active app's key window.
+        echo "  FAIL: the harness could not become the active app (is the screen locked?)"
+        failures=$((failures + 1))
+        continue
+    fi
     case "$scenario" in
     legit)
         check "$out" "a committed page shows its host" "subtitle=\"Not Secure — $victim\"" ;;
@@ -90,11 +100,51 @@ for scenario in "${scenarios[@]}"; do
     nogesture)
         check "$out" "a popup without a gesture opens as a tab" "RESULT .* little=0 fallbacks=1" ;;
     five)
-        check "$out" "at most three windows per tab, the rest as tabs" "RESULT .* little=3 fallbacks=2" ;;
+        check "$out" "at most three windows per tab, the rest as tabs" "RESULT .* little=3 fallbacks=2"
+        check "$out" "the tab knows it has popups open (no hibernation)" "RESULT .* count=3" ;;
     nested)
         # The popup's automatic window.open becomes a tab; a click inside
         # opens nested windows up to the per-tab limit.
         check "$out" "nested popups count toward the tab's limit" "RESULT .* little=3 " ;;
+    openernav)
+        # A popup from the other site sets opener.location to eclipse://
+        # pages; the tab's own page and the browser still may.
+        check "$out" "the popup tried to navigate its opener" "MSG popup:nav2 little=1"
+        check "$out" "a popup's navigation of the tab is marked" \
+            "POLICY eclipse://localhost/newtab ctx=5 allow=0"
+        check "$out" "also once the popup tries Settings" "POLICY eclipse://localhost/settings ctx=5 allow=0"
+        check "$out" "the tab's own page is not marked" "POLICY eclipse://localhost/newtab ctx=1 allow=1"
+        check "$out" "the browser's load is not marked" "POLICY eclipse://localhost/notes ctx=1 allow=1"
+        check "$out" "the tab ends where the browser sent it" "TABURL eclipse://localhost/notes" ;;
+    sheet)
+        # A confirm() sheet on the popup is key: shortcuts are the popup's.
+        check "$out" "the dialog sheet is key" "KEY sheet"
+        check "$out" "⌘R waits while the dialog is up" "PRESS cmd-r handled=1" "ACTION reload"
+        check "$out" "⌘W closes the popup, not the tab" "RESULT .* little=0 " "ACTION close_tab" ;;
+    refocus)
+        check "$out" "the tab was key before the second click" "KEY tab"
+        check "$out" "reopening the popup by name brings it to the front" "KEY little"
+        check "$out" "the popup was reused" "RESULT .* little=1 "
+        check "$out" "and navigated" "WINDOW .* url=http://$victim/pop.html\?n=2" ;;
+    focus)
+        check "$out" "the opener called popup.focus()" "MSG opener:focused"
+        check "$out" "popup.focus() brings it to the front" "KEY little" ;;
+    resize)
+        check "$out" "the opener reads the popup's real size" "MSG opener:outer=[1-9][0-9]*x[1-9][0-9]*" \
+            "MSG opener:outer=0x0"
+        check "$out" "resizeTo/moveTo apply" "MSG popup:after outer=800x700 screen=200,120"
+        check "$out" "the window has that frame" "WINDOW .* frame=200,120,800x700" ;;
+    menu)
+        check "$out" "the popup is key" "KEY little"
+        check "$out" "⌘= zooms the popup" "ZOOM 1.10" "ACTION zoom_in"
+        check "$out" "⌘D does not bookmark the tab behind" "PRESS cmd-d handled=1" "ACTION favorite_tab"
+        check "$out" "⌘T opens a tab in the browser window" "ACTION new_tab"
+        check "$out" "and brings it to the front" "KEY tab" ;;
+    linktab)
+        check "$out" "a script's tab stays behind the popup" "ACTION little_window_new_tab:http://$opener/pop.html\?auto"
+        check "$out" "the popup stayed key" "KEY little"
+        check "$out" "a clicked link opens a tab" "ACTION little_window_new_tab:http://$victim/pop.html\?terms"
+        check "$out" "and brings the browser window forward" "KEY tab" ;;
     *)
         echo "  unknown scenario"; failures=$((failures + 1)) ;;
     esac

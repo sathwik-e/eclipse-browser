@@ -169,8 +169,8 @@ fn main() {
                 UserEvent::TitleChanged { tab_id, title } => {
                     app.handle_title_changed(tab_id, title);
                 }
-                UserEvent::NewWindowRequested { url } => {
-                    app.handle_new_window(url);
+                UserEvent::NewWindowRequested { url, sized } => {
+                    app.handle_new_window(url, sized);
                 }
                 UserEvent::DownloadStarted {
                     seq,

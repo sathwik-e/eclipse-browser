@@ -18,7 +18,16 @@ var S = {
   sameorigin: function () { window.open('/same.html', 'x', 'width=480,height=600'); },
   five: function () { for (var i = 0; i < 5; i++) window.open('/pop.html?n=' + i, 'w' + i, 'width=400,height=300'); },
   nested: function () { window.open('/nest.html', 'x', 'width=480,height=600'); },
+  openernav: function () { window.open(V + '/onav.html', 'x', 'width=480,height=600'); },
+  sheet: function () { window.open('/dlg.html', 'x', 'width=480,height=600'); },
+  resize: function () { var w = window.open('/rsz.html', 'x', 'width=480,height=600'); report('outer=' + w.outerWidth + 'x' + w.outerHeight); },
+  menu: function () { window.open('/pop.html', 'x', 'width=480,height=600'); },
+  linktab: function () { window.open('/lnk.html', 'x', 'width=480,height=600'); },
+  // The second click reopens the popup by name / focuses it.
+  refocus: function () { clicks++; window.open(V + '/pop.html?n=' + clicks, 'x', 'width=480,height=600'); },
+  focus: function () { clicks++; if (clicks === 1) popup = window.open(V + '/pop.html', 'x', 'width=480,height=600'); else { popup.focus(); report('focused'); } },
 };
+var clicks = 0, popup = null;
 if (s === 'nogesture') { window.open('/pop.html', 'x', 'width=480,height=600'); }
 document.getElementById('b').onclick = function () { S[s](); };
 </script></body></html>

@@ -1,0 +1,3 @@
+<!doctype html><html><head><title>Dialog</title></head><body><script>
+setTimeout(function () { var r = confirm('Continue?'); window.webkit.messageHandlers.ipc.postMessage('popup:confirm=' + r); }, 200);
+</script></body></html>

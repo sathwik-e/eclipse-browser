@@ -30,14 +30,15 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
 - **Session restore.** Open tabs and Spaces come back on the next launch.
   Restored tabs stay asleep until you open them.
 - **Tab hibernation.** Background tabs that are quiet are discarded after a
-  configurable time and restored on demand. Tabs that are loading or playing
-  audio are never discarded.
+  configurable time away from them and restored on demand. Tabs that are
+  loading, playing audio or have a sign-in popup open are never discarded.
 - **Little Eclipse windows for sign-in popups.** Sign-in and payment popups
   you open with a click open in a small window of their own instead of a
   tab, so they keep `window.opener` and can hand their result back to the
   page. The window always shows the real host of the page it is on, with
-  "Not Secure" for plain http. Ordinary links that open new windows, and
-  popups a page opens on its own, still open as tabs.
+  "Not Secure" for plain http. Shortcuts such as Reload, Print and Zoom act
+  on the popup while it is in front. Ordinary links that open new windows,
+  and popups a page opens on its own, still open as tabs.
 - **Notes and Easel.** A notes page and a sketch-and-cards canvas, stored
   locally.
 - **Real browser plumbing:**
@@ -58,8 +59,8 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     position, and open http(s) links in new tabs.
   - A page in a Little Eclipse popup window can only open http(s) links in
     new tabs. WebKit tells its messages apart from the tab's own, even when
-    it is on the same site, and it cannot load internal `eclipse://`
-    resources.
+    it is on the same site. It cannot load internal `eclipse://` resources
+    or send its opener tab to internal pages.
   - Only the sidebar and internal pages can change settings, install
     extensions or manage tabs.
 - The page bridge never exposes its token to page scripts.
@@ -179,9 +180,12 @@ ECLIPSE_SMOKE_URL=https://example.com   # open a URL through the normal tab path
 
 `scripts/little-eclipse-e2e/run.sh` checks Little Eclipse windows end to end
 (user gesture, limits, the host shown for loads that never commit, popup
-messages and `eclipse://` requests). It builds `src/menu.m` into a small
-harness, serves local test pages on ports 8831 and 8832, and opens windows
-for about a minute. `GUARD_MALLOC=1` runs it under `libgmalloc`.
+messages, `eclipse://` requests and opener navigation, shortcuts with and
+without a dialog up, focus, resizing and links that open tabs). It builds
+`src/menu.m` into a small harness, serves local test pages on ports 8831 and
+8832, and opens windows for about two minutes; the harness makes itself the
+active app, so leave the keyboard alone while it runs. `GUARD_MALLOC=1` runs
+it under `libgmalloc`.
 
 ## Known limitations
 

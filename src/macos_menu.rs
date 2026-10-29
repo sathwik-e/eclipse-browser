@@ -34,6 +34,7 @@ unsafe extern "C" {
     fn eclipse_recheck_hover();
     fn eclipse_navigation_policy_context() -> i32;
     fn eclipse_script_message_from_little_window() -> i32;
+    fn eclipse_little_window_count_for_view(view_ptr: *mut std::ffi::c_void) -> i32;
     fn eclipse_open_little_window(
         configuration: *mut std::ffi::c_void,
         opener: *mut std::ffi::c_void,
@@ -60,6 +61,7 @@ type NavigationCallback = extern "C" fn(
 /// Bits of `eclipse_navigation_policy_context` (keep in sync with menu.m).
 const POLICY_MAIN_FRAME: i32 = 1;
 const POLICY_BACK_FORWARD: i32 = 2;
+const POLICY_OTHER_VIEW: i32 = 4;
 
 static MENU_PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
 static EDGE_PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
@@ -276,6 +278,7 @@ pub fn navigation_policy_context() -> PolicyContext {
     PolicyContext {
         main_frame: bits & POLICY_MAIN_FRAME != 0,
         back_forward: bits & POLICY_BACK_FORWARD != 0,
+        other_view: bits & POLICY_OTHER_VIEW != 0,
     }
 }
 
@@ -285,6 +288,13 @@ pub fn navigation_policy_context() -> PolicyContext {
 /// tab's WKUserContentController, so its messages reach the tab's handler.
 pub fn script_message_from_little_window() -> bool {
     unsafe { eclipse_script_message_from_little_window() != 0 }
+}
+
+/// How many Little Eclipse windows (nested ones included) are open for the
+/// tab whose webview is `view_ptr`.
+pub fn little_window_count_for_view(view_ptr: *mut std::ffi::c_void) -> usize {
+    let count = unsafe { eclipse_little_window_count_for_view(view_ptr) };
+    usize::try_from(count).unwrap_or(0)
 }
 
 /// Opens a Little Eclipse window (menu.m) for a popup `features` describes,

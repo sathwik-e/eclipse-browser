@@ -69,7 +69,7 @@ run() {
 scenarios=("$@")
 if [[ ${#scenarios[@]} -eq 0 ]]; then
     scenarios=(legit stopwrite nocontent blankthen eclipse sameorigin nogesture five nested
-               openernav sheet refocus focus resize menu linktab)
+               openernav sheet print2 printclose refocus focus resize menu linktab)
 fi
 
 for scenario in "${scenarios[@]}"; do
@@ -121,6 +121,12 @@ for scenario in "${scenarios[@]}"; do
         check "$out" "the dialog sheet is key" "KEY sheet"
         check "$out" "⌘R waits while the dialog is up" "PRESS cmd-r handled=1" "ACTION reload"
         check "$out" "⌘W closes the popup, not the tab" "RESULT .* little=0 " "ACTION close_tab" ;;
+    print2)
+        check "$out" "the popup printed twice" "MSG popup:printed little=1"
+        check "$out" "one ⌘W closes the popup" "RESULT .* little=0 " "ACTION close_tab" ;;
+    printclose)
+        check "$out" "the popup closed itself" "RESULT .* little=0 "
+        check "$out" "no closed popup is left behind" "RESULT" "LEFT " ;;
     refocus)
         check "$out" "the tab was key before the second click" "KEY tab"
         check "$out" "reopening the popup by name brings it to the front" "KEY little"

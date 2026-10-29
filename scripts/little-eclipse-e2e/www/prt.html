@@ -1,0 +1,4 @@
+<!doctype html><html><head><title>Print</title></head><body><h1>print</h1><script>
+// Two print() calls in one turn: only one print sheet may queue.
+setTimeout(function () { print(); print(); window.webkit.messageHandlers.ipc.postMessage('popup:printed'); }, 300);
+</script></body></html>

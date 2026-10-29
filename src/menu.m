@@ -26,6 +26,7 @@ static NSWindow *eclipse_browser_window(void) {
 
 static BOOL eclipse_is_little_window(NSWindow *window);
 static BOOL eclipse_little_window_perform_action(NSWindow *window, NSString *action);
+static void eclipse_end_all_sheets(NSWindow *window);
 
 /* The window a shortcut is meant for: the key window, or the window a sheet
    (a JavaScript dialog, a print or open panel) is attached to while that
@@ -63,10 +64,7 @@ static NSWindow *eclipse_shortcut_window(void) {
             (key.styleMask & NSWindowStyleMaskClosable) != 0) {
             // AppKit does not close a window while a sheet is attached; a
             // popup's dialog is answered (Cancel) first.
-            NSWindow *sheet = key.attachedSheet;
-            if (sheet != nil && eclipse_is_little_window(key)) {
-                [key endSheet:sheet returnCode:NSModalResponseCancel];
-            }
+            if (eclipse_is_little_window(key)) eclipse_end_all_sheets(key);
             [key performClose:nil];
             return;
         }
@@ -1397,18 +1395,57 @@ static void eclipse_run_text_input_panel(id self, SEL _cmd, WKWebView *webView, 
     });
 }
 
+/* Web views with a print queued or showing. window.print() is not
+   throttled, and each queued sheet would attach to the window as soon as the
+   one before it ends, so a page could stack sheets that keep a closed popup
+   alive. One print at a time per web view. */
+static NSHashTable<WKWebView *> *gPrintingWebViews;
+
+@interface EclipsePrintDelegate : NSObject
+@end
+
+@implementation EclipsePrintDelegate
+- (void)printOperationDidRun:(NSPrintOperation *)operation success:(BOOL)success contextInfo:(void *)contextInfo {
+    (void)operation; (void)success;
+    WKWebView *webView = (__bridge_transfer WKWebView *)contextInfo;
+    [gPrintingWebViews removeObject:webView];
+}
+@end
+
 /* Shows the print sheet for `webView` on the next turn of the run loop. */
 static void eclipse_print_webview(WKWebView *webView) {
+    if (webView == nil) return;
+    if (gPrintingWebViews == nil) gPrintingWebViews = [NSHashTable weakObjectsHashTable];
+    if ([gPrintingWebViews containsObject:webView]) return;
+    [gPrintingWebViews addObject:webView];
     __weak WKWebView *weakWebView = webView;
     dispatch_async(dispatch_get_main_queue(), ^{
         WKWebView *wv = weakWebView;
+        if (wv == nil) return;
         NSWindow *window = wv.window;
-        if (wv == nil || window == nil) return;
-        if (![wv respondsToSelector:@selector(printOperationWithPrintInfo:)]) return;
+        // Re-checked now: the window may have closed or gained a dialog.
+        if (window == nil || !window.isVisible || window.attachedSheet != nil ||
+            ![wv respondsToSelector:@selector(printOperationWithPrintInfo:)]) {
+            [gPrintingWebViews removeObject:wv];
+            return;
+        }
+        static EclipsePrintDelegate *delegate;
+        if (delegate == nil) delegate = [EclipsePrintDelegate new];
         NSPrintOperation *operation = [wv printOperationWithPrintInfo:[NSPrintInfo sharedPrintInfo]];
         operation.canSpawnSeparateThread = YES;
-        [operation runOperationModalForWindow:window delegate:nil didRunSelector:NULL contextInfo:NULL];
+        [operation runOperationModalForWindow:window
+                                     delegate:delegate
+                               didRunSelector:@selector(printOperationDidRun:success:contextInfo:)
+                                  contextInfo:(__bridge_retained void *)wv];
     });
+}
+
+/* Cancels every sheet on `window` (a queued one attaches as soon as the one
+   before it ends), with a bound in case a sheet refuses to go. */
+static void eclipse_end_all_sheets(NSWindow *window) {
+    for (int i = 0; i < 8 && window.attachedSheet != nil; i++) {
+        [window endSheet:window.attachedSheet returnCode:NSModalResponseCancel];
+    }
 }
 
 /* WebKit's private UI-delegate callback for window.print(). WebKit resumes
@@ -1681,10 +1718,7 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     (void)notification;
     if (self.closed) return;
     // A dialog still showing is answered (Cancel) before the page goes away.
-    NSWindow *sheet = self.window.attachedSheet;
-    if (sheet != nil) {
-        [self.window endSheet:sheet returnCode:NSModalResponseCancel];
-    }
+    eclipse_end_all_sheets(self.window);
     self.closed = YES;
     [self stopObserving];
     WKWebView *webView = self.webView;

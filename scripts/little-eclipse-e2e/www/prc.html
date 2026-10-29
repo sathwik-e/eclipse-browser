@@ -1,0 +1,5 @@
+<!doctype html><html><head><title>PrintClose</title></head><body><h1>print, then close</h1><script>
+var n = 0;
+setTimeout(function () { print(); print(); setTimeout(function () { window.close(); }, 700); }, 300);
+setInterval(function () { n++; window.webkit.messageHandlers.ipc.postMessage('popup:tick' + n); }, 500);
+</script></body></html>

@@ -3078,8 +3078,6 @@ fn truncate_message(message: &str, limit: usize) -> String {
     truncated
 }
 
-/// Whether the app can exit now: quitting was requested (`deadline` is set)
-/// and nothing is still flushing, or the wait for it timed out.
 /// What a window.open or target=_blank link that did not open a Little
 /// Eclipse window does instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3117,6 +3115,8 @@ fn new_window_fallback(url: &str, sized: bool) -> NewWindowFallback {
     }
 }
 
+/// Whether the app can exit now: quitting was requested (`deadline` is set)
+/// and nothing is still flushing, or the wait for it timed out.
 fn quit_ready(deadline: Option<Instant>, flushes_pending: bool, now: Instant) -> bool {
     deadline.is_some_and(|deadline| !flushes_pending || now >= deadline)
 }

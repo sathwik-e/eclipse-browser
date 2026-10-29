@@ -248,6 +248,19 @@ int main(int argc, char **argv) {
                 after(2.8, ^{
                     [gTab loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"eclipse://localhost/notes"]]];
                 });
+            } else if ([scenario isEqualToString:@"print2"]) {
+                // print(); print() in the popup, then one ⌘W.
+                after(2.0, ^{ press(@"w", NSEventModifierFlagCommand); });
+            } else if ([scenario isEqualToString:@"printclose"]) {
+                // print(); print(), then window.close(): nothing may keep the
+                // closed popup (and its page) alive.
+                after(3.8, ^{
+                    for (NSWindow *w in NSApp.windows) {
+                        if (w != gTabWindow && [w.contentView isKindOfClass:[WKWebView class]]) {
+                            printf("LEFT visible=%d sheet=%d\n", w.isVisible, w.attachedSheet != nil);
+                        }
+                    }
+                });
             } else if ([scenario isEqualToString:@"sheet"]) {
                 after(2.0, ^{
                     print_key();

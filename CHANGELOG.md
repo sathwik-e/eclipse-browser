@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.1 — 2026-10-28
+## 1.0.1 — 2026-10-29
 
 ### Added
 - **Little Eclipse windows for sign-in popups.** When a web page opens a
@@ -35,7 +35,7 @@
 
 ### Security
 - A page in a popup window is never taken for the tab that opened it. The
-  popup posts through its opener tab's channel, but WebKit marks its messages,
+  popup posts through its opener tab's channel, but Eclipse marks its messages,
   so even a popup on the tab's own site (an OAuth callback page, say) cannot
   change the tab's address, icon, scroll position or audio state, and it
   cannot load internal `eclipse://` resources. It can still open http(s)

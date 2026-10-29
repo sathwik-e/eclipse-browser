@@ -4,8 +4,10 @@
 
 ### Added
 - **Little Eclipse windows for sign-in popups.** When a web page opens a
-  sized popup (`window.open` with a width and height, as sign-in and payment
-  flows do) in response to a click or key press, it now opens in a small
+  popup window (`window.open` with a size, a position, the `popup` feature
+  or turned-off toolbars, as sign-in and payment flows do) in response to a
+  click or key press, including shortly after one (a timer or a `fetch`), it
+  now opens in a small
   native window instead of a tab. The popup keeps `window.opener`, so it can
   post its result back and close itself, which makes "Sign in with …" popups
   work.
@@ -27,7 +29,10 @@
   - A popup can only show web pages, never internal `eclipse://` pages, and it
     closes when the tab that opened it is closed or hibernated. A tab with a
     popup open is never hibernated automatically or by "Clean memory".
-  - Links without a size, popups from internal pages, popups a page opens
+  - Popups that give no size open at 500×640, or keep the one side they
+    gave.
+  - Ordinary links that open a new window (`target=_blank`, or
+    `window.open(url)` with no features), popups from internal pages, popups a page opens
     without a click or key press, and popups beyond three per tab (ten in
     all) still open as tabs. Such a popup with no address (the page meant to
     write into it) shows "Pop-up window blocked" instead of leaving an empty

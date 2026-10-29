@@ -196,8 +196,9 @@ fn main() {
                     file_name,
                     url,
                     path,
+                    origin,
                 } => {
-                    app.handle_download_started(seq, file_name, url, path);
+                    app.handle_download_started(seq, file_name, url, path, origin);
                 }
                 UserEvent::DownloadCompleted {
                     seq,

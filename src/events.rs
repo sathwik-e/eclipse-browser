@@ -32,6 +32,8 @@ pub enum UserEvent {
         file_name: String,
         url: String,
         path: String,
+        /// None for a download a Little Eclipse window handed to a tab.
+        origin: Option<DownloadOrigin>,
     },
     DownloadCompleted {
         /// None when the start was never seen (the matching is by URL then).
@@ -85,6 +87,15 @@ pub struct DocumentTrust {
     /// The previous document was an internal page and this one is not: a
     /// save posted by that page while it unloaded may still be arriving.
     pub left_internal: bool,
+}
+
+/// The tab whose own page started a download, and the URL of its committed
+/// document when the download started (read on WebKit's callback, so a tab
+/// switch or a later commit cannot change where the file came from).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadOrigin {
+    pub tab_id: usize,
+    pub page_url: String,
 }
 
 #[derive(Debug, Deserialize)]

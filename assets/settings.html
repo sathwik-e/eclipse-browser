@@ -436,7 +436,9 @@ textarea.code-input {
 }
 
 .max-thumb.tidy { background: #D9D2F2; color: #6D5BD0; }
-.max-thumb.instant { background: #D7ECF6; flex-direction: column; align-items: stretch; padding: 0 9px; }
+/* Narrower padding and pill than the others: "Searching the web…" fits. */
+.max-thumb.instant { background: #D7ECF6; flex-direction: column; align-items: stretch; padding: 0 4px; }
+.max-thumb.instant .pill { padding: 4px; font-size: 7px; text-align: center; }
 .max-thumb.preview { background: #C9C3EE; }
 .max-thumb.titles { background: #9E6E98; }
 .max-thumb.downloads { background: #3434E0; }
@@ -705,7 +707,7 @@ textarea.code-input {
     </div>
     <div class="max-text">
       <div class="max-title">Tidy Tabs</div>
-      <div class="max-desc">Shows the broom in the sidebar whenever a Space has more than six tabs. Tidy groups tabs by site and closes duplicates (⇧⌘T brings one back); ⇧⌘Y tidies at any time.</div>
+      <div class="max-desc">Shows the broom beside New Tab in the sidebar whenever a Space has more than six tabs. Tidy groups tabs into categories (Development, Media, …) or by site, and closes duplicates and blank new tabs (⇧⌘T brings them back one at a time); ⇧⌘Y tidies at any time.</div>
     </div>
     <input type="checkbox" id="chk-max-tidy-tabs" data-max-setting="tidy_tabs_button" checked />
   </div>

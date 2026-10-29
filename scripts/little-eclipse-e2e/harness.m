@@ -20,12 +20,14 @@
 // (in the light theme with HARNESS_LIGHT=1).
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 
 extern void eclipse_register_tab_view(void *viewPtr, uint64_t tabId);
 extern void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double width, double height,
                                         int hasPosition, double x, double y);
 extern int eclipse_script_message_from_little_window(void);
+extern int eclipse_download_from_little_window(void);
 extern int eclipse_popup_request_wants_popup(void);
 extern int eclipse_navigation_policy_context(void);
 extern int eclipse_little_window_count_for_view(void *viewPtr);
@@ -35,8 +37,9 @@ extern uint64_t eclipse_open_standalone_little_window(const char *url, const cha
                                                       int focusAddress);
 extern int eclipse_little_window_load(uint64_t windowId, const char *url);
 extern void eclipse_set_little_window_theme(double red, double green, double blue, int dark);
-extern int eclipse_show_little_command_bar(const char *const *titles, const char *const *urls, size_t count,
-                                           double red, double green, double blue);
+extern int eclipse_show_little_command_bar(const char *const *titles, const char *const *urls,
+                                           const char *const *icons, size_t count, double red, double green,
+                                           double blue);
 
 static Class gFakeWryClass;
 static WKWebView *gTab;
@@ -74,7 +77,9 @@ static void ipc_receive(id self, SEL _cmd, WKUserContentController *controller, 
    Little Eclipse window or in the ⌥⌘N bar is passed through unchanged (app.rs
    resolves it; this checks menu.m's own refusal of anything but http(s)),
    and ⌥⌘N shows the bar with three web suggestions and one internal page
-   (which menu.m must leave out). Asynchronous, like the event loop. */
+   (which menu.m must leave out); the first has an icon, the second's is
+   missing (404) and the third's too big to show. Asynchronous, like the
+   event loop. */
 static void menu_action(const char *action) {
     printf("ACTION %s\n", action);
     NSString *command = @(action);
@@ -94,10 +99,16 @@ static void menu_action(const char *action) {
                                            @"eclipse://localhost/settings",
                                            [base stringByAppendingString:@"/dl.html"],
                                            [base stringByAppendingString:@"/dla.html"] ];
+            NSArray<NSString *> *iconURLs = @[ [base stringByAppendingString:@"/fav.png"], @"",
+                                               [base stringByAppendingString:@"/missing.png"],
+                                               [base stringByAppendingString:@"/huge.png"] ];
             const char *titles[] = {"Popup page", "Settings", "Downloads", "Save page"};
-            const char *urlStrings[4];
-            for (int i = 0; i < 4; i++) urlStrings[i] = urls[i].UTF8String;
-            int ok = eclipse_show_little_command_bar(titles, urlStrings, 4, 0.2, 0.4, 1.0);
+            const char *urlStrings[4], *icons[4];
+            for (int i = 0; i < 4; i++) {
+                urlStrings[i] = urls[i].UTF8String;
+                icons[i] = iconURLs[i].length > 0 ? iconURLs[i].UTF8String : NULL;
+            }
+            int ok = eclipse_show_little_command_bar(titles, urlStrings, icons, 4, 0.2, 0.4, 1.0);
             printf("COMMANDBAR ok=%d\n", ok);
         } else if ([command hasPrefix:@"little_command_bar_open:"]) {
             NSString *text = [command substringFromIndex:@"little_command_bar_open:".length];
@@ -114,6 +125,10 @@ static NSArray<NSWindow *> *little_windows(void);
 @interface HarnessDownloadDelegate : NSObject <WKDownloadDelegate>
 @end
 
+/* Each download's destination, to measure the file it wrote (not another
+   left in ~/Downloads by an earlier scenario). */
+static NSMapTable<WKDownload *, NSString *> *gDownloadPaths;
+
 @implementation HarnessDownloadDelegate
 - (void)download:(WKDownload *)download
     decideDestinationUsingResponse:(NSURLResponse *)response
@@ -124,20 +139,18 @@ static NSArray<NSWindow *> *little_windows(void);
     [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     NSString *path = [dir stringByAppendingPathComponent:suggestedFilename];
     [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
-    printf("DOWNLOAD-START url=%s name=%s little=%lu\n", download.originalRequest.URL.absoluteString.UTF8String,
-           suggestedFilename.UTF8String, (unsigned long)little_windows().count);
+    // from_little: what tab.rs reads to tell a Little Eclipse window's
+    // download from the tab's own.
+    printf("DOWNLOAD-START url=%s name=%s little=%lu from_little=%d\n",
+           download.originalRequest.URL.absoluteString.UTF8String, suggestedFilename.UTF8String,
+           (unsigned long)little_windows().count, eclipse_download_from_little_window());
+    if (gDownloadPaths == nil) gDownloadPaths = [NSMapTable weakToStrongObjectsMapTable];
+    [gDownloadPaths setObject:path forKey:download];
     completionHandler([NSURL fileURLWithPath:path isDirectory:NO]);
 }
 - (void)downloadDidFinish:(WKDownload *)download {
-    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"];
-    NSString *name = download.originalRequest.URL.lastPathComponent;
-    NSDictionary *attributes = nil;
-    for (NSString *file in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil]) {
-        if ([file isEqualToString:name] || [file isEqualToString:@"saved.html"]) {
-            attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:[dir stringByAppendingPathComponent:file]
-                                                                          error:nil];
-        }
-    }
+    NSString *path = [gDownloadPaths objectForKey:download];
+    NSDictionary *attributes = path != nil ? [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil] : nil;
     // little=: the Little Eclipse windows still open when the file is done.
     printf("DOWNLOAD-DONE url=%s ok=1 size=%llu little=%lu\n", download.originalRequest.URL.absoluteString.UTF8String,
            attributes.fileSize, (unsigned long)little_windows().count);
@@ -173,6 +186,14 @@ static HarnessDownloadDelegate *gDownloadDelegate;
     (void)webView; (void)navigationAction;
     printf("TAB-TAKES-DOWNLOAD action\n");
     download.delegate = gDownloadDelegate;
+}
+/* As wry: a response the tab cannot show is a download. */
+- (void)webView:(WKWebView *)webView
+    decidePolicyForNavigationResponse:(WKNavigationResponse *)response
+                      decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+    (void)webView;
+    decisionHandler(response.canShowMIMEType ? WKNavigationResponsePolicyAllow
+                                             : (WKNavigationResponsePolicy)2 /* Download */);
 }
 - (void)webView:(WKWebView *)webView
     decidePolicyForNavigationAction:(WKNavigationAction *)action
@@ -309,6 +330,36 @@ static void print_bar(const char *when) {
     printf("BAR %s shown=1 key=%d right=%.0f top=%.0f focused=%d placeholder=\"%s\" text=\"%s\" rows=%s\n", when,
            bar.isKeyWindow, NSMaxX(visible) - NSMaxX(bar.frame), NSMaxY(visible) - NSMaxY(bar.frame), focused,
            field.placeholderString.UTF8String ?: "", field.stringValue.UTF8String ?: "", rows.UTF8String);
+}
+
+/* What each row of the bar shows as its icon: the site's ("icon", with the
+   colour at its centre), its initial on a tile ("tile"), or a symbol. */
+static void print_bar_icons(const char *when) {
+    NSWindow *bar = command_bar();
+    NSMutableString *out = [NSMutableString string];
+    for (int i = 0;; i++) {
+        NSView *row = window_control(bar, [NSString stringWithFormat:@"eclipse-commandbar-row-%d", i]);
+        if (row == nil) break;
+        NSString *what = @"none";
+        for (NSView *child in row.subviews) {
+            if (child.hidden) continue;
+            if ([child isKindOfClass:[NSImageView class]] && ((NSImageView *)child).image != nil) {
+                NSImage *image = ((NSImageView *)child).image;
+                NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+                    initWithCGImage:[image CGImageForProposedRect:NULL context:nil hints:nil]];
+                NSColor *middle = [[rep colorAtX:rep.pixelsWide / 2 y:rep.pixelsHigh / 2]
+                    colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+                what = image.isTemplate ? @"symbol"
+                                        : [NSString stringWithFormat:@"icon:%.0f,%.0f,%.0f", middle.redComponent * 255,
+                                                                     middle.greenComponent * 255,
+                                                                     middle.blueComponent * 255];
+            } else if (![child isKindOfClass:[NSTextField class]] && ![child isKindOfClass:[NSImageView class]]) {
+                what = @"tile";
+            }
+        }
+        [out appendFormat:@"[%@]", what];
+    }
+    printf("ICONS %s %s\n", when, out.UTF8String);
 }
 
 /* Types `text` into the bar's field as the keyboard would, then sends
@@ -467,6 +518,8 @@ int main(int argc, char **argv) {
 
         WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
         configuration.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
+        // As wry with devtools: the tab and its popups have a Web Inspector.
+        [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
         [configuration setURLSchemeHandler:[[schemeClass alloc] init] forURLScheme:@"eclipse"];
         [configuration.userContentController addScriptMessageHandler:[[ipcClass alloc] init] name:@"ipc"];
 
@@ -619,6 +672,82 @@ int main(int argc, char **argv) {
                     NSView *copied = window_control(webView.window, @"eclipse-little-copied");
                     printf("COPY later copied_shown=%d\n", copied != nil && !copied.hidden);
                 });
+            } else if ([scenario isEqualToString:@"barbuttons"]) {
+                // The bar's right-hand buttons, in Arc's groups: their order,
+                // then Copy Screenshot and Web Inspector, then the buttons a
+                // 480-point window keeps.
+                void (^buttons)(const char *) = ^(const char *when) {
+                    NSWindow *w = littleWebView(@"/pop.html").window;
+                    NSMutableArray<NSView *> *controls = [NSMutableArray array];
+                    for (NSView *view in w.contentView.subviews) {
+                        if (!view.hidden && NSMinX(view.frame) > NSMidX(w.contentView.bounds) &&
+                            [view.identifier hasPrefix:@"eclipse-little-"] &&
+                            ![view.identifier isEqualToString:@"eclipse-little-copied"]) {
+                            [controls addObject:view];
+                        }
+                    }
+                    [controls sortUsingComparator:^NSComparisonResult(NSView *a, NSView *b) {
+                        return [@(NSMinX(a.frame)) compare:@(NSMinX(b.frame))];
+                    }];
+                    NSMutableString *order = [NSMutableString string];
+                    BOOL inside = YES;
+                    for (NSView *view in controls) {
+                        NSString *name = [view.identifier substringFromIndex:@"eclipse-little-".length];
+                        [order appendFormat:@"%@%@", order.length > 0 ? @" " : @"",
+                                            [name isEqualToString:@"separator"] ? @"|" : name];
+                        inside = inside && NSContainsRect(w.contentView.bounds, view.frame);
+                    }
+                    printf("BUTTONS %s %s inside=%d host=\"%s\"\n", when, order.UTF8String, inside,
+                           host_label(w).UTF8String);
+                };
+                after(1.5, ^{
+                    WKWebView *webView = littleWebView(@"/pop.html");
+                    NSWindow *w = webView.window;
+                    buttons("wide");
+                    NSView *capture = window_control(w, @"eclipse-little-capture");
+                    if (capture != nil) click(w, capture);
+                    else printf("NO CAPTURE BUTTON\n");
+                });
+                after(2.3, ^{
+                    WKWebView *webView = littleWebView(@"/pop.html");
+                    NSTextField *copied = (NSTextField *)window_control(webView.window, @"eclipse-little-copied");
+                    const char *name = getenv("ECLIPSE_TEST_PASTEBOARD");
+                    NSPasteboard *pasteboard = name != NULL ? [NSPasteboard pasteboardWithName:@(name)] : nil;
+                    NSData *png = [pasteboard dataForType:NSPasteboardTypePNG];
+                    NSBitmapImageRep *rep = png != nil ? [NSBitmapImageRep imageRepWithData:png] : nil;
+                    // The page is a card of the window's size less the bar.
+                    printf("CAPTURE png=%d width=%ld height=%ld view=%.0fx%.0f copied_shown=%d label=\"%s\"\n",
+                           png.length > 0, (long)rep.pixelsWide, (long)rep.pixelsHigh, NSWidth(webView.bounds),
+                           NSHeight(webView.bounds), copied != nil && !copied.hidden,
+                           copied.stringValue.UTF8String ?: "");
+                    snapshot_windows(@"barbuttons-copied");
+                    NSView *inspect = window_control(webView.window, @"eclipse-little-inspect");
+                    if (inspect != nil) click(webView.window, inspect);
+                    else printf("NO INSPECT BUTTON\n");
+                });
+                after(3.6, ^{
+                    WKWebView *webView = littleWebView(@"/pop.html");
+                    SEL inspectorSel = NSSelectorFromString(@"_inspector");
+                    id inspector = [webView respondsToSelector:inspectorSel] ? [webView valueForKey:@"_inspector"] : nil;
+                    BOOL visible = [inspector respondsToSelector:NSSelectorFromString(@"isVisible")] &&
+                                   [[inspector valueForKey:@"visible"] boolValue];
+                    // docked: the inspector's own page is in the Little window.
+                    id inspectorView = [inspector respondsToSelector:NSSelectorFromString(@"inspectorWebView")]
+                                           ? [inspector valueForKey:@"inspectorWebView"]
+                                           : nil;
+                    BOOL docked = [inspectorView isKindOfClass:[NSView class]] &&
+                                  ((NSView *)inspectorView).window == webView.window;
+                    printf("INSPECTOR visible=%d docked=%d page=%.0fx%.0f\n", visible, docked,
+                           NSWidth(webView.frame), NSHeight(webView.frame));
+                    SEL closeSel = NSSelectorFromString(@"close");
+                    if (visible && [inspector respondsToSelector:closeSel]) {
+                        ((void (*)(id, SEL))objc_msgSend)(inspector, closeSel);
+                    }
+                    NSWindow *w = webView.window;
+                    [w setFrame:[w frameRectForContentRect:NSMakeRect(NSMinX(w.frame), NSMinY(w.frame), 492, 642)]
+                        display:YES];
+                });
+                after(3.9, ^{ buttons("narrow"); });
             } else if ([scenario isEqualToString:@"siteinfo"]) {
                 // The "i" button's popover, and Copy Link in it.
                 after(1.5, ^{
@@ -648,13 +777,17 @@ int main(int argc, char **argv) {
                 after(0.8, ^{
                     print_key();
                     print_bar("shown");
+                });
+                // The icons have loaded (from the test server) by now.
+                after(1.6, ^{
+                    print_bar_icons("shown");
                     snapshot_windows(@"commandbar-shown");
                     type_in_bar([NSString stringWithFormat:@"http://localhost:%d/pop.html?bar", port + 1], NULL);
                     print_bar("typed");
                     type_in_bar(nil, @selector(insertNewline:));
                     print_bar("returned");
                 });
-                after(2.5, ^{ print_key(); });
+                after(3.2, ^{ print_key(); });
             } else if ([scenario isEqualToString:@"commandbarpick"]) {
                 // Typing filters the suggestions; ↓ and Return open one.
                 press(@"n", NSEventModifierFlagCommand | NSEventModifierFlagOption);
@@ -792,6 +925,16 @@ int main(int argc, char **argv) {
                            [NSString stringWithFormat:@"http://localhost:%d/dl/slow-standalone.zip", port + 1]
                                .UTF8String,
                            "", 0, 0) != 0);
+            } else if ([scenario isEqualToString:@"dltab"]) {
+                // The tab's own page downloads a file while a standalone
+                // window is open: the download is the tab's, not the window's.
+                eclipse_open_standalone_little_window(
+                    [NSString stringWithFormat:@"http://localhost:%d/pop.html", port + 1].UTF8String, "", 0, 0);
+                after(1.0, ^{
+                    [gTab evaluateJavaScript:[NSString stringWithFormat:@"location = 'http://localhost:%d/dl/tab.zip'",
+                                                                        port + 1]
+                           completionHandler:nil];
+                });
             } else if ([scenario isEqualToString:@"dlnotab"]) {
                 // No tab can take a download: the file opens as a tab.
                 static HarnessPlainNavigationDelegate *plain;

@@ -15,5 +15,7 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=Cocoa");
         println!("cargo:rustc-link-lib=framework=QuartzCore");
         println!("cargo:rustc-link-lib=framework=WebKit");
+        // The ⌥⌘N bar decodes site icons (menu.m).
+        println!("cargo:rustc-link-lib=framework=ImageIO");
     }
 }

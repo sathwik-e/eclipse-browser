@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 #import <WebKit/WebKit.h>
+#import <ImageIO/ImageIO.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include <stdlib.h>
@@ -1633,7 +1634,8 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
    Space's colour; on its left a site-information button (a popover with the
    connection's security, the host, Copy Link and Open in Eclipse) and the
    full address of the document on screen in a small monospaced font, the
-   host brighter than the rest; on its right Copy Link and Open in Eclipse.
+   host brighter than the rest; on its right, in groups as in Arc, Copy Link
+   | Copy Screenshot (of the page) | Web Inspector | Open in Eclipse.
    The address is derived here from WebKit's URL and never from page content:
    that of a load only once it commits, never of one still pending. When it
    does not fit, the path is shortened first and the host last, and "Not
@@ -1679,10 +1681,16 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
 /* The rounded background the address field sits on while editing. */
 @property(nonatomic, strong) NSView *addressBox;
 @property(nonatomic, strong) NSButton *linkButton;
-/* "Copied", shown for a moment after Copy Link. */
+@property(nonatomic, strong) NSButton *captureButton;
+@property(nonatomic, strong) NSButton *inspectButton;
+/* "Copied" or "Screenshot Copied", shown for a moment after a copy. */
 @property(nonatomic, strong) NSTextField *copiedLabel;
 @property(nonatomic) NSUInteger copiedGeneration;
-@property(nonatomic, strong) NSView *separator;
+/* The button showing a checkmark after a copy, and its own image. */
+@property(nonatomic, strong) NSButton *flashedButton;
+@property(nonatomic, strong) NSImage *flashedImage;
+/* The lines between the bar's button groups, left to right. */
+@property(nonatomic, copy) NSArray<NSView *> *separators;
 @property(nonatomic, strong) NSButton *openButton;
 @property(nonatomic, strong) NSPopover *infoPopover;
 @property(nonatomic) BOOL editing;
@@ -1692,6 +1700,8 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
 - (void)beginEditingAddress;
 - (void)openInEclipse;
 - (void)copyLink;
+- (void)captureScreenshot;
+- (void)showInspector;
 - (void)downloadStarted;
 @end
 
@@ -1768,6 +1778,10 @@ static const NSUInteger kEclipseLittleMaxAddressLength = 8192;
    three sides. The window is the page area plus this chrome. */
 static const CGFloat kEclipseLittleBarHeight = 36.0;
 static const CGFloat kEclipseLittleInset = 6.0;
+/* The least room the address keeps on the bar before Copy Screenshot and
+   Web Inspector leave it (about forty monospaced characters: a 480-point
+   sign-in popup shows its whole address, a standalone window all buttons). */
+static const CGFloat kEclipseLittleMinAddressRoom = 280.0;
 static const CGFloat kEclipseLittleChromeWidth = 2.0 * 6.0;          /* 2 × inset */
 static const CGFloat kEclipseLittleChromeHeight = 36.0 + 6.0;        /* bar + inset */
 static const CGFloat kEclipseLittleCardRadius = 10.0;
@@ -2161,6 +2175,16 @@ API_AVAILABLE(macos(11.3))
    its delegate weakly). */
 static NSMutableSet *gLittleDownloads = nil;
 
+/* 1 while wry's download delegate decides where a download a Little Eclipse
+   window handed over goes, else 0: wry calls tab.rs's download handler
+   synchronously from there, and that handler must not take the download for
+   the tab's own (Tidy Downloads would name the file after the tab's page). */
+static int gDecidingLittleDownload = 0;
+
+int eclipse_download_from_little_window(void) {
+    return gDecidingLittleDownload;
+}
+
 @implementation EclipseLittleDownload
 
 - (void)download:(WKDownload *)download
@@ -2168,18 +2192,24 @@ static NSMutableSet *gLittleDownloads = nil;
                  suggestedFilename:(NSString *)suggestedFilename
                  completionHandler:(void (^)(NSURL *))completionHandler {
     __weak EclipseLittleWindow *window = self.window;
-    [self.inner download:download
-        decideDestinationUsingResponse:response
-                     suggestedFilename:suggestedFilename
-                     completionHandler:^(NSURL *destination) {
-                         completionHandler(destination);
-                         // nil: tab.rs refused it (a page, not a file); the
-                         // window stays as it is, like a tab.
-                         if (destination == nil) return;
-                         dispatch_async(dispatch_get_main_queue(), ^{
-                             [window downloadStarted];
-                         });
-                     }];
+    int previous = gDecidingLittleDownload;
+    gDecidingLittleDownload = 1;
+    @try {
+        [self.inner download:download
+            decideDestinationUsingResponse:response
+                         suggestedFilename:suggestedFilename
+                         completionHandler:^(NSURL *destination) {
+                             completionHandler(destination);
+                             // nil: tab.rs refused it (a page, not a file);
+                             // the window stays as it is, like a tab.
+                             if (destination == nil) return;
+                             dispatch_async(dispatch_get_main_queue(), ^{
+                                 [window downloadStarted];
+                             });
+                         }];
+    } @finally {
+        gDecidingLittleDownload = previous;
+    }
 }
 
 - (void)downloadDidFinish:(WKDownload *)download {
@@ -2242,6 +2272,22 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     download.delegate = proxy;
 }
 
+/* `webView`'s Web Inspector (WebKit's _WKInspector, through the _inspector
+   SPI as wry's open_devtools), or nil. */
+static id eclipse_web_inspector(WKWebView *webView) {
+    SEL inspectorSel = NSSelectorFromString(@"_inspector");
+    return [webView respondsToSelector:inspectorSel] ? ((id (*)(id, SEL))objc_msgSend)(webView, inspectorSel) : nil;
+}
+
+/* The view the inspector's own page is in (it is in the inspected page's
+   window while docked), or nil. */
+static NSView *eclipse_web_inspector_view(id inspector) {
+    SEL viewSel = NSSelectorFromString(@"inspectorWebView");
+    if (![inspector respondsToSelector:viewSel]) return nil;
+    id view = ((id (*)(id, SEL))objc_msgSend)(inspector, viewSel);
+    return [view isKindOfClass:[NSView class]] ? view : nil;
+}
+
 @implementation EclipseLittleWindow
 
 - (void)refreshTitle {
@@ -2290,10 +2336,14 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     NSColor *field = gLittleFrameDark ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.10]
                                       : [NSColor colorWithCalibratedWhite:0.0 alpha:0.07];
     self.addressBox.layer.backgroundColor = field.CGColor;
-    self.copiedLabel.layer.backgroundColor = field.CGColor;
+    // Opaque: it sits over the end of the address.
+    NSColor *pill = [[frame colorUsingColorSpace:[NSColorSpace sRGBColorSpace]]
+        blendedColorWithFraction:gLittleFrameDark ? 0.12 : 0.08
+                         ofColor:gLittleFrameDark ? [NSColor whiteColor] : [NSColor blackColor]];
+    self.copiedLabel.layer.backgroundColor = (pill ?: field).CGColor;
     NSColor *line = gLittleFrameDark ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.16]
                                      : [NSColor colorWithCalibratedWhite:0.0 alpha:0.14];
-    self.separator.layer.backgroundColor = line.CGColor;
+    for (NSView *separator in self.separators) separator.layer.backgroundColor = line.CGColor;
     self.texture.needsDisplay = YES;
 }
 
@@ -2308,18 +2358,43 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     self.texture.frame = NSMakeRect(0, 0, NSWidth(bounds), bar);
     self.webView.frame = NSMakeRect(inset, bar, MAX(0.0, NSWidth(bounds) - 2.0 * inset),
                                     MAX(0.0, NSHeight(bounds) - bar - inset));
-    // Right to left: Open in Eclipse | Copy Link.
+    // Right to left, in Arc's groups: Open in Eclipse | Web Inspector |
+    // Copy Screenshot | Copy Link. A window too narrow to leave the address
+    // kEclipseLittleMinAddressRoom keeps only Copy Link | Open in Eclipse
+    // (the inspector is still ⌥⌘I there).
     CGFloat button = 24.0, top = floor(mid - button / 2.0);
-    self.openButton.frame = NSMakeRect(NSWidth(bounds) - 8.0 - button, top, button, button);
-    self.separator.frame = NSMakeRect(NSMinX(self.openButton.frame) - 5.0, floor(mid - 7.0), 1.0, 14.0);
-    self.linkButton.frame = NSMakeRect(NSMinX(self.separator.frame) - 4.0 - button, top, button, button);
-    CGFloat right = NSMinX(self.linkButton.frame) - 4.0;
+    CGFloat start = leading - 4.0 + button + 1.0;
+    NSArray<NSView *> *separators = self.separators;
+    CGFloat right = 0;
+    BOOL full = YES;
+    for (int pass = 0; pass < 2; pass++) {
+        NSArray<NSButton *> *groups = full ? @[ self.openButton, self.inspectButton, self.captureButton, self.linkButton ]
+                                           : @[ self.openButton, self.linkButton ];
+        // The separator before each group but the first, right to left.
+        NSArray<NSView *> *between = full ? @[ separators[2], separators[1], separators[0] ] : @[ separators[0] ];
+        right = NSWidth(bounds) - 8.0;
+        for (NSUInteger i = 0; i < groups.count; i++) {
+            if (i > 0) {
+                NSView *separator = between[i - 1];
+                separator.frame = NSMakeRect(right - 5.0, floor(mid - 7.0), 1.0, 14.0);
+                right = NSMinX(separator.frame) - 4.0;
+            }
+            groups[i].frame = NSMakeRect(right - button, top, button, button);
+            right = NSMinX(groups[i].frame);
+        }
+        right -= 4.0;
+        if (!full || right - start >= kEclipseLittleMinAddressRoom) break;
+        full = NO;
+    }
+    self.captureButton.hidden = !full;
+    self.inspectButton.hidden = !full;
+    separators[1].hidden = !full;
+    separators[2].hidden = !full;
     NSSize copied = self.copiedLabel.intrinsicContentSize;
     CGFloat copiedWidth = isfinite(copied.width) ? ceil(copied.width) + 14.0 : 60.0;
     self.copiedLabel.frame = NSMakeRect(right - copiedWidth, floor(mid - 9.0), copiedWidth, 18.0);
     // Left to right: site information, then the address.
     self.infoButton.frame = NSMakeRect(leading - 4.0, top, button, button);
-    CGFloat start = NSMaxX(self.infoButton.frame) + 1.0;
     self.hostButton.frame = NSMakeRect(start, floor(mid - 12.0), MAX(40.0, right - start), 24.0);
     [self fitHostLabel];
     NSRect box = NSMakeRect(leading - 4.0, floor(mid - 12.0), MAX(40.0, right - leading + 4.0), 24.0);
@@ -2439,6 +2514,18 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     [self copyLink];
 }
 
+- (void)captureClicked:(id)sender {
+    (void)sender;
+    [self.infoPopover close];
+    [self captureScreenshot];
+}
+
+- (void)inspectClicked:(id)sender {
+    (void)sender;
+    [self.infoPopover close];
+    [self showInspector];
+}
+
 - (void)infoClicked:(id)sender {
     (void)sender;
     [self showSiteInfo];
@@ -2461,16 +2548,106 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     [item setString:string forType:NSPasteboardTypeURL];
     [pasteboard writeObjects:@[ item ]];
     eclipse_little_log(@"copied link", self);
+    [self flashCopied:@"Copied" onButton:self.linkButton];
+}
 
+/* Says `text` on the bar for a moment, with a checkmark on `button`. */
+- (void)flashCopied:(NSString *)text onButton:(NSButton *)button {
     NSUInteger generation = ++self.copiedGeneration;
+    [self restoreFlashedButton];
+    self.copiedLabel.stringValue = text;
     self.copiedLabel.hidden = NO;
-    self.linkButton.image = eclipse_little_symbol(@[ @"checkmark" ], @"Copied") ?: self.linkButton.image;
+    [self layoutChrome];
+    NSImage *check = eclipse_little_symbol(@[ @"checkmark" ], text);
+    if (button != nil && check != nil) {
+        self.flashedButton = button;
+        self.flashedImage = button.image;
+        button.image = check;
+    }
     __weak EclipseLittleWindow *weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         EclipseLittleWindow *me = weakSelf;
         if (me == nil || me.closed || me.copiedGeneration != generation) return;
         me.copiedLabel.hidden = YES;
-        me.linkButton.image = eclipse_little_symbol(@[ @"link" ], @"Copy Link") ?: me.linkButton.image;
+        [me restoreFlashedButton];
+    });
+}
+
+- (void)restoreFlashedButton {
+    if (self.flashedButton != nil && self.flashedImage != nil) self.flashedButton.image = self.flashedImage;
+    self.flashedButton = nil;
+    self.flashedImage = nil;
+}
+
+/* Copy Screenshot: a picture of the page as it is on screen goes to the
+   clipboard (PNG and TIFF), as Arc's capture does. Nothing is saved. */
+- (void)captureScreenshot {
+    if (self.closed) return;
+    if (self.window.attachedSheet != nil || NSIsEmptyRect(self.webView.bounds)) {
+        NSBeep();
+        return;
+    }
+    __weak EclipseLittleWindow *weakSelf = self;
+    [self.webView takeSnapshotWithConfiguration:nil
+                              completionHandler:^(NSImage *image, NSError *error) {
+                                  (void)error;
+                                  EclipseLittleWindow *me = weakSelf;
+                                  if (me == nil || me.closed) return;
+                                  CGImageRef cgImage = [image CGImageForProposedRect:NULL context:nil hints:nil];
+                                  NSData *png = nil;
+                                  if (cgImage != NULL) {
+                                      NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:cgImage];
+                                      png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+                                  }
+                                  if (png.length == 0) {
+                                      NSBeep();
+                                      return;
+                                  }
+                                  NSPasteboard *pasteboard = eclipse_pasteboard();
+                                  [pasteboard clearContents];
+                                  NSPasteboardItem *item = [[NSPasteboardItem alloc] init];
+                                  [item setData:png forType:NSPasteboardTypePNG];
+                                  NSData *tiff = image.TIFFRepresentation;
+                                  if (tiff.length > 0) [item setData:tiff forType:NSPasteboardTypeTIFF];
+                                  [pasteboard writeObjects:@[ item ]];
+                                  eclipse_little_log(@"copied screenshot", me);
+                                  [me flashCopied:@"Screenshot Copied" onButton:me.captureButton];
+                              }];
+}
+
+/* The window's own Web Inspector (also View > Show Web Inspector, ⌥⌘I,
+   while the window is in front), in a window of its own. */
+- (void)showInspector {
+    if (self.closed) return;
+    id inspector = eclipse_web_inspector(self.webView);
+    SEL showSel = NSSelectorFromString(@"show");
+    if (![inspector respondsToSelector:showSel]) {
+        NSBeep();
+        return;
+    }
+    ((void (*)(id, SEL))objc_msgSend)(inspector, showSel);
+    [self keepInspectorDetached:40];
+}
+
+/* WebKit docks an inspector in the inspected page's window once its own
+   page has loaded, when the page is big enough. Docked in a Little Eclipse
+   window it would sit over the page card (the card's frame is ours), so it
+   moves to a window of its own as soon as it shows (checked every 50 ms,
+   `tries` more times). WebKit remembers that, as when the user undocks it. */
+- (void)keepInspectorDetached:(int)tries {
+    __weak EclipseLittleWindow *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        EclipseLittleWindow *me = weakSelf;
+        if (me == nil || me.closed) return;
+        id inspector = eclipse_web_inspector(me.webView);
+        NSWindow *shownIn = eclipse_web_inspector_view(inspector).window;
+        SEL detachSel = NSSelectorFromString(@"detach");
+        if (shownIn == me.window && [inspector respondsToSelector:detachSel]) {
+            ((void (*)(id, SEL))objc_msgSend)(inspector, detachSel);
+            [me layoutChrome];
+            return;
+        }
+        if (shownIn == nil && tries > 1) [me keepInspectorDetached:tries - 1];
     });
 }
 
@@ -3227,12 +3404,45 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     copy.accessibilityLabel = @"Copy Link";
     [container addSubview:copy];
 
-    NSView *separator = [[NSView alloc] initWithFrame:NSZeroRect];
-    separator.wantsLayer = YES;
-    [container addSubview:separator];
+    NSButton *capture = eclipse_little_bar_button(@"eclipse-little-capture", lw, @selector(captureClicked:));
+    capture.image = eclipse_little_symbol(@[ @"camera", @"camera.viewfinder" ], @"Copy Screenshot");
+    if (capture.image != nil) {
+        capture.imagePosition = NSImageOnly;
+    } else {
+        capture.title = @"Shot";
+    }
+    capture.contentTintColor = [NSColor secondaryLabelColor];
+    capture.toolTip = @"Copy Screenshot of the Page";
+    capture.accessibilityLabel = @"Copy Screenshot";
+    [container addSubview:capture];
 
+    NSButton *inspect = eclipse_little_bar_button(@"eclipse-little-inspect", lw, @selector(inspectClicked:));
+    inspect.image = eclipse_little_symbol(@[ @"apple.terminal", @"terminal", @"chevron.left.forwardslash.chevron.right" ],
+                                          @"Web Inspector");
+    if (inspect.image != nil) {
+        inspect.imagePosition = NSImageOnly;
+    } else {
+        inspect.title = @"Dev";
+    }
+    inspect.contentTintColor = [NSColor secondaryLabelColor];
+    inspect.toolTip = @"Web Inspector (⌥⌘I)";
+    inspect.accessibilityLabel = @"Web Inspector";
+    [container addSubview:inspect];
+
+    // Between Copy Link | Copy Screenshot | Web Inspector | Open in Eclipse.
+    NSMutableArray<NSView *> *separators = [NSMutableArray array];
+    for (NSUInteger i = 0; i < 3; i++) {
+        NSView *separator = [[NSView alloc] initWithFrame:NSZeroRect];
+        separator.wantsLayer = YES;
+        separator.identifier = @"eclipse-little-separator";
+        [container addSubview:separator];
+        [separators addObject:separator];
+    }
+
+    // A split window, as Arc's: the page moves into the browser window.
     NSButton *open = eclipse_little_bar_button(@"eclipse-little-open", lw, @selector(openClicked:));
-    open.image = eclipse_little_symbol(@[ @"arrow.up.forward.app", @"arrow.up.right.square" ], @"Open in Eclipse");
+    open.image = eclipse_little_symbol(@[ @"rectangle.split.2x1", @"sidebar.left", @"arrow.up.forward.app" ],
+                                       @"Open in Eclipse");
     if (open.image != nil) {
         open.imagePosition = NSImageOnly;
     } else {
@@ -3307,7 +3517,9 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     lw.addressBox = box;
     lw.copiedLabel = copied;
     lw.linkButton = copy;
-    lw.separator = separator;
+    lw.captureButton = capture;
+    lw.inspectButton = inspect;
+    lw.separators = separators;
     lw.openButton = open;
     container.owner = lw;
     webView.UIDelegate = lw;
@@ -3400,6 +3612,12 @@ uint64_t eclipse_open_standalone_little_window(const char *url, const char *user
         }
         WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
         configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+        // The Web Inspector, as in a tab (wry turns this on with devtools).
+        @try {
+            [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+        } @catch (NSException *exception) {
+            (void)exception;
+        }
         EclipseLittleWindow *lw =
             eclipse_little_window_create(configuration, nil, NSZeroSize, NO, NSZeroPoint, YES);
         if (lw == nil) return 0;
@@ -3543,17 +3761,7 @@ static BOOL eclipse_little_window_perform_action(NSWindow *window, NSString *act
             webView.pageZoom = MIN(MAX(round(zoom * 100.0) / 100.0, 0.5), 3.0);
         }
     } else if ([action isEqualToString:@"open_devtools"]) {
-        // The window's own Web Inspector (WebKit's _inspector SPI).
-        SEL inspectorSel = NSSelectorFromString(@"_inspector");
-        id inspector = [webView respondsToSelector:inspectorSel]
-                           ? ((id (*)(id, SEL))objc_msgSend)(webView, inspectorSel)
-                           : nil;
-        SEL showSel = NSSelectorFromString(@"show");
-        if ([inspector respondsToSelector:showSel]) {
-            ((void (*)(id, SEL))objc_msgSend)(inspector, showSel);
-        } else {
-            NSBeep();
-        }
+        [lw showInspector];
     }
     return YES;
 }
@@ -3578,7 +3786,8 @@ int eclipse_little_window_count_for_view(void *viewPtr) {
 /* ⌥⌘N, as in Arc: a floating "Search or Enter URL…" bar near the top right
    of the screen with the pointer, over whatever is in front (also while the
    browser window is hidden). Its suggestions come from Rust (open tabs and
-   favourites, eclipse_show_little_command_bar); typing filters them and
+   favourites with the icons the sidebar shows for them,
+   eclipse_show_little_command_bar); typing filters them and
    adds the typed text as the first row. ↑/↓ choose, Return opens the chosen
    row in a new standalone Little Eclipse window (Rust resolves typed text to
    an address or a search: "little_command_bar_open:<text>"), and Escape,
@@ -3614,8 +3823,9 @@ static const NSUInteger kEclipseCommandBarMaxSuggestions = 64;
 }
 @end
 
-/* One suggestion row: an icon (the site's initial on a tile coloured from
-   its host, or a symbol for the typed text) and "Title — host". */
+/* One suggestion row: an icon (the site's icon, the site's initial on a
+   tile coloured from its host until that loads or when there is none, or a
+   symbol for the typed text) and "Title — host". */
 @interface EclipseCommandBarRow : NSView
 @property(nonatomic, weak) EclipseCommandBar *owner;
 @property(nonatomic) NSUInteger index;
@@ -3623,6 +3833,9 @@ static const NSUInteger kEclipseCommandBarMaxSuggestions = 64;
 @property(nonatomic, strong) NSView *tile;
 @property(nonatomic, strong) NSTextField *initial;
 @property(nonatomic, strong) NSImageView *symbol;
+@property(nonatomic, strong) NSImageView *favicon;
+/* The http(s) icon this row shows once it has loaded, or nil. */
+@property(nonatomic, copy) NSString *iconURL;
 @property(nonatomic, copy) NSString *title;
 @property(nonatomic, copy) NSString *detail;
 /* What Return opens: a suggestion's URL or the typed text. */
@@ -3637,7 +3850,7 @@ static const NSUInteger kEclipseCommandBarMaxSuggestions = 64;
 @property(nonatomic, strong) NSButton *closeButton;
 @property(nonatomic, strong) NSView *rowsView;
 @property(nonatomic, strong) NSMutableArray<EclipseCommandBarRow *> *rows;
-/* From Rust: @[title, url] pairs. */
+/* From Rust: @[title, url, icon URL or @""]. */
 @property(nonatomic, copy) NSArray<NSArray<NSString *> *> *suggestions;
 @property(nonatomic, strong) NSColor *accent;
 @property(nonatomic) NSUInteger selected;
@@ -3647,9 +3860,119 @@ static const NSUInteger kEclipseCommandBarMaxSuggestions = 64;
 - (void)selectRow:(NSUInteger)index;
 - (void)openRow:(NSUInteger)index;
 - (void)close;
+- (void)iconLoaded:(NSString *)iconURL;
 @end
 
 static EclipseCommandBar *gCommandBar = nil;
+
+/* -- the rows' site icons
+
+   Loaded here, outside any web page: without cookies or a referrer, at
+   most kEclipseCommandBarIconMaxBytes, and decoded only as PNG, ICO, JPEG
+   or GIF of at most kEclipseCommandBarIconMaxPixels a side, scaled down to
+   the tile. Each icon URL is fetched once while the app runs (a failure is
+   remembered too), so the bar opens without waiting for the network. */
+
+static const NSUInteger kEclipseCommandBarIconMaxBytes = 256 * 1024;
+static const NSUInteger kEclipseCommandBarIconMaxPixels = 1024;
+static const NSUInteger kEclipseCommandBarIconCacheSize = 256;
+
+/* Icon URL -> NSImage, or NSNull for one that could not be had. */
+static NSMutableDictionary<NSString *, id> *gCommandBarIcons = nil;
+static NSMutableSet<NSString *> *gCommandBarIconsLoading = nil;
+static NSURLSession *gCommandBarIconSession = nil;
+
+/* A small image from untrusted icon data, or nil. */
+static NSImage *eclipse_command_bar_decode_icon(NSData *data) {
+    if (data.length == 0 || data.length > kEclipseCommandBarIconMaxBytes) return nil;
+    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+    if (source == NULL) return nil;
+    NSImage *image = nil;
+    NSString *type = (__bridge NSString *)CGImageSourceGetType(source);
+    static NSSet<NSString *> *allowed = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        allowed = [NSSet setWithArray:@[ @"public.png", @"com.microsoft.ico", @"public.jpeg", @"com.compuserve.gif" ]];
+    });
+    if (type != nil && [allowed containsObject:type] && CGImageSourceGetCount(source) > 0) {
+        // The largest frame (an .ico holds several sizes) within the limit.
+        size_t best = SIZE_MAX;
+        CGFloat bestSide = 0;
+        for (size_t i = 0; i < MIN(CGImageSourceGetCount(source), (size_t)16); i++) {
+            NSDictionary *properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, i, NULL));
+            CGFloat width = [properties[(__bridge NSString *)kCGImagePropertyPixelWidth] doubleValue];
+            CGFloat height = [properties[(__bridge NSString *)kCGImagePropertyPixelHeight] doubleValue];
+            if (width < 1 || height < 1 || width > kEclipseCommandBarIconMaxPixels ||
+                height > kEclipseCommandBarIconMaxPixels) {
+                continue;
+            }
+            if (MAX(width, height) > bestSide) {
+                bestSide = MAX(width, height);
+                best = i;
+            }
+        }
+        if (best != SIZE_MAX) {
+            NSDictionary *options = @{
+                (__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways : @YES,
+                (__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize : @64,
+                (__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform : @YES,
+                (__bridge NSString *)kCGImageSourceShouldCacheImmediately : @YES,
+            };
+            CGImageRef cgImage = CGImageSourceCreateThumbnailAtIndex(source, best, (__bridge CFDictionaryRef)options);
+            if (cgImage != NULL) {
+                image = [[NSImage alloc] initWithCGImage:cgImage size:NSMakeSize(20, 20)];
+                CGImageRelease(cgImage);
+            }
+        }
+    }
+    CFRelease(source);
+    return image;
+}
+
+/* The icon at `iconURL` if it has loaded (nil: not yet, or none); starts
+   loading it otherwise, and tells the bar once it has. */
+static NSImage *eclipse_command_bar_icon(NSString *iconURL) {
+    if (iconURL.length == 0) return nil;
+    id cached = gCommandBarIcons[iconURL];
+    if (cached != nil) return [cached isKindOfClass:[NSImage class]] ? cached : nil;
+    if ([gCommandBarIconsLoading containsObject:iconURL]) return nil;
+    NSURL *url = [NSURL URLWithString:iconURL];
+    if (url == nil || !eclipse_is_web_scheme(url.scheme) || url.host.length == 0) return nil;
+    if (gCommandBarIcons == nil) gCommandBarIcons = [NSMutableDictionary dictionary];
+    if (gCommandBarIconsLoading == nil) gCommandBarIconsLoading = [NSMutableSet set];
+    if (gCommandBarIconSession == nil) {
+        NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+        configuration.HTTPCookieAcceptPolicy = NSHTTPCookieAcceptPolicyNever;
+        configuration.HTTPShouldSetCookies = NO;
+        configuration.HTTPCookieStorage = nil;
+        configuration.URLCredentialStorage = nil;
+        configuration.timeoutIntervalForRequest = 8.0;
+        configuration.timeoutIntervalForResource = 15.0;
+        configuration.HTTPMaximumConnectionsPerHost = 2;
+        gCommandBarIconSession = [NSURLSession sessionWithConfiguration:configuration];
+    }
+    [gCommandBarIconsLoading addObject:iconURL];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPShouldHandleCookies = NO;
+    [request setValue:@"image/png,image/x-icon,image/*;q=0.8" forHTTPHeaderField:@"Accept"];
+    NSURLSessionDataTask *task = [gCommandBarIconSession
+        dataTaskWithRequest:request
+          completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+              NSInteger status = [response isKindOfClass:[NSHTTPURLResponse class]]
+                                     ? ((NSHTTPURLResponse *)response).statusCode
+                                     : 0;
+              NSImage *image = (error == nil && status >= 200 && status < 300) ? eclipse_command_bar_decode_icon(data)
+                                                                                : nil;
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  [gCommandBarIconsLoading removeObject:iconURL];
+                  if (gCommandBarIcons.count >= kEclipseCommandBarIconCacheSize) [gCommandBarIcons removeAllObjects];
+                  gCommandBarIcons[iconURL] = image ?: (id)[NSNull null];
+                  if (image != nil) [gCommandBar iconLoaded:iconURL];
+              });
+          }];
+    [task resume];
+    return nil;
+}
 
 /* A short host for a suggestion's second part ("www." dropped). */
 static NSString *eclipse_command_bar_host(NSString *urlString) {
@@ -3687,6 +4010,10 @@ static BOOL eclipse_command_bar_looks_like_address(NSString *text) {
         _symbol = [[NSImageView alloc] initWithFrame:_tile.frame];
         _symbol.hidden = YES;
         [self addSubview:_symbol];
+        _favicon = [[NSImageView alloc] initWithFrame:_tile.frame];
+        _favicon.imageScaling = NSImageScaleProportionallyUpOrDown;
+        _favicon.hidden = YES;
+        [self addSubview:_favicon];
         _label = [NSTextField labelWithString:@""];
         _label.lineBreakMode = NSLineBreakByTruncatingTail;
         _label.cell.truncatesLastVisibleLine = YES;
@@ -3725,17 +4052,26 @@ static BOOL eclipse_command_bar_looks_like_address(NSString *text) {
     CGFloat height = NSHeight(self.bounds);
     self.tile.frame = NSMakeRect(12, floor((height - 20) / 2), 20, 20);
     self.symbol.frame = self.tile.frame;
+    self.favicon.frame = self.tile.frame;
     CGFloat labelHeight = 18.0;
     self.label.frame = NSMakeRect(42, floor((height - labelHeight) / 2), MAX(0.0, NSWidth(self.bounds) - 54), labelHeight);
 }
 
-/* Sets the row's content; `typed` rows show a symbol, others a tile. */
-- (void)setTitle:(NSString *)title detail:(NSString *)detail value:(NSString *)value typed:(BOOL)typed {
+/* Sets the row's content; `typed` rows show a symbol, others the site's
+   icon (`iconURL`) or, until it loads or without one, a tile. */
+- (void)setTitle:(NSString *)title
+          detail:(NSString *)detail
+           value:(NSString *)value
+            icon:(NSString *)iconURL
+           typed:(BOOL)typed {
     self.title = title;
     self.detail = detail;
     self.value = value;
+    self.iconURL = typed || iconURL.length == 0 ? nil : iconURL;
     self.symbol.hidden = !typed;
     self.tile.hidden = typed;
+    self.favicon.hidden = YES;
+    [self showIcon];
     if (typed) {
         NSArray<NSString *> *names = eclipse_command_bar_looks_like_address(value) ? @[ @"globe" ] : @[ @"magnifyingglass" ];
         self.symbol.image = eclipse_little_symbol(names, detail);
@@ -3752,6 +4088,15 @@ static BOOL eclipse_command_bar_looks_like_address(NSString *text) {
                 .CGColor;
     }
     [self refresh];
+}
+
+/* The site's icon in place of the tile, once it has loaded. */
+- (void)showIcon {
+    NSImage *icon = eclipse_command_bar_icon(self.iconURL);
+    if (icon == nil) return;
+    self.favicon.image = icon;
+    self.favicon.hidden = NO;
+    self.tile.hidden = YES;
 }
 
 - (void)setSelected:(BOOL)selected {
@@ -3794,17 +4139,17 @@ static BOOL eclipse_command_bar_looks_like_address(NSString *text) {
     NSMutableArray<NSArray *> *items = [NSMutableArray array];
     if (text.length > 0) {
         NSString *what = eclipse_command_bar_looks_like_address(text) ? @"Open" : @"Search";
-        [items addObject:@[ text, what, text, @YES ]];
+        [items addObject:@[ text, what, text, @"", @YES ]];
     }
     for (NSArray<NSString *> *suggestion in self.suggestions) {
         if (items.count >= kEclipseCommandBarMaxRows) break;
-        NSString *title = suggestion[0], *url = suggestion[1];
+        NSString *title = suggestion[0], *url = suggestion[1], *icon = suggestion[2];
         if (text.length > 0 && [title rangeOfString:text options:NSCaseInsensitiveSearch].location == NSNotFound &&
             [url rangeOfString:text options:NSCaseInsensitiveSearch].location == NSNotFound) {
             continue;
         }
         NSString *host = eclipse_command_bar_host(url);
-        [items addObject:@[ title.length > 0 ? title : host, host, url, @NO ]];
+        [items addObject:@[ title.length > 0 ? title : host, host, url, icon, @NO ]];
     }
 
     for (EclipseCommandBarRow *row in self.rows) [row removeFromSuperview];
@@ -3817,7 +4162,7 @@ static BOOL eclipse_command_bar_looks_like_address(NSString *text) {
         row.owner = self;
         row.index = i;
         row.identifier = [NSString stringWithFormat:@"eclipse-commandbar-row-%lu", (unsigned long)i];
-        [row setTitle:item[0] detail:item[1] value:item[2] typed:[item[3] boolValue]];
+        [row setTitle:item[0] detail:item[1] value:item[2] icon:item[3] typed:[item[4] boolValue]];
         [self.rowsView addSubview:row];
         [self.rows addObject:row];
     }
@@ -3837,6 +4182,14 @@ static BOOL eclipse_command_bar_looks_like_address(NSString *text) {
     frame.origin.y = top - height;
     [self.panel setFrame:frame display:YES];
     [self.panel invalidateShadow];
+}
+
+/* An icon finished loading: the rows waiting for it show it. */
+- (void)iconLoaded:(NSString *)iconURL {
+    if (self.closing) return;
+    for (EclipseCommandBarRow *row in self.rows) {
+        if ([row.iconURL isEqualToString:iconURL]) [row showIcon];
+    }
 }
 
 - (void)selectRow:(NSUInteger)index {
@@ -3928,10 +4281,11 @@ static NSWindow *eclipse_command_bar_dismiss_for_command(void) {
 }
 
 /* Shows the bar (or refreshes the one showing) with `count` suggestions
-   (`titles[i]`, `urls[i]`: UTF-8, http(s) addresses only) and the Space's
-   accent colour for the chosen row. 1 when it shows. */
-int eclipse_show_little_command_bar(const char *const *titles, const char *const *urls, size_t count, double red,
-                                    double green, double blue) {
+   (`titles[i]`, `urls[i]`: UTF-8, http(s) addresses only; `icons[i]` an
+   http(s) icon for the row, or NULL; `icons` itself may be NULL) and the
+   Space's accent colour for the chosen row. 1 when it shows. */
+int eclipse_show_little_command_bar(const char *const *titles, const char *const *urls, const char *const *icons,
+                                    size_t count, double red, double green, double blue) {
     @autoreleasepool {
         NSMutableArray<NSArray<NSString *> *> *suggestions = [NSMutableArray array];
         for (size_t i = 0; i < count && suggestions.count < kEclipseCommandBarMaxSuggestions; i++) {
@@ -3939,7 +4293,9 @@ int eclipse_show_little_command_bar(const char *const *titles, const char *const
             NSURL *url = eclipse_little_loadable_url(urls[i]);
             if (url == nil) continue;
             NSString *title = titles[i] != NULL ? [NSString stringWithUTF8String:titles[i]] : @"";
-            [suggestions addObject:@[ eclipse_little_clean_title(title ?: @""), url.absoluteString ]];
+            NSURL *icon = icons != NULL ? eclipse_little_loadable_url(icons[i]) : nil;
+            [suggestions addObject:@[ eclipse_little_clean_title(title ?: @""), url.absoluteString,
+                                      icon.absoluteString ?: @"" ]];
         }
         NSColor *accent = nil;
         if (isfinite(red) && isfinite(green) && isfinite(blue)) {

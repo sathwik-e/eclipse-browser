@@ -52,9 +52,10 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     page into the browser window as a new tab and closes the little window.
   - **New Little Eclipse Window (⌥⌘N)** shows a floating "Search or Enter
     URL…" bar at the top right of the screen, as in Arc, also while the
-    browser window is hidden. It suggests your open tabs and favourites;
-    type to filter or to enter an address or search, ↑/↓ to choose and
-    Return to open it in a new Little Eclipse window. The sidebar's "+" menu
+    browser window is hidden. It suggests your open tabs and favourites,
+    each with the icon the sidebar shows for it; type to filter or to enter
+    an address or search, ↑/↓ to choose and Return to open it in a new
+    Little Eclipse window. The sidebar's "+" menu
     and the command bar open the same bar. Escape, the × or a
     click elsewhere closes the bar.
   - The top bar looks like Arc's: faint diagonal stripes over the Space's
@@ -63,7 +64,12 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     the page on screen in a small monospaced font with the host brightest.
     When space runs short the path is shortened first and the host last, and
     plain http always shows "Not Secure". The page has no say in what the bar
-    shows. Copy Link sits on the right, next to Open in Eclipse. Click the
+    shows. On the right, in Arc's groups: Copy Link | Copy Screenshot (a
+    picture of the page to the clipboard) | Web Inspector | Open in Eclipse.
+    A window too narrow to keep about forty characters of address (a
+    480-point sign-in popup) shows only Copy Link and Open in Eclipse; ⌥⌘I
+    still opens the inspector there. Arc's translate, extensions and other
+    buttons have no Eclipse counterpart and are left out. Click the
     address (or press ⌘L) to edit it; Escape puts it back. Only web pages
     load there, never internal `eclipse://` pages.
   - **Popups** get one too, so they keep `window.opener` and can hand their
@@ -78,8 +84,10 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     Mail, say) closes once the download starts.
 - **Max**, Arc's conveniences without an AI service (Settings > Max, each
   on by default and switchable):
-  - **Tidy Tabs.** A broom in the sidebar once a Space has more than six tabs
-    groups them by site and closes duplicates (⇧⌘T undoes; ⇧⌘Y any time).
+  - **Tidy Tabs.** A broom beside New Tab once a Space has more than six tabs
+    groups them into categories (Development, Media, Work, …) or by site and
+    closes duplicates and blank new tabs (⇧⌘T reopens them one at a time;
+    ⇧⌘Y tidies any time).
   - **Instant Links.** Shift+Return on a search in the command bar or the
     address field opens the top result directly; "rust book, tokio docs"
     opens one tab per search (up to six). This uses DuckDuckGo's `!ducky`
@@ -92,8 +100,9 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     and unread counts ("(3) Inbox - Gmail" shows as "Inbox"). Any tab can be
     renamed with "Rename Tab" in the command bar.
   - **Tidy Downloads.** Files with junk names (`download.pdf`, numbers,
-    UUIDs, hashes) are renamed after the page they came from, or the site
-    and date, without ever replacing a file. The Downloads list shows the
+    UUIDs, hashes) are renamed after the tab page that started them (never
+    simply the tab in front), or else the site and date (always for a file
+    from a Little Eclipse window), without ever replacing a file. The Downloads list shows the
     old name.
   - **ChatGPT in the Command Bar.** Type "chatgpt" or "claude" and press Tab
     to ask; Return opens the question on chatgpt.com or claude.ai in a new
@@ -261,10 +270,12 @@ ECLIPSE_SMOKE_LITTLE_URL=https://example.com   # open a URL as a link from anoth
 `noopener` windows get tabs, limits, the address on the top bar for loads
 that never commit, popup messages, `eclipse://` requests and opener
 navigation, shortcuts with and without a dialog up, focus, resizing, links
-that open tabs, Open in Eclipse, Copy Link and the site-information popover,
+that open tabs, Open in Eclipse, Copy Link, Copy Screenshot, the Web
+Inspector button and the site-information popover,
 standalone windows without an opener, the address field, including its
 refusal of `eclipse://`, "Not Secure" and the host kept on long addresses,
-the ⌥⌘N bar, and downloads from standalone windows, popups and links). It builds
+the ⌥⌘N bar and its site icons, and downloads from standalone windows, popups,
+links and the tab itself, marked as the window's or the tab's). It builds
 `src/menu.m` into a small harness, serves local test pages on ports 8831 and
 8832, and opens windows for about two minutes; the harness makes itself the
 active app, so leave the keyboard alone while it runs. `GUARD_MALLOC=1` runs

@@ -11,7 +11,7 @@ use crate::config::{
     BrowserConfig, DownloadItem, EaselItem, FavoriteShortcut, NoteItem, Session, SessionTab,
     normalize_site_domain, write_atomic,
 };
-use crate::events::{BrowserUiState, DocumentTrust, IpcCommand, UserEvent};
+use crate::events::{BrowserUiState, DocumentTrust, DownloadOrigin, IpcCommand, UserEvent};
 use crate::max;
 use crate::tab::{
     LOADING_TITLE, NavigationError, Tab, canonicalize_eclipse_url, classify_navigation_error,
@@ -501,6 +501,7 @@ impl BrowserApp {
                 .map(|(tab, title)| CommandBarTab {
                     title,
                     url: &tab.url,
+                    favicon_url: tab.favicon_url.as_deref(),
                     current_space: tab.workspace == self.current_workspace,
                     last_active: tab.last_active,
                 })
@@ -2187,20 +2188,18 @@ impl BrowserApp {
         file_name: String,
         url: String,
         path: String,
+        origin: Option<DownloadOrigin>,
     ) {
         let id = self.next_download_id;
         self.next_download_id += 1;
         self.download_items.insert(seq, id);
-        // Downloads start from a click in the page in front (a Little
-        // Eclipse window aside): Tidy Downloads names junk after that page.
-        if let Some(tab) = self.tabs.iter().find(|tab| tab.id == self.active_tab_id)
-            && is_http_url(&tab.url)
-        {
-            let title = if tab.title == LOADING_TITLE { String::new() } else { tab.title.clone() };
+        // What Tidy Downloads names a junk file after: the page that started
+        // the download, never simply the page in front.
+        if let Some(source) = download_source(&self.tabs, origin.as_ref(), &url) {
             if self.download_sources.len() >= 64 {
                 self.download_sources.clear();
             }
-            self.download_sources.insert(id, (title, tab.url.clone()));
+            self.download_sources.insert(id, source);
         }
         let item = DownloadItem {
             id,
@@ -3587,6 +3586,29 @@ fn clean_custom_title(title: &str) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+/// The page a download came from, as (title, URL) for Tidy Downloads: the
+/// document the tab that started it had committed then, titled only while
+/// that tab still shows it (a typed address that turned out to be a file
+/// has no title of its own yet). A download a Little Eclipse window handed
+/// over (`origin` None; its page is not a tab's) or one from an internal
+/// page gets no title, only the download's own site. Never the active tab:
+/// a background tab can start a download from a timer, and a window opened
+/// for a link from another app has nothing to do with the tab in front.
+fn download_source(tabs: &[Tab], origin: Option<&DownloadOrigin>, download_url: &str) -> Option<(String, String)> {
+    if let Some(origin) = origin
+        && is_http_url(&origin.page_url)
+    {
+        let title = tabs
+            .iter()
+            .find(|tab| tab.id == origin.tab_id)
+            .filter(|tab| tab.url == origin.page_url && tab.title != LOADING_TITLE)
+            .map(|tab| tab.title.clone())
+            .unwrap_or_default();
+        return Some((title, origin.page_url.clone()));
+    }
+    is_http_url(download_url).then(|| (String::new(), download_url.to_string()))
+}
+
 /// Tidy Downloads: renames a finished download with a junk name after the
 /// page it came from (`max::tidy_download_name`), in its own folder and
 /// without replacing anything, and keeps the old name for the list.
@@ -3888,6 +3910,9 @@ pub fn little_window_url_from_input(input: &str, config: &BrowserConfig) -> Opti
 pub(crate) struct CommandBarTab<'a> {
     pub title: &'a str,
     pub url: &'a str,
+    /// The icon the sidebar shows for it (the page's own, or the site's
+    /// /favicon.ico).
+    pub favicon_url: Option<&'a str>,
     /// In the Space on screen.
     pub current_space: bool,
     pub last_active: Instant,
@@ -3895,27 +3920,46 @@ pub(crate) struct CommandBarTab<'a> {
 
 const COMMAND_BAR_SUGGESTIONS: usize = 64;
 
-/// What the New Little Eclipse Window bar (⌥⌘N) suggests, as (title, URL):
-/// the current Space's tabs, most recently used first, then the favourites,
-/// then other Spaces' tabs. Web pages only, each address once, titles
-/// cleaned of control characters (the URL's host stands in for a missing
-/// one).
+/// One row of the New Little Eclipse Window bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommandBarSuggestion {
+    pub title: String,
+    pub url: String,
+    /// An http(s) icon to show (the site's initial stands in while it
+    /// loads, or when there is none).
+    pub icon: Option<String>,
+}
+
+/// What the New Little Eclipse Window bar (⌥⌘N) suggests: the current
+/// Space's tabs, most recently used first, then the favourites, then other
+/// Spaces' tabs. Web pages only, each address once, titles cleaned of
+/// control characters (the URL's host stands in for a missing one), each
+/// with the icon the sidebar shows for it (a favourite's is its site's
+/// /favicon.ico).
 pub(crate) fn little_command_bar_suggestions(
     tabs: &[CommandBarTab],
     favorites: &[FavoriteShortcut],
-) -> Vec<(String, String)> {
+) -> Vec<CommandBarSuggestion> {
     let mut ordered: Vec<&CommandBarTab> = tabs.iter().collect();
     ordered.sort_by_key(|tab| (!tab.current_space, std::cmp::Reverse(tab.last_active)));
     let (current, other): (Vec<&CommandBarTab>, Vec<&CommandBarTab>) =
         ordered.into_iter().partition(|tab| tab.current_space);
+    fn tab_candidate<'a>(tab: &&CommandBarTab<'a>) -> (&'a str, &'a str, Option<String>) {
+        let icon = tab.favicon_url.map(str::to_string).or_else(|| get_favicon_url(tab.url));
+        (tab.title, tab.url, icon)
+    }
     let candidates = current
         .iter()
-        .map(|tab| (tab.title, tab.url))
-        .chain(favorites.iter().map(|favorite| (favorite.title.as_str(), favorite.url.as_str())))
-        .chain(other.iter().map(|tab| (tab.title, tab.url)));
+        .map(tab_candidate)
+        .chain(
+            favorites
+                .iter()
+                .map(|favorite| (favorite.title.as_str(), favorite.url.as_str(), get_favicon_url(&favorite.url))),
+        )
+        .chain(other.iter().map(tab_candidate));
     let mut seen = HashSet::new();
     let mut suggestions = Vec::new();
-    for (title, url) in candidates {
+    for (title, url, icon) in candidates {
         let Ok(parsed) = url::Url::parse(url.trim()) else {
             continue;
         };
@@ -3938,7 +3982,8 @@ pub(crate) fn little_command_bar_suggestions(
             .collect::<Vec<_>>()
             .join(" ");
         let title = if title.is_empty() { host } else { title };
-        suggestions.push((title, url));
+        let icon = icon.filter(|icon| is_safe_icon_url(icon));
+        suggestions.push(CommandBarSuggestion { title, url, icon });
         if suggestions.len() == COMMAND_BAR_SUGGESTIONS {
             break;
         }
@@ -4078,6 +4123,57 @@ mod tests {
     }
 
     #[test]
+    fn downloads_are_named_after_the_page_that_started_them_never_the_tab_in_front() {
+        let tab = |id, url: &str, title: &str| Tab::hibernated(id, url, title.to_string(), "Default", false, 1.0, None);
+        // Tab 1 is the one in front; tab 2 is in the background.
+        let invoice = "https://dashboard.stripe.example/invoices/4411";
+        let tabs = vec![
+            tab(1, invoice, "Your Invoice #4411 | Stripe"),
+            tab(2, "https://files.example/share", "Shared files"),
+            tab(3, "https://typed.example/report.pdf", "typed.example"),
+        ];
+        let origin = |tab_id, page_url: &str| DownloadOrigin { tab_id, page_url: page_url.to_string() };
+        let named = |origin: Option<&DownloadOrigin>, download_url: &str| {
+            download_source(&tabs, origin, download_url).and_then(|(title, page_url)| {
+                max::tidy_download_name("8837462193.pdf", &title, &page_url, "2026-10-29")
+            })
+        };
+        let file = "https://cdn.evil.example/8837462193.pdf";
+        // A background tab's download (a timer, no click) is its own page's.
+        assert_eq!(
+            named(Some(&origin(2, "https://files.example/share")), file).as_deref(),
+            Some("Shared files.pdf")
+        );
+        // A Little Eclipse window's download (a link from Mail, ⌥⌘N, a
+        // preview) has no tab page: the site it came from and the date.
+        assert_eq!(named(None, file).as_deref(), Some("cdn.evil.example 2026-10-29.pdf"));
+        // A tab that has moved on since, or is gone: its page's site only.
+        assert_eq!(
+            named(Some(&origin(2, "https://files.example/older")), file).as_deref(),
+            Some("files.example 2026-10-29.pdf")
+        );
+        assert_eq!(
+            named(Some(&origin(9, "https://gone.example/")), file).as_deref(),
+            Some("gone.example 2026-10-29.pdf")
+        );
+        // A typed address that turned out to be a file: no page committed in
+        // the tab yet but an internal one, so the download's own site.
+        assert_eq!(
+            named(Some(&origin(3, "eclipse://localhost/newtab")), "https://typed.example/report.pdf").as_deref(),
+            Some("typed.example 2026-10-29.pdf")
+        );
+        // Nothing to go on: the name stays.
+        assert_eq!(named(None, "data:application/pdf;base64,AAAA"), None);
+        // In none of these is the file named after the tab in front.
+        for origin in [None, Some(origin(2, "https://files.example/share")), Some(origin(9, invoice))] {
+            let name = named(origin.as_ref(), file).unwrap_or_default();
+            assert!(!name.contains("Invoice"), "{name}");
+        }
+        // Only the tab that started it lends its title.
+        assert_eq!(named(Some(&origin(1, invoice)), file).as_deref(), Some("Your Invoice #4411.pdf"));
+    }
+
+    #[test]
     fn quitting_waits_for_pending_flushes_until_the_deadline() {
         let now = Instant::now();
         let deadline = now + Duration::from_secs(1);
@@ -4131,6 +4227,7 @@ mod tests {
         let tab = |title, url, current_space, last_active| CommandBarTab {
             title,
             url,
+            favicon_url: None,
             current_space,
             last_active,
         };
@@ -4154,7 +4251,7 @@ mod tests {
             favorite("Script", "javascript:alert(1)"),
         ];
         let suggestions = little_command_bar_suggestions(&tabs, &favorites);
-        let urls: Vec<&str> = suggestions.iter().map(|(_, url)| url.as_str()).collect();
+        let urls: Vec<&str> = suggestions.iter().map(|s| s.url.as_str()).collect();
         assert_eq!(
             urls,
             [
@@ -4165,9 +4262,52 @@ mod tests {
                 "https://other-space.example/",
             ]
         );
-        assert_eq!(suggestions[0].0, "Recent page");
-        assert_eq!(suggestions[2].0, "untitled.example");
+        assert_eq!(suggestions[0].title, "Recent page");
+        assert_eq!(suggestions[2].title, "untitled.example");
         assert!(little_command_bar_suggestions(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn the_little_window_bar_shows_the_sidebar_icons() {
+        let now = Instant::now();
+        let tab = |url, favicon_url| CommandBarTab {
+            title: "Page",
+            url,
+            favicon_url,
+            current_space: true,
+            last_active: now,
+        };
+        let tabs = [
+            // The page's own icon, as the sidebar shows it.
+            tab("https://www.youtube.com/watch?v=1", Some("https://www.youtube.com/s/favicon_32x32.png")),
+            // None known yet: the site's /favicon.ico.
+            tab("https://google.com/search?q=a", None),
+            // Never anything but http(s).
+            tab("https://data.example/", Some("data:image/png;base64,AAAA")),
+            tab("http://localhost:3000/", None),
+        ];
+        let favorites = [FavoriteShortcut {
+            title: "ChatGPT".into(),
+            url: "https://chatgpt.com/".into(),
+            icon: String::new(),
+        }];
+        let icons: Vec<(String, Option<String>)> = little_command_bar_suggestions(&tabs, &favorites)
+            .into_iter()
+            .map(|s| (s.url, s.icon))
+            .collect();
+        assert_eq!(
+            icons,
+            [
+                (
+                    "https://www.youtube.com/watch?v=1".to_string(),
+                    Some("https://www.youtube.com/s/favicon_32x32.png".to_string())
+                ),
+                ("https://google.com/search?q=a".into(), Some("https://google.com/favicon.ico".into())),
+                ("https://data.example/".into(), None),
+                ("http://localhost:3000/".into(), None),
+                ("https://chatgpt.com/".into(), Some("https://chatgpt.com/favicon.ico".into())),
+            ]
+        );
     }
 
     #[test]

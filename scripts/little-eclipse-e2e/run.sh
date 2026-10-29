@@ -27,7 +27,7 @@ trap cleanup EXIT
 
 clang -fobjc-arc -Wall -Wno-deprecated-declarations -c "$repo/src/menu.m" -o "$work/menu.o"
 clang -fobjc-arc -Wall -Wno-deprecated-declarations "$here/harness.m" "$work/menu.o" \
-    -framework Cocoa -framework WebKit -framework QuartzCore -o "$work/harness"
+    -framework Cocoa -framework WebKit -framework QuartzCore -framework ImageIO -o "$work/harness"
 
 for p in "$port" "$((port + 1))"; do
     python3 -I "$here/server.py" "$here/www" "$p" 2>"$work/server-$p.log" &
@@ -76,8 +76,8 @@ scenarios=("$@")
 if [[ ${#scenarios[@]} -eq 0 ]]; then
     scenarios=(legit popupkw widthonly notoolbar plainopen noopener blanklink stopwrite nocontent blankthen eclipse
                sameorigin nogesture five nested openernav sheet print2 printclose refocus focus resize menu linktab
-               openin openkey copylink siteinfo standalone address addreclipse longhost longpath commandbar
-               commandbarpick commandbarclose dlstandalone dlpopup dllink dlattr dlnotab)
+               openin openkey copylink barbuttons siteinfo standalone address addreclipse longhost longpath commandbar
+               commandbarpick commandbarclose dlstandalone dlpopup dllink dlattr dltab dlnotab)
 fi
 
 for scenario in "${scenarios[@]}"; do
@@ -195,6 +195,16 @@ for scenario in "${scenarios[@]}"; do
         check "$out" "Copy Link copies the committed address" "COPY pasteboard=\"http://$victim/pop.html\""
         check "$out" "and says \"Copied\" for a moment" "COPY pasteboard=.* copied_shown=1"
         check "$out" "which then goes away" "COPY later copied_shown=0" ;;
+    barbuttons)
+        check "$out" "the bar's buttons are in Arc's groups, inside the window" \
+            "BUTTONS wide copy \| capture \| inspect \| open inside=1 host=\"$insecure$victim/pop.html\""
+        check "$out" "Copy Screenshot puts a picture of the page on the clipboard" \
+            "CAPTURE png=1 width=[1-9][0-9]* height=[1-9][0-9]* view=720x600"
+        check "$out" "and says so for a moment" "CAPTURE .* copied_shown=1 label=\"Screenshot Copied\""
+        check "$out" "the Web Inspector button shows the window's inspector, in a window of its own" \
+            "INSPECTOR visible=1 docked=0 page=720x600"
+        check "$out" "a 480-point window keeps Copy Link and Open in Eclipse, and the whole address" \
+            "BUTTONS narrow copy \| open inside=1 host=\"$insecure$victim/pop.html\"" ;;
     siteinfo)
         check "$out" "the site-information button warns of plain http" \
             "INFO button=1 label=\"Not secure: site information\""
@@ -249,6 +259,8 @@ for scenario in "${scenarios[@]}"; do
         check "$out" "it is key" "KEY bar"
         check "$out" "near the top right of the screen, its field focused, suggestions listed" \
             "BAR shown shown=1 key=1 right=16 top=16 focused=1 placeholder=\"Search or Enter URL…\" text=\"\" rows=\[\*Popup page — localhost\]\[Downloads — localhost\]\[Save page — localhost\]$"
+        check "$out" "a row shows its site's icon; a missing or oversized one leaves the initial" \
+            "ICONS shown \[icon:2[0-9][0-9],[0-9]{1,2},[0-9]{1,2}\]\[tile\]\[tile\]$"
         check "$out" "typed text is the first row, chosen" "BAR typed .*rows=\[\*http://$victim/pop.html\?bar — Open\]"
         check "$out" "Return hands it to the browser" "ACTION little_command_bar_open:http://$victim/pop.html\?bar$"
         check "$out" "which opens a standalone window" "BAROPEN http://$victim/pop.html\?bar ok=1"
@@ -273,13 +285,14 @@ for scenario in "${scenarios[@]}"; do
     dlstandalone)
         check "$out" "a link from another app to a file opens a window" "STANDALONE ok=1"
         check "$out" "the browser's download path takes the file" "TAB-TAKES-DOWNLOAD response"
-        check "$out" "it downloads under its own name" \
-            "DOWNLOAD-START url=http://$victim/dl/slow-standalone.zip name=slow-standalone.zip"
+        check "$out" "it downloads under its own name, marked as the window's" \
+            "DOWNLOAD-START url=http://$victim/dl/slow-standalone.zip name=slow-standalone.zip .*from_little=1"
         check "$out" "the empty window closes, and the download finishes after that" \
             "DOWNLOAD-DONE url=http://$victim/dl/slow-standalone.zip ok=1 size=4096 little=0"
         check "$out" "no window is left" "RESULT .* little=0 " "little_window_new_tab" ;;
     dlpopup)
         check "$out" "the popup's file goes to the browser's download path" "TAB-TAKES-DOWNLOAD response"
+        check "$out" "marked as the popup's, not the tab's" "DOWNLOAD-START url=http://$opener/dl/slow-popup.zip .*from_little=1"
         check "$out" "and downloads" "DOWNLOAD-DONE url=http://$opener/dl/slow-popup.zip ok=1 size=4096 little=0"
         check "$out" "the empty popup closes" "RESULT .* little=0 fallbacks=0" ;;
     dllink)
@@ -289,10 +302,16 @@ for scenario in "${scenarios[@]}"; do
             "WINDOW title=\"Downloads\" host=\"$insecure$victim/dl.html\" url=http://$victim/dl.html " ;;
     dlattr)
         check "$out" "an <a download> link is a download" "TAB-TAKES-DOWNLOAD action"
-        check "$out" "saved under the name the page gave" "DOWNLOAD-START url=http://$victim/pop.html name=saved.html"
+        check "$out" "saved under the name the page gave, marked as the window's" \
+            "DOWNLOAD-START url=http://$victim/pop.html name=saved.html .*from_little=1"
         check "$out" "it finishes" "DOWNLOAD-DONE url=http://$victim/pop.html ok=1 size=[1-9][0-9]* little=1"
         check "$out" "the window stays on its page" \
             "WINDOW title=\"Save page\" host=\"$insecure$victim/dla.html\" url=http://$victim/dla.html " ;;
+    dltab)
+        check "$out" "the tab's own download is not marked as a Little Eclipse window's" \
+            "DOWNLOAD-START url=http://$victim/dl/tab.zip name=tab.zip little=1 from_little=0"
+        check "$out" "it finishes" "DOWNLOAD-DONE url=http://$victim/dl/tab.zip ok=1 size=4096"
+        check "$out" "the window stays open" "RESULT .* little=1 " ;;
     dlnotab)
         check "$out" "with no tab to take the download, the file opens as a tab" \
             "ACTION little_window_new_tab:http://$victim/dl/notab.zip" "DOWNLOAD-START"

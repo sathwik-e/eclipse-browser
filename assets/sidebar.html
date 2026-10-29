@@ -591,7 +591,8 @@ body.is-fullscreen #traffic-lights {
   color: var(--text-main);
 }
 
-/* Tidy shows on hover of the New Tab row (Arc puts its "Clear" there too). */
+/* The Tidy broom sits beside New Tab whenever updateTidyButton() shows it,
+   always in view as Arc's, a little dimmer until the row is pointed at. */
 .arc-tidy-btn {
   height: 24px;
   padding: 0 8px;
@@ -606,7 +607,7 @@ body.is-fullscreen #traffic-lights {
   gap: 4px;
   cursor: pointer;
   flex-shrink: 0;
-  opacity: 0;
+  opacity: 0.75;
   transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
@@ -2377,7 +2378,7 @@ body.is-collapsed-state:not(.floating-popout) *::after {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
     <span>New Tab</span>
   </button>
-  <button type="button" class="arc-tidy-btn" id="btn-tidy-tabs" title="Tidy Tabs: group &amp; deduplicate open tabs (⇧⌘Y)" aria-label="Tidy tabs">
+  <button type="button" class="arc-tidy-btn" id="btn-tidy-tabs" title="Tidy Tabs: group tabs and close duplicates and blank ones (⇧⌘Y)" aria-label="Tidy tabs">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 3l-7.5 7.5"/><path d="M10 9l5 5"/><path d="M10 9c-3 1-5 4-6 10 2.5 0 4.5-.5 6-1.5l1-2.5 1.5 1c1.5-1.5 2.3-3 2.5-4"/></svg>
     <span>Tidy</span>
   </button>

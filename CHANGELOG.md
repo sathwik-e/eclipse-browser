@@ -21,7 +21,10 @@
     "Search or Enter URL…" bar near the top right of the screen (also while
     the browser window is hidden or another window is in front) suggests
     your open tabs (this Space's first, most recent first) and favourites,
-    each with its site's initial and host. Typing filters them and puts what
+    each with the site's icon the sidebar shows for it (its initial on a
+    coloured tile while the icon loads, or when there is none) and host.
+    Icons are fetched by the app without cookies or a referrer, limited in
+    size and decoded only as PNG, ICO, JPEG or GIF. Typing filters them and puts what
     you typed first; ↑/↓ choose (the chosen row in your accent colour) and
     Return opens it in a new Little Eclipse window, loading an address as
     typed or searching for anything else. Escape, the × button, ⌘W or a
@@ -31,8 +34,13 @@
   - **The top bar looks like Arc's.** Faint diagonal stripes over the
     Space's colour; on the left an "i" button and the full address of the
     page on screen in a small monospaced font, the host brighter than the
-    scheme and path; on the right Copy Link (with a brief "Copied") and Open
-    in Eclipse. The "i" button shows whether the connection is secure, the
+    scheme and path; on the right, in Arc's groups, Copy Link (with a brief
+    "Copied") | Copy Screenshot (a picture of the page to the clipboard,
+    "Screenshot Copied") | Web Inspector (in a window of its own, never
+    docked over the page card) | Open in Eclipse, now with a split-window
+    icon as in Arc. A window too narrow to keep about forty characters of
+    address shows only Copy Link and Open in Eclipse (⌥⌘I still opens the
+    inspector). Standalone windows now have a Web Inspector too. The "i" button shows whether the connection is secure, the
     full host, Copy Link and Open in Eclipse; for plain http it is an orange
     warning sign.
   - Click the address on the bar (or press ⌘L) to edit it. Return loads a
@@ -95,9 +103,12 @@
     tab behind.
 - **Max**, Arc's Max features done without an AI service. A new Max section
   in Settings switches each one (all on by default):
-  - **Tidy Tabs:** the Tidy button, now a broom, shows in the sidebar once
-    the Space has more than six tabs. ⇧⌘Y and the command bar tidy at any
-    time, and ⇧⌘T still brings back a duplicate it closed.
+  - **Tidy Tabs:** the Tidy button, now a broom, shows beside New Tab in
+    the sidebar (always in view, as in Arc) once the Space has more than six
+    tabs. Tidy groups tabs into categories (Development, Media & Stream,
+    Work & Productivity, …) or by site, and closes duplicates and blank new
+    tabs. ⇧⌘Y and the command bar tidy at any time, and ⇧⌘T brings back the
+    tabs it closed one at a time.
   - **Instant Links:** Shift+Return on a search in the command bar or the
     address field goes straight to the top result, through DuckDuckGo's
     `!ducky` whatever the search engine (Google's "I'm Feeling Lucky" often
@@ -113,8 +124,13 @@
     (an empty name gives the page title back); names survive a restart.
   - **Tidy Downloads:** a finished download with a junk name (`download`,
     `file`, numbers, a UUID, a hash or random token) is renamed after the
-    page in front when it started, or after the site and the date, keeping
-    its extension. It never replaces a file (an existing name gets " (2)"),
+    page of the tab that started it, or after the site and the date, keeping
+    its extension. Only that tab's own document lends its title, and only
+    while it still shows it: never the tab in front, which a background tab
+    starting a download from a timer, or a late response after a tab
+    switch, would otherwise borrow. A file from a Little Eclipse window
+    (a link from another app, ⌥⌘N, a preview, a popup) is named after the
+    site it came from and the date. It never replaces a file (an existing name gets " (2)"),
     and the Downloads list shows "Renamed from …".
   - **ChatGPT in the Command Bar:** type "chatgpt" or "claude" (or the start
     of it) and press Tab to ask a question; Return opens it on chatgpt.com or
@@ -134,8 +150,7 @@
     more rows, the selected one is highlighted, and the grid disappears
     when there are none.
   - Below the grid: the Space's name and icon (click for the next Space),
-    "+ New Tab" (with more than six tabs, the Tidy broom appears beside it
-    on hover) and the Space's tabs, one line each, with the host in the
+    "+ New Tab" (with more than six tabs, the Tidy broom beside it) and the Space's tabs, one line each, with the host in the
     tooltip.
   - The bottom bar has the Library at the left (Downloads with the number
     still downloading, Reopen Closed Tab, Quick Notes, Easel, Preferences

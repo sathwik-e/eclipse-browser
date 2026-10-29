@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use tao::event_loop::EventLoopProxy;
 
+use crate::app::CommandBarSuggestion;
 use crate::events::UserEvent;
 use crate::tab::PolicyContext;
 
@@ -34,6 +35,7 @@ unsafe extern "C" {
     fn eclipse_recheck_hover();
     fn eclipse_navigation_policy_context() -> i32;
     fn eclipse_script_message_from_little_window() -> i32;
+    fn eclipse_download_from_little_window() -> i32;
     fn eclipse_little_window_count_for_view(view_ptr: *mut std::ffi::c_void) -> i32;
     fn eclipse_popup_request_wants_popup() -> i32;
     fn eclipse_open_little_window(
@@ -55,6 +57,7 @@ unsafe extern "C" {
     fn eclipse_show_little_command_bar(
         titles: *const *const c_char,
         urls: *const *const c_char,
+        icons: *const *const c_char,
         count: usize,
         red: f64,
         green: f64,
@@ -308,6 +311,14 @@ pub fn script_message_from_little_window() -> bool {
     unsafe { eclipse_script_message_from_little_window() != 0 }
 }
 
+/// Whether the download wry's download handler is deciding right now came
+/// from a Little Eclipse window, which handed it to a tab's webview (menu.m
+/// wraps wry's download delegate for those; outside a decision this is
+/// false).
+pub fn download_from_little_window() -> bool {
+    unsafe { eclipse_download_from_little_window() != 0 }
+}
+
 /// How many Little Eclipse windows (nested ones included) are open for the
 /// tab whose webview is `view_ptr`.
 pub fn little_window_count_for_view(view_ptr: *mut std::ffi::c_void) -> usize {
@@ -404,26 +415,32 @@ pub fn little_window_load(window_id: u64, url: Option<&str>) -> bool {
 }
 
 /// Shows the New Little Eclipse Window bar (⌥⌘N, menu.m) with `suggestions`
-/// (title, http(s) URL) and `accent` for the chosen row. Choosing a row or
-/// typing an address or search comes back as the menu action
+/// (title, http(s) URL, icon) and `accent` for the chosen row. Choosing a
+/// row or typing an address or search comes back as the menu action
 /// `little_command_bar_open:<text>`. `false` when the bar could not show.
-pub fn show_little_command_bar(suggestions: &[(String, String)], accent: [u8; 3]) -> bool {
-    // Titles and URLs from Rust never hold NUL; one that did is left out.
-    let pairs: Vec<(CString, CString)> = suggestions
+pub fn show_little_command_bar(suggestions: &[CommandBarSuggestion], accent: [u8; 3]) -> bool {
+    // Titles and URLs from Rust never hold NUL; one that did is left out
+    // (an icon with one is dropped).
+    let rows: Vec<(CString, CString, Option<CString>)> = suggestions
         .iter()
-        .filter_map(|(title, url)| {
+        .filter_map(|s| {
             Some((
-                CString::new(title.as_str()).ok()?,
-                CString::new(url.as_str()).ok()?,
+                CString::new(s.title.as_str()).ok()?,
+                CString::new(s.url.as_str()).ok()?,
+                s.icon.as_deref().and_then(|icon| CString::new(icon).ok()),
             ))
         })
         .collect();
-    let titles: Vec<*const c_char> = pairs.iter().map(|(title, _)| title.as_ptr()).collect();
-    let urls: Vec<*const c_char> = pairs.iter().map(|(_, url)| url.as_ptr()).collect();
+    let titles: Vec<*const c_char> = rows.iter().map(|(title, _, _)| title.as_ptr()).collect();
+    let urls: Vec<*const c_char> = rows.iter().map(|(_, url, _)| url.as_ptr()).collect();
+    let icons: Vec<*const c_char> = rows
+        .iter()
+        .map(|(_, _, icon)| icon.as_ref().map_or(std::ptr::null(), |icon| icon.as_ptr()))
+        .collect();
     let [r, g, b] = accent.map(|c| f64::from(c) / 255.0);
-    // The pointers stay valid for the call: `pairs` owns the strings.
+    // The pointers stay valid for the call: `rows` owns the strings.
     unsafe {
-        eclipse_show_little_command_bar(titles.as_ptr(), urls.as_ptr(), titles.len(), r, g, b) != 0
+        eclipse_show_little_command_bar(titles.as_ptr(), urls.as_ptr(), icons.as_ptr(), titles.len(), r, g, b) != 0
     }
 }
 

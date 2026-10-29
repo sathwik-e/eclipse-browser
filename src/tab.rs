@@ -14,7 +14,7 @@ use wry::{
 };
 
 use crate::config::BrowserConfig;
-use crate::events::{DocumentTrust, TabState, UserEvent};
+use crate::events::{DocumentTrust, DownloadOrigin, TabState, UserEvent};
 
 const BRIDGE_SCRIPT: &str = include_str!("bridge.js");
 const SHIELDS_SCRIPT: &str = include_str!("shields.js");
@@ -457,6 +457,7 @@ impl Tab {
         let nav_policy = nav.clone();
         let nav_ipc = nav.clone();
         let nav_popup = nav.clone();
+        let nav_download = nav.clone();
 
         let mut builder = WebViewBuilder::new()
             .with_id(&webview_id)
@@ -506,6 +507,11 @@ impl Tab {
                     .and_then(|s| s.to_str())
                     .unwrap_or_default()
                     .to_string();
+                // Read now: only known while wry decides the destination. A
+                // download a Little Eclipse window handed to this tab is not
+                // this tab's page's.
+                let origin = (!download_from_little_window())
+                    .then(|| DownloadOrigin { tab_id, page_url: nav_download.committed_url() });
                 let mut pending = pending_downloads();
 
                 let seq = NEXT_DOWNLOAD_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -533,6 +539,7 @@ impl Tab {
                     file_name,
                     url,
                     path: path.to_string_lossy().to_string(),
+                    origin,
                 });
                 true
             })
@@ -1226,6 +1233,17 @@ fn script_message_from_little_window() -> bool {
     #[cfg(target_os = "macos")]
     {
         crate::macos_menu::script_message_from_little_window()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+fn download_from_little_window() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        crate::macos_menu::download_from_little_window()
     }
     #[cfg(not(target_os = "macos"))]
     {

@@ -3,6 +3,32 @@
 ## 1.0.1 — 2026-10-29
 
 ### Added
+- **Little Eclipse windows, like Arc's Little Arc.** A small window with no
+  sidebar and no tabs, framed in the current Space's theme colour (light or
+  dark), with the page as a rounded card under a slim top bar.
+  - **Links from other apps** open in a Little Eclipse window of their own
+    when Eclipse is the default browser (System Settings > Desktop & Dock >
+    Default web browser). The app now declares itself a handler for `http`
+    and `https` links. A new setting, "Open links
+    from other apps in Little Eclipse" (on by default), opens them as a new
+    tab instead. Links that arrive while Eclipse is still starting are
+    opened once it is up.
+  - **Open in Eclipse** (⌘O, File menu, or the button on the right of the
+    bar) moves the page into the browser window as a new tab, brings the
+    window forward and closes the little window. For a sign-in popup this
+    drops its link to the page that opened it, as in Arc.
+  - **New Little Eclipse Window** (⌥⌘N) opens an empty one with the address
+    field focused.
+  - Click the host on the bar (or press ⌘L) to see and edit the full
+    address. Return loads a web address as typed, or searches for anything
+    else with your search engine; Escape or clicking away puts the host back.
+    Internal `eclipse://` pages and other schemes are never loaded.
+  - These windows share the tabs' cookies and sign-ins, the Space's user
+    agent and its ad blocking, but get no page scripts and no channel to the
+    browser. They count toward the limit of ten Little Eclipse windows (past
+    it, the link opens as a tab) and are not tied to any tab. A new one opens
+    in the middle of the screen with the pointer, at the size you last gave
+    one.
 - **Little Eclipse windows for sign-in popups.** When a web page opens a
   popup window (`window.open` with a size, a position, the `popup` feature
   or turned-off toolbars, as sign-in and payment flows do) in response to a
@@ -11,10 +37,11 @@
   native window instead of a tab. The popup keeps `window.opener`, so it can
   post its result back and close itself, which makes "Sign in with …" popups
   work.
-  - The window title shows the page title. The subtitle shows the host of the
-    page actually on screen, with "Not Secure" for plain http. The page has no
-    control over it: a page that is still loading, or that never finishes
-    loading, is not shown as the host until it is actually on screen.
+  - The top bar shows a lock and the host of the page actually on screen,
+    or "Not Secure" for plain http. The page has no control over it: a page
+    that is still loading, or that never finishes loading, is not shown as
+    the host until it is actually on screen. The window title (Mission
+    Control, the Window menu) is the page title.
   - JavaScript dialogs appear as sheets on the popup. `window.close()` closes
     it, and ⌘W closes it while it is in front, also while it shows a dialog.
   - While a popup is in front, Reload, Stop, Back, Forward, Print, Zoom and
@@ -29,8 +56,8 @@
   - A popup can only show web pages, never internal `eclipse://` pages, and it
     closes when the tab that opened it is closed or hibernated. A tab with a
     popup open is never hibernated automatically or by "Clean memory".
-  - Popups that give no size open at 500×640, or keep the one side they
-    gave.
+  - A popup's size is that of its page; popups that give no size get a
+    500×640 page, or keep the one side they gave.
   - Ordinary links that open a new window (`target=_blank`, or
     `window.open(url)` with no features), popups from internal pages, popups a page opens
     without a click or key press, and popups beyond three per tab (ten in
@@ -50,6 +77,9 @@
   walked the tab on to Settings, Notes or Easel).
 - Websites' reports about a tab's page (favicon, audio, scroll position) are
   now accepted only from a frame on the same origin as the tab's document.
+- A Little Eclipse window opened for a link from another app is built
+  without the tab's page bridge or scripts, so its page cannot message the
+  browser at all. Its address field loads only http(s) pages.
 
 ### Fixed
 - Tab hibernation counts a tab's idle time from when you leave it, not from

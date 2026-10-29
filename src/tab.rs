@@ -62,6 +62,25 @@ impl AdblockPolicy {
     }
 }
 
+/// Whether the native content blocker applies to `url` in `workspace` (its
+/// Space's ad blocking, the global switch and the per-site allowlist), as it
+/// would for a tab there. Used for standalone Little Eclipse windows.
+pub fn adblock_active_for(config: &BrowserConfig, workspace: &str, url: &str) -> bool {
+    AdblockPolicy::for_space(config, workspace).blocks(url)
+}
+
+/// The user agent web pages in `workspace` get: its Space's own, else the
+/// global one.
+pub fn space_user_agent(config: &BrowserConfig, workspace: &str) -> String {
+    let profile = config.profile_for_workspace(workspace);
+    let custom = profile.custom_user_agent.trim();
+    if custom.is_empty() {
+        config.active_user_agent().to_string()
+    } else {
+        custom.to_string()
+    }
+}
+
 /// Navigation state shared between a tab and its webview's WebKit callbacks.
 /// Every webview (including one rebuilt after hibernation) gets a fresh one.
 #[derive(Default)]
@@ -408,14 +427,9 @@ impl Tab {
         let proxy_download_started = proxy.clone();
         let proxy_download_finished = proxy.clone();
 
-        let space_profile = config.profile_for_workspace(&self.workspace);
         let adblock = AdblockPolicy::for_space(config, &self.workspace);
         let is_adblock_active = adblock.blocks(&self.url);
-        let active_ua = if !space_profile.custom_user_agent.trim().is_empty() {
-            space_profile.custom_user_agent.trim()
-        } else {
-            config.active_user_agent()
-        };
+        let active_ua = space_user_agent(config, &self.workspace);
 
         let target_url = tab_webview_url(&self.url);
         let nav = Arc::new(NavState::default());
@@ -447,7 +461,7 @@ impl Tab {
         let mut builder = WebViewBuilder::new()
             .with_id(&webview_id)
             .with_bounds(bounds)
-            .with_user_agent(active_ua)
+            .with_user_agent(&active_ua)
             .with_autoplay(config.autoplay_enabled)
             .with_back_forward_navigation_gestures(true)
             .with_background_throttling(BackgroundThrottlingPolicy::Throttle)

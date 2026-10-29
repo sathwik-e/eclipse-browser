@@ -1,4 +1,4 @@
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, CString, c_char};
 use std::sync::Mutex;
 
 use tao::event_loop::EventLoopProxy;
@@ -45,6 +45,15 @@ unsafe extern "C" {
         x: f64,
         y: f64,
     ) -> *mut std::ffi::c_void;
+    fn eclipse_open_standalone_little_window(
+        url: *const c_char,
+        user_agent: *const c_char,
+        adblock: i32,
+        focus_address: i32,
+    ) -> i32;
+    fn eclipse_little_window_load(window_id: u64, url: *const c_char) -> i32;
+    fn eclipse_set_little_window_theme(red: f64, green: f64, blue: f64, dark: i32);
+    fn eclipse_close_all_little_windows();
 }
 
 /// `kind`: 0 = provisional navigation failed, 1 = committed navigation failed.
@@ -350,4 +359,44 @@ pub fn open_little_window(
     // the caller (`__bridge_retained`); `from_raw` takes over exactly that
     // reference, and dropping the `Retained` releases it.
     unsafe { Retained::from_raw(raw.cast::<objc2_web_kit::WKWebView>()) }
+}
+
+/// Opens a standalone Little Eclipse window (menu.m): no opener, the tabs'
+/// website data store, `user_agent` and (if `adblock`) the native content
+/// blocker, no tab scripts or IPC. `url` is an http(s) address, or empty for
+/// a blank window with its address field focused (`focus_address` focuses it
+/// either way). `false` when no window opened (the overall limit, or `url` is
+/// not a web address); the caller then opens a tab.
+pub fn open_standalone_little_window(url: &str, user_agent: &str, adblock: bool, focus_address: bool) -> bool {
+    let (Ok(url), Ok(user_agent)) = (CString::new(url), CString::new(user_agent)) else {
+        return false;
+    };
+    unsafe {
+        eclipse_open_standalone_little_window(
+            url.as_ptr(),
+            user_agent.as_ptr(),
+            i32::from(adblock),
+            i32::from(focus_address),
+        ) != 0
+    }
+}
+
+/// Loads `url` (what the user typed in the address field of Little Eclipse
+/// window `window_id`, resolved by `app::little_window_url_from_input`) into
+/// that window; `None` refuses (menu.m beeps). menu.m loads only http(s).
+pub fn little_window_load(window_id: u64, url: Option<&str>) -> bool {
+    let url = url.and_then(|url| CString::new(url).ok());
+    let ptr = url.as_ref().map_or(std::ptr::null(), |url| url.as_ptr());
+    unsafe { eclipse_little_window_load(window_id, ptr) != 0 }
+}
+
+/// Frames every Little Eclipse window in the current Space's theme colour.
+pub fn set_little_window_theme(rgb: [u8; 3], dark: bool) {
+    let [r, g, b] = rgb.map(|c| f64::from(c) / 255.0);
+    unsafe { eclipse_set_little_window_theme(r, g, b, i32::from(dark)) }
+}
+
+/// Closes every Little Eclipse window (the app is quitting).
+pub fn close_all_little_windows() {
+    unsafe { eclipse_close_all_little_windows() }
 }

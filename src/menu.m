@@ -71,10 +71,21 @@ static NSWindow *eclipse_shortcut_window(void) {
     }
     // Everything else is about the browser window (tabs, sidebar, Settings):
     // it comes to the front instead of changing out of sight behind a popup.
-    if (browser != nil && key != browser && eclipse_is_little_window(key)) {
+    // A new Little Eclipse window opens over whatever is in front.
+    if (browser != nil && key != browser && eclipse_is_little_window(key) &&
+        ![action isEqualToString:@"new_little_window"]) {
         [browser makeKeyAndOrderFront:nil];
     }
     gCallback(action.UTF8String);
+}
+
+/* "Open in Eclipse" (⌘O) is only for a Little Eclipse window in front. */
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    id action = item.representedObject;
+    if ([action isKindOfClass:[NSString class]] && [action isEqualToString:@"open_in_eclipse"]) {
+        return eclipse_is_little_window(eclipse_shortcut_window());
+    }
+    return YES;
 }
 @end
 
@@ -179,6 +190,11 @@ void eclipse_install_menu(EclipseMenuCallback callback) {
 
         EclipseAddItem(fileMenu, @"New Tab", @selector(performEclipseAction:), @"t",
                        NSEventModifierFlagCommand, gMenuTarget, @"new_tab");
+        EclipseAddItem(fileMenu, @"New Little Eclipse Window", @selector(performEclipseAction:), @"n",
+                       NSEventModifierFlagCommand | NSEventModifierFlagOption, gMenuTarget,
+                       @"new_little_window");
+        EclipseAddItem(fileMenu, @"Open in Eclipse", @selector(performEclipseAction:), @"o",
+                       NSEventModifierFlagCommand, gMenuTarget, @"open_in_eclipse");
         EclipseAddItem(fileMenu, @"New Note", @selector(performEclipseAction:), @"n",
                        NSEventModifierFlagCommand | NSEventModifierFlagShift, gMenuTarget, @"open_notes");
         EclipseAddItem(fileMenu, @"New Easel", @selector(performEclipseAction:), @"e",
@@ -619,6 +635,21 @@ static void eclipse_compile_content_rule_list_if_needed(void) {
     }];
 }
 
+/* Gives `wv` the rule list now, or once it is compiled. */
+static void eclipse_adblock_want_webview(WKWebView *wv) {
+    if (wv == nil) return;
+    if (gAdblockWantedWebViews == nil) {
+        gAdblockWantedWebViews = [NSHashTable weakObjectsHashTable];
+        gAdblockAttachedWebViews = [NSHashTable weakObjectsHashTable];
+    }
+    [gAdblockWantedWebViews addObject:wv];
+    if (gEclipseContentRuleList != nil) {
+        eclipse_attach_rule_list(wv);
+    } else {
+        eclipse_compile_content_rule_list_if_needed();
+    }
+}
+
 /* Attaches or detaches the rule list for one webview, only when its state
    actually changes, so page loads and settings pushes cause no churn. */
 void eclipse_set_native_adblocker_enabled(void *viewPtr, int enabled) {
@@ -634,12 +665,7 @@ void eclipse_set_native_adblocker_enabled(void *viewPtr, int enabled) {
         if (wv == nil) return;
 
         if (enabled) {
-            [gAdblockWantedWebViews addObject:wv];
-            if (gEclipseContentRuleList != nil) {
-                eclipse_attach_rule_list(wv);
-            } else {
-                eclipse_compile_content_rule_list_if_needed();
-            }
+            eclipse_adblock_want_webview(wv);
         } else {
             [gAdblockWantedWebViews removeObject:wv];
             eclipse_detach_rule_list(wv);
@@ -1550,54 +1576,127 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
 }
 
 /* ------------------------------------------------------------- Little Eclipse windows */
-/* Sign-in and payment popups (window.open with a size, from a web page) open
-   in a small native window instead of a tab, so they keep window.opener and
-   can post their result back. WebKit requires the popup's WKWebView to be
-   built on the configuration it hands the opener's UI delegate; that
-   configuration shares the opener tab's WKUserContentController, so the popup
-   runs the tab's init scripts and its messages reach the tab's IPC handler
-   (Rust only trusts them as an ordinary website).
+/* Small native windows in the manner of Arc's "Little Arc": no sidebar and no
+   tabs, a slim top bar framed in the current Space's theme colour, and the page
+   as a rounded card below it. There are two kinds.
 
-   A popup opens as a window only for a window.open with a user gesture, and
-   at most kEclipseLittleMaxPerTab per tab and kEclipseLittleMaxTotal in all;
-   anything else opens as a tab. The guards above keep popups away from wry's
-   eclipse:// handler and mark their script messages.
+   Popups. Sign-in and payment popups (window.open with popup features, from a
+   web page) open in a Little Eclipse window instead of a tab, so they keep
+   window.opener and can post their result back. WebKit requires the popup's
+   WKWebView to be built on the configuration it hands the opener's UI
+   delegate; that configuration shares the opener tab's
+   WKUserContentController, so the popup runs the tab's init scripts and its
+   messages reach the tab's IPC handler (Rust only trusts them as an ordinary
+   website). A popup opens as a window only for a window.open with a user
+   gesture, and at most kEclipseLittleMaxPerTab per tab and
+   kEclipseLittleMaxTotal in all; anything else opens as a tab. The guards
+   above keep popups away from wry's eclipse:// handler and mark their script
+   messages. Each popup follows its root opener (the tab's webview): when that
+   webview leaves its window (the tab was closed, hibernated or rebuilt) the
+   popup closes.
 
-   The window shows the page title, and its subtitle shows the host of the
-   document on screen, derived here from WebKit's URL and never from page
-   content: the host of a load only once it commits, never of one still
-   pending. A popup only ever loads web content: internal eclipse:// pages
-   and other schemes are refused by its navigation delegate. Each window
-   follows its root opener (the tab's webview): when that webview leaves its
-   window (the tab was closed, hibernated or rebuilt) the popup closes. */
+   Standalone windows. Links from other apps (when Eclipse is the default
+   browser) and File > New Little Eclipse Window open one without an opener,
+   built on a fresh configuration that shares only the tabs' website data
+   store (cookies and sign-ins), the user agent and the content blocker Rust
+   passes in: no tab scripts and no IPC handler. They count toward the overall
+   limit only and never close because of an opener. A popup a standalone
+   window opens follows that window as its root opener.
 
-@interface EclipseLittleWindow : NSObject <NSWindowDelegate, WKUIDelegate, WKNavigationDelegate>
+   The top bar shows a security indicator and the host of the document on
+   screen, derived here from WebKit's URL and never from page content: the
+   host of a load only once it commits, never of one still pending. Clicking
+   it shows the full address for editing; Return hands what was typed to Rust,
+   which resolves it to a web address or a search and loads it through
+   eclipse_little_window_load (http(s) only). "Open in Eclipse" (⌘O) moves the
+   page into a new tab of the browser window. A Little Eclipse window only ever
+   loads web content: internal eclipse:// pages and other schemes are refused
+   by its navigation delegate. The window title is the page title, for Mission
+   Control and the Window menu; the host on the bar is never page-controlled. */
+
+@interface EclipseLittleWindow : NSObject <NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, NSTextFieldDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
-/* The tab webview the first popup in this chain was opened from. wry keeps
-   a destroyed tab's WKWebView alive, so its detachment, not its
-   deallocation, is what signals that the tab is gone. */
+/* The webview at the root of this window's popup chain: the tab webview the
+   first popup was opened from, or a standalone window's own webview. nil for
+   a standalone window. wry keeps a destroyed tab's WKWebView alive, so its
+   detachment, not its deallocation, is what signals that the tab is gone. */
 @property(nonatomic, weak) WKWebView *opener;
-/* The URL of the document on screen, whose host the subtitle shows: nil
+/* The URL of the document on screen, whose host the top bar shows: nil
    until WebKit confirms one (see -syncDisplayURL). */
 @property(nonatomic, copy) NSURL *displayURL;
 @property(nonatomic) BOOL observing;
 @property(nonatomic) BOOL closed;
+/* Opened without an opener (a link from another app, ⌥⌘N). */
+@property(nonatomic) BOOL standalone;
+/* Identifies the window to Rust (address-field requests). Never reused. */
+@property(nonatomic) uint64_t serial;
+@property(nonatomic, strong) NSView *container;
+@property(nonatomic, strong) NSButton *hostButton;
+@property(nonatomic, strong) NSTextField *addressField;
+/* The rounded background the address field sits on while editing. */
+@property(nonatomic, strong) NSView *addressBox;
+@property(nonatomic, strong) NSButton *openButton;
+@property(nonatomic) BOOL editing;
+- (void)layoutChrome;
+- (void)applyTheme;
+- (void)beginEditingAddress;
+- (void)openInEclipse;
+@end
+
+/* The window's content view: the theme-coloured frame that holds the bar's
+   controls and the page card. Lays them out whenever its size changes. */
+@interface EclipseLittleContentView : NSView
+@property(nonatomic, weak) EclipseLittleWindow *owner;
+@end
+
+@implementation EclipseLittleContentView
+- (BOOL)isFlipped {
+    return YES;
+}
+- (BOOL)mouseDownCanMoveWindow {
+    return YES;
+}
+- (void)setFrameSize:(NSSize)newSize {
+    [super setFrameSize:newSize];
+    [self.owner layoutChrome];
+}
 @end
 
 static NSMutableSet<EclipseLittleWindow *> *gLittleWindows = nil;
 static __weak EclipseLittleWindow *gLastLittleWindow = nil;
 static NSTimer *gLittleOpenerTimer = nil;
 static void *kEclipseLittleKVOContext = &kEclipseLittleKVOContext;
+static uint64_t gLittleNextSerial = 1;
 
 static const NSUInteger kEclipseLittleMaxPerTab = 3;
 static const NSUInteger kEclipseLittleMaxTotal = 10;
+/* Limits and defaults for the page area (what window.open's size means). */
 static const CGFloat kEclipseLittleMinWidth = 360.0;
 static const CGFloat kEclipseLittleMinHeight = 260.0;
-/* For a popup that gave no width or height ("popup", or position only). */
+/* For a popup that gave no width or height ("popup", or position only), and
+   for a standalone window until the user resizes one. */
 static const CGFloat kEclipseLittleDefaultWidth = 500.0;
 static const CGFloat kEclipseLittleDefaultHeight = 640.0;
 static const NSUInteger kEclipseLittleMaxHostLength = 64;
+static const NSUInteger kEclipseLittleMaxAddressLength = 8192;
+/* The frame around the page card: the top bar, and a margin on the other
+   three sides. The window is the page area plus this chrome. */
+static const CGFloat kEclipseLittleBarHeight = 36.0;
+static const CGFloat kEclipseLittleInset = 6.0;
+static const CGFloat kEclipseLittleChromeWidth = 2.0 * 6.0;          /* 2 × inset */
+static const CGFloat kEclipseLittleChromeHeight = 36.0 + 6.0;        /* bar + inset */
+static const CGFloat kEclipseLittleCardRadius = 10.0;
+
+/* The current Space's theme colour (eclipse_set_little_window_theme). */
+static NSColor *gLittleFrameColor = nil;
+static BOOL gLittleFrameDark = YES;
+/* The page-area size the user last gave a standalone window (zero: none). */
+static NSSize gLittleStandaloneSize = {0.0, 0.0};
+
+static NSColor *eclipse_little_frame_color(void) {
+    return gLittleFrameColor ?: [NSColor colorWithSRGBRed:0.063 green:0.071 blue:0.094 alpha:1.0];
+}
 
 static BOOL eclipse_is_web_scheme(NSString *scheme) {
     NSString *lower = scheme.lowercaseString;
@@ -1612,6 +1711,17 @@ static BOOL eclipse_little_initial_url_allowed(NSURL *url) {
     return eclipse_is_web_scheme(url.scheme);
 }
 
+/* An address the browser itself may load into a Little Eclipse window (a link
+   from another app, the address field): an http(s) URL with a host. */
+static NSURL *eclipse_little_loadable_url(const char *text) {
+    if (text == NULL) return nil;
+    NSString *string = [NSString stringWithUTF8String:text];
+    if (string.length == 0 || string.length > kEclipseLittleMaxAddressLength) return nil;
+    NSURL *url = [NSURL URLWithString:string];
+    if (url == nil || !eclipse_is_web_scheme(url.scheme) || url.host.length == 0) return nil;
+    return url;
+}
+
 static BOOL eclipse_same_web_origin(NSURL *a, NSURL *b) {
     if (a == nil || b == nil) return NO;
     if (!eclipse_is_web_scheme(a.scheme) || !eclipse_is_web_scheme(b.scheme)) return NO;
@@ -1621,7 +1731,7 @@ static BOOL eclipse_same_web_origin(NSURL *a, NSURL *b) {
     return (pa == nil && pb == nil) || (pa != nil && pb != nil && [pa isEqualToNumber:pb]);
 }
 
-/* What the subtitle shows for the committed document. A long host keeps its
+/* What the top bar shows for the committed document. A long host keeps its
    end (the registrable domain) and loses its start. */
 static NSString *eclipse_little_host_label(NSURL *url) {
     if (url == nil) return @"about:blank";
@@ -1652,6 +1762,27 @@ static NSString *eclipse_little_host_label(NSURL *url) {
     return [NSString stringWithFormat:@"Not Secure — %@", host];
 }
 
+/* The security indicator next to the host label, chosen from that label
+   (and so from the committed URL alone). */
+static NSImage *eclipse_little_security_image(NSString *label) {
+    if (@available(macOS 11.0, *)) {
+        NSString *name = @"lock.fill";
+        NSString *description = @"Secure connection";
+        if ([label hasPrefix:@"Not Secure"]) {
+            name = @"exclamationmark.triangle.fill";
+            description = @"Not secure";
+        } else if ([label hasPrefix:@"about:"]) {
+            name = @"globe";
+            description = @"No page";
+        }
+        NSImage *image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:description];
+        NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration configurationWithPointSize:10.5
+                                                                                           weight:NSFontWeightSemibold];
+        return [image imageWithSymbolConfiguration:config] ?: image;
+    }
+    return nil;
+}
+
 static NSString *eclipse_little_clean_title(NSString *title) {
     if (title.length == 0) return @"";
     NSArray<NSString *> *parts = [title componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -1667,15 +1798,31 @@ static NSString *eclipse_little_clean_title(NSString *title) {
 static void eclipse_little_log(NSString *what, EclipseLittleWindow *lw) {
     if (!eclipse_perf_enabled()) return;
     NSString *label = eclipse_little_host_label(lw.displayURL);
-    fprintf(stderr, "[little] %s host=%s open=%lu\n", what.UTF8String, label.UTF8String,
-            (unsigned long)gLittleWindows.count);
+    fprintf(stderr, "[little] %s host=%s standalone=%d open=%lu\n", what.UTF8String, label.UTF8String,
+            lw.standalone ? 1 : 0, (unsigned long)gLittleWindows.count);
+}
+
+/* Where the traffic lights sit: the vertical centre of their row (from the
+   top of the window) and where the bar's own controls may start. AppKit
+   places the buttons; they are never moved. */
+static void eclipse_little_bar_metrics(NSWindow *window, CGFloat *rowMid, CGFloat *leading) {
+    *rowMid = kEclipseLittleBarHeight / 2.0;
+    *leading = 12.0;
+    if (window == nil || (window.styleMask & NSWindowStyleMaskFullScreen) != 0) return;
+    NSButton *last = [window standardWindowButton:NSWindowZoomButton] ?: [window standardWindowButton:NSWindowCloseButton];
+    if (last == nil || last.superview == nil || last.isHidden) return;
+    NSRect rect = [last convertRect:last.bounds toView:nil];
+    CGFloat mid = NSHeight(window.frame) - NSMidY(rect);
+    if (isfinite(mid) && mid > 6.0 && mid < kEclipseLittleBarHeight - 6.0) *rowMid = mid;
+    if (isfinite(NSMaxX(rect)) && NSMaxX(rect) > 0) *leading = NSMaxX(rect) + 14.0;
 }
 
 static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration *configuration,
                                                          WKWebView *opener,
                                                          NSSize requested,
                                                          BOOL hasPosition,
-                                                         NSPoint topLeft);
+                                                         NSPoint topLeft,
+                                                         BOOL standalone);
 
 static void eclipse_little_check_openers(void);
 static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect visible);
@@ -1686,12 +1833,51 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     if (self.closed) return;
     NSString *label = eclipse_little_host_label(self.displayURL);
     NSString *title = eclipse_little_clean_title(self.webView.title);
-    if (@available(macOS 11.0, *)) {
-        self.window.title = title.length > 0 ? title : label;
-        self.window.subtitle = label;
-    } else {
-        self.window.title = title.length > 0 ? [NSString stringWithFormat:@"%@ — %@", label, title] : label;
+    // The title bar is hidden: the title is what Mission Control, the Window
+    // menu and the Dock list. The host on the bar is ours.
+    self.window.title = title.length > 0 ? title : label;
+    NSButton *host = self.hostButton;
+    if (![host.title isEqualToString:label]) {
+        host.title = label;
+        host.image = eclipse_little_security_image(label);
+        host.accessibilityLabel = [@"Address: " stringByAppendingString:label];
     }
+}
+
+- (void)applyTheme {
+    if (self.closed) return;
+    NSColor *frame = eclipse_little_frame_color();
+    self.window.appearance = [NSAppearance appearanceNamed:gLittleFrameDark ? NSAppearanceNameDarkAqua
+                                                                             : NSAppearanceNameAqua];
+    self.window.backgroundColor = frame;
+    self.container.layer.backgroundColor = frame.CGColor;
+    NSColor *border = gLittleFrameDark ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.13]
+                                       : [NSColor colorWithCalibratedWhite:0.0 alpha:0.12];
+    self.webView.layer.borderColor = border.CGColor;
+    NSColor *field = gLittleFrameDark ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.10]
+                                      : [NSColor colorWithCalibratedWhite:0.0 alpha:0.07];
+    self.addressBox.layer.backgroundColor = field.CGColor;
+}
+
+- (void)layoutChrome {
+    NSView *container = self.container;
+    if (container == nil || self.closed) return;
+    NSRect bounds = container.bounds;
+    CGFloat mid = 0, leading = 0;
+    eclipse_little_bar_metrics(self.window, &mid, &leading);
+    CGFloat bar = MAX(kEclipseLittleBarHeight, ceil(mid * 2.0));
+    CGFloat inset = kEclipseLittleInset;
+    self.webView.frame = NSMakeRect(inset, bar, MAX(0.0, NSWidth(bounds) - 2.0 * inset),
+                                    MAX(0.0, NSHeight(bounds) - bar - inset));
+    CGFloat button = 26.0;
+    self.openButton.frame = NSMakeRect(NSWidth(bounds) - 8.0 - button, floor(mid - button / 2.0), button, button);
+    CGFloat right = NSMinX(self.openButton.frame) - 6.0;
+    self.hostButton.frame = NSMakeRect(leading, floor(mid - 12.0), MAX(40.0, right - leading), 24.0);
+    NSRect box = NSMakeRect(leading, floor(mid - 12.0), MAX(40.0, right - leading), 24.0);
+    self.addressBox.frame = box;
+    CGFloat textHeight = ceil(self.addressField.intrinsicContentSize.height);
+    if (!isfinite(textHeight) || textHeight <= 0 || textHeight > NSHeight(box)) textHeight = 17.0;
+    self.addressField.frame = NSMakeRect(7.0, floor((NSHeight(box) - textHeight) / 2.0), NSWidth(box) - 14.0, textHeight);
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
@@ -1736,30 +1922,161 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     [self.webView removeObserver:self forKeyPath:@"title" context:kEclipseLittleKVOContext];
 }
 
+/* -- the top bar */
+
+/* Shows the full address of the committed document (selected) for editing. */
+- (void)beginEditingAddress {
+    if (self.closed) return;
+    if (self.window.attachedSheet != nil) {
+        NSBeep();
+        return;
+    }
+    NSURL *url = self.displayURL;
+    self.addressField.stringValue = eclipse_is_web_scheme(url.scheme) ? (url.absoluteString ?: @"") : @"";
+    self.editing = YES;
+    self.hostButton.hidden = YES;
+    self.addressBox.hidden = NO;
+    self.addressField.hidden = NO;
+    [self.window makeFirstResponder:self.addressField];
+    [self.addressField selectText:nil];
+}
+
+/* Back to the host label. `focusPage` hands the keyboard to the page. */
+- (void)endEditingAddress:(BOOL)focusPage {
+    if (!self.editing) return;
+    // Cleared first: hiding the field ends its editing session, which must
+    // not come back here.
+    self.editing = NO;
+    if (focusPage && !self.closed) [self.window makeFirstResponder:self.webView];
+    self.addressField.hidden = YES;
+    self.addressBox.hidden = YES;
+    self.hostButton.hidden = NO;
+}
+
+/* Return in the address field: Rust resolves the text (an address or a
+   search, see app::little_window_url_from_input) and calls
+   eclipse_little_window_load. The text is what the user typed. */
+- (void)submitAddress {
+    NSString *text = [self.addressField.stringValue
+        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    [self endEditingAddress:YES];
+    if (text.length == 0 || self.closed) return;
+    if (text.length > kEclipseLittleMaxAddressLength || gCallback == NULL) {
+        NSBeep();
+        return;
+    }
+    NSString *command = [NSString stringWithFormat:@"little_window_address:%llu:%@",
+                                                   (unsigned long long)self.serial, text];
+    gCallback(command.UTF8String);
+}
+
+- (void)hostClicked:(id)sender {
+    (void)sender;
+    [self beginEditingAddress];
+}
+
+- (void)openClicked:(id)sender {
+    (void)sender;
+    [self openInEclipse];
+}
+
+/* Moves the committed page into a new foreground tab of the browser window
+   and closes this window. A popup's opener link is lost, as in Arc. */
+- (void)openInEclipse {
+    if (self.closed) return;
+    NSURL *url = self.displayURL;
+    if (!eclipse_is_web_scheme(url.scheme) || url.absoluteString.length == 0 || gCallback == NULL) {
+        NSBeep();
+        return;
+    }
+    eclipse_little_log(@"open in Eclipse", self);
+    NSString *command = [@"little_window_new_tab:" stringByAppendingString:url.absoluteString];
+    gCallback(command.UTF8String);
+    NSWindow *browser = gBrowserWindow;
+    if (browser != nil) [browser makeKeyAndOrderFront:nil];
+    eclipse_end_all_sheets(self.window);
+    [self.window close];
+}
+
+/* NSTextFieldDelegate */
+
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)selector {
+    (void)textView;
+    if (control != self.addressField) return NO;
+    if (selector == @selector(insertNewline:)) {
+        [self submitAddress];
+        return YES;
+    }
+    if (selector == @selector(cancelOperation:)) {
+        [self endEditingAddress:YES];
+        return YES;
+    }
+    return NO;
+}
+
+/* Focus went elsewhere (a click into the page, another window). Checked on
+   the next turn of the run loop: AppKit also ends an editing session only to
+   start the next one at once (selecting all the text does). */
+- (void)controlTextDidEndEditing:(NSNotification *)notification {
+    if (notification.object != self.addressField || !self.editing) return;
+    __weak EclipseLittleWindow *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        EclipseLittleWindow *me = weakSelf;
+        if (me == nil || !me.editing || me.closed) return;
+        NSText *editor = me.addressField.currentEditor;
+        if (editor != nil && me.window.firstResponder == editor) return;
+        [me endEditingAddress:NO];
+    });
+}
+
 /* NSWindowDelegate */
+
+- (void)windowDidResize:(NSNotification *)notification {
+    (void)notification;
+    [self layoutChrome];
+}
+
+- (void)windowDidEndLiveResize:(NSNotification *)notification {
+    (void)notification;
+    // The size the user gave a standalone window is the next one's.
+    if (self.standalone && !self.closed && (self.window.styleMask & NSWindowStyleMaskFullScreen) == 0) {
+        NSSize size = self.window.contentView.bounds.size;
+        gLittleStandaloneSize = NSMakeSize(MAX(kEclipseLittleMinWidth, size.width - kEclipseLittleChromeWidth),
+                                           MAX(kEclipseLittleMinHeight, size.height - kEclipseLittleChromeHeight));
+    }
+}
 
 - (void)windowWillClose:(NSNotification *)notification {
     (void)notification;
     if (self.closed) return;
     // A dialog still showing is answered (Cancel) before the page goes away.
     eclipse_end_all_sheets(self.window);
+    self.editing = NO;
     self.closed = YES;
     [self stopObserving];
+    self.addressField.delegate = nil;
+    self.hostButton.target = nil;
+    self.openButton.target = nil;
     WKWebView *webView = self.webView;
     webView.UIDelegate = nil;
     webView.navigationDelegate = nil;
     [webView stopLoading];
     // Released on the next turn of the run loop: the window is still in the
-    // middle of closing.
+    // middle of closing. The webview leaves its window, so popups this window
+    // is the root opener of (a standalone window's) close too.
     EclipseLittleWindow *me = self;
     dispatch_async(dispatch_get_main_queue(), ^{
+        [webView removeFromSuperview];
         [gLittleWindows removeObject:me];
         if (eclipse_perf_enabled()) {
-            fprintf(stderr, "[little] closed open=%lu\n", (unsigned long)gLittleWindows.count);
+            fprintf(stderr, "[little] closed standalone=%d open=%lu\n", me.standalone ? 1 : 0,
+                    (unsigned long)gLittleWindows.count);
         }
         if (gLittleWindows.count == 0) {
             [gLittleOpenerTimer invalidate];
             gLittleOpenerTimer = nil;
+        } else {
+            eclipse_little_check_openers();
         }
     });
 }
@@ -1789,7 +2106,7 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     decidePolicyForNavigationResponse:(WKNavigationResponse *)response
                       decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
     (void)webView;
-    // Popups do not download files.
+    // Little Eclipse windows do not download files.
     decisionHandler(response.canShowMIMEType ? WKNavigationResponsePolicyAllow
                                              : WKNavigationResponsePolicyCancel);
 }
@@ -1815,16 +2132,17 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     (void)webView;
     if (self.closed) return nil;
     NSURL *url = action.request.URL;
-    WKWebView *opener = self.opener;
+    // The chain's root: the tab, or this window if it is standalone.
+    WKWebView *root = self.standalone ? self.webView : self.opener;
     // A popup window.open with a user gesture nests another Little Eclipse
     // window, as it would from a tab (within the same limits).
-    if (eclipse_features_want_popup(features) && opener != nil &&
+    if (eclipse_features_want_popup(features) && root != nil &&
         eclipse_action_user_initiated(action) && eclipse_little_initial_url_allowed(url)) {
         BOOL hasPosition = features.x != nil && features.y != nil;
         NSPoint topLeft = hasPosition ? NSMakePoint(features.x.doubleValue, features.y.doubleValue) : NSZeroPoint;
         EclipseLittleWindow *nested = eclipse_little_window_create(
-            configuration, opener, NSMakeSize(features.width.doubleValue, features.height.doubleValue),
-            hasPosition, topLeft);
+            configuration, root, NSMakeSize(features.width.doubleValue, features.height.doubleValue),
+            hasPosition, topLeft, NO);
         if (nested != nil) return nested.webView;
     }
     // Anything else (a target=_blank link, window.open without popup
@@ -1858,7 +2176,7 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     if (!self.closed) [self.window makeKeyAndOrderFront:nil];
 }
 
-/* window.print() in the popup. */
+/* window.print() in the window. */
 - (void)_webView:(WKWebView *)webView printFrame:(id)frame {
     (void)frame;
     if (!self.closed) eclipse_print_webview(webView);
@@ -1896,9 +2214,10 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
     [window setFrame:frame display:YES];
 }
 
-/* Dialogs are sheets on the popup. The completion handler runs exactly once:
-   immediately with Cancel when the popup is not on screen or already shows a
-   dialog, otherwise when the sheet ends (also when the window closes). */
+/* Dialogs are sheets on the window. The completion handler runs exactly
+   once: immediately with Cancel when the window is not on screen or already
+   shows a dialog, otherwise when the sheet ends (also when the window
+   closes). */
 - (BOOL)canPresentSheet {
     NSWindow *window = self.window;
     return !self.closed && window != nil && window.isVisible && window.attachedSheet == nil &&
@@ -1914,6 +2233,7 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
         completionHandler();
         return;
     }
+    [self endEditingAddress:NO];
     NSAlert *alert = eclipse_dialog_alert(frame, message);
     [alert addButtonWithTitle:@"OK"];
     [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
@@ -1931,6 +2251,7 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
         completionHandler(NO);
         return;
     }
+    [self endEditingAddress:NO];
     NSAlert *alert = eclipse_dialog_alert(frame, message);
     [alert addButtonWithTitle:@"OK"];
     [alert addButtonWithTitle:@"Cancel"];
@@ -1949,6 +2270,7 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
         completionHandler(nil);
         return;
     }
+    [self endEditingAddress:NO];
     NSAlert *alert = eclipse_dialog_alert(frame, prompt);
     [alert addButtonWithTitle:@"OK"];
     [alert addButtonWithTitle:@"Cancel"];
@@ -1970,6 +2292,7 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
         completionHandler(nil);
         return;
     }
+    [self endEditingAddress:NO];
     NSOpenPanel *panel = [NSOpenPanel openPanel];
     panel.canChooseFiles = YES;
     panel.allowsMultipleSelection = parameters.allowsMultipleSelection;
@@ -1981,16 +2304,17 @@ static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect vi
 
 @end
 
-/* Whether `opener` (a tab's webview) is still showing in the browser. */
+/* Whether `opener` (the root of a popup chain) is still showing. */
 static BOOL eclipse_little_opener_alive(WKWebView *opener) {
     return opener != nil && opener.superview != nil && opener.window != nil;
 }
 
 static void eclipse_little_check_openers(void) {
     for (EclipseLittleWindow *lw in [gLittleWindows allObjects]) {
-        if (!lw.closed && !eclipse_little_opener_alive(lw.opener)) {
+        // Standalone windows have no opener and never close for one.
+        if (!lw.closed && !lw.standalone && !eclipse_little_opener_alive(lw.opener)) {
             if (eclipse_perf_enabled()) {
-                fprintf(stderr, "[little] opener tab is gone, closing\n");
+                fprintf(stderr, "[little] opener is gone, closing\n");
             }
             [lw.window close];
         }
@@ -2016,7 +2340,7 @@ static BOOL eclipse_frame_on_screen(NSRect frame) {
     return NO;
 }
 
-/* Moves `frame` inside `visible` (it already fits: content is at most 90% of
+/* Moves `frame` inside `visible` (it already fits: it is at most 90% of
    it). */
 static NSRect eclipse_clamp_frame(NSRect frame, NSRect visible) {
     if (NSMaxX(frame) > NSMaxX(visible)) frame.origin.x = NSMaxX(visible) - frame.size.width;
@@ -2026,86 +2350,128 @@ static NSRect eclipse_clamp_frame(NSRect frame, NSRect visible) {
     return frame;
 }
 
-/* The largest content size a popup may have on a screen whose visible frame
-   is `visible`. */
-static NSSize eclipse_little_max_content_size(NSRect visible) {
-    return NSMakeSize(MAX(kEclipseLittleMinWidth, floor(visible.size.width * 0.9)),
-                      MAX(kEclipseLittleMinHeight, floor(visible.size.height * 0.9)));
+/* The largest window (page area plus chrome) a Little Eclipse window may
+   have on a screen whose visible frame is `visible`. */
+static NSSize eclipse_little_max_window_size(NSRect visible) {
+    return NSMakeSize(MAX(kEclipseLittleMinWidth + kEclipseLittleChromeWidth, floor(visible.size.width * 0.9)),
+                      MAX(kEclipseLittleMinHeight + kEclipseLittleChromeHeight, floor(visible.size.height * 0.9)));
 }
 
-/* `frame` (a window frame a page asked for) with its content size within
-   the popup limits, its top-left corner where it was asked for, and moved
-   inside `visible`. */
+/* `frame` (a window frame a page asked for) within the window limits, its
+   top-left corner where it was asked for, and moved inside `visible`. */
 static NSRect eclipse_little_fit_frame(NSWindow *window, NSRect frame, NSRect visible) {
     NSRect content = [window contentRectForFrameRect:frame];
-    NSSize max = eclipse_little_max_content_size(visible);
-    content.size.width = MIN(MAX(content.size.width, kEclipseLittleMinWidth), max.width);
-    content.size.height = MIN(MAX(content.size.height, kEclipseLittleMinHeight), max.height);
+    NSSize max = eclipse_little_max_window_size(visible);
+    content.size.width = MIN(MAX(content.size.width, kEclipseLittleMinWidth + kEclipseLittleChromeWidth), max.width);
+    content.size.height =
+        MIN(MAX(content.size.height, kEclipseLittleMinHeight + kEclipseLittleChromeHeight), max.height);
     NSRect fitted = [window frameRectForContentRect:content];
     fitted.origin.x = frame.origin.x;
     fitted.origin.y = NSMaxY(frame) - fitted.size.height;
     return eclipse_clamp_frame(fitted, visible);
 }
 
-/* Whether one more window may open for `opener` (a tab's webview). */
+/* Whether one more window may open: at most kEclipseLittleMaxTotal in all,
+   and kEclipseLittleMaxPerTab for the root opener `opener` (nil for a
+   standalone window, which only counts toward the total). */
 static BOOL eclipse_little_has_room(WKWebView *opener) {
     NSUInteger total = 0, forOpener = 0;
     for (EclipseLittleWindow *lw in gLittleWindows) {
         if (lw.closed) continue;
         total++;
-        if (lw.opener == opener) forOpener++;
+        if (opener != nil && lw.opener == opener) forOpener++;
     }
-    return total < kEclipseLittleMaxTotal && forOpener < kEclipseLittleMaxPerTab;
+    return total < kEclipseLittleMaxTotal && (opener == nil || forOpener < kEclipseLittleMaxPerTab);
+}
+
+/* The screen the mouse pointer is on. */
+static NSScreen *eclipse_screen_with_mouse(void) {
+    NSPoint mouse = [NSEvent mouseLocation];
+    for (NSScreen *screen in [NSScreen screens]) {
+        if (NSMouseInRect(mouse, screen.frame, NO)) return screen;
+    }
+    return [NSScreen mainScreen];
+}
+
+static NSButton *eclipse_little_bar_button(NSString *identifier, id target, SEL action) {
+    NSButton *button = [[NSButton alloc] initWithFrame:NSZeroRect];
+    button.bezelStyle = NSBezelStyleTexturedRounded;
+    button.showsBorderOnlyWhileMouseInside = YES;
+    button.refusesFirstResponder = YES;
+    button.target = target;
+    button.action = action;
+    button.identifier = identifier;
+    return button;
 }
 
 static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration *configuration,
                                                          WKWebView *opener,
                                                          NSSize requested,
                                                          BOOL hasPosition,
-                                                         NSPoint topLeft) {
-    if (configuration == nil || !eclipse_little_opener_alive(opener)) return nil;
-    if (!gLittleGuardsReady || !eclipse_scheme_handler_guarded(configuration, @"eclipse")) {
-        if (eclipse_perf_enabled()) fprintf(stderr, "[little] guards missing, opening as a tab\n");
-        return nil;
+                                                         NSPoint topLeft,
+                                                         BOOL standalone) {
+    if (configuration == nil) return nil;
+    if (standalone) {
+        opener = nil;
+    } else {
+        if (!eclipse_little_opener_alive(opener)) return nil;
+        // A popup of a standalone window is built on that window's fresh
+        // configuration (no eclipse:// handler, no IPC); a tab's popup needs
+        // the guards.
+        BOOL fromStandalone = gLittleWebViews != nil && [gLittleWebViews containsObject:opener];
+        if (!fromStandalone && (!gLittleGuardsReady || !eclipse_scheme_handler_guarded(configuration, @"eclipse"))) {
+            if (eclipse_perf_enabled()) fprintf(stderr, "[little] guards missing, opening as a tab\n");
+            return nil;
+        }
     }
     if (!eclipse_little_has_room(opener)) {
         if (eclipse_perf_enabled()) fprintf(stderr, "[little] limit reached, opening as a tab\n");
         return nil;
     }
 
-    NSWindow *anchor = opener.window ?: eclipse_browser_window();
-    NSScreen *screen = anchor.screen ?: [NSScreen mainScreen];
+    NSWindow *anchor = standalone ? nil : (opener.window ?: eclipse_browser_window());
+    NSScreen *screen = standalone ? eclipse_screen_with_mouse() : (anchor.screen ?: [NSScreen mainScreen]);
     if (screen == nil) return nil;
     NSRect visible = screen.visibleFrame;
 
-    NSSize maxSize = eclipse_little_max_content_size(visible);
-    // A missing dimension (0) gets the default size.
+    // The page area: what was asked for (a missing dimension, 0, gets the
+    // default), or for a standalone window the last size the user gave one.
+    NSSize maxWindow = eclipse_little_max_window_size(visible);
+    if (standalone) {
+        requested = gLittleStandaloneSize;
+    }
     CGFloat width = isfinite(requested.width) && requested.width > 0 ? requested.width
                                                                       : kEclipseLittleDefaultWidth;
     CGFloat height = isfinite(requested.height) && requested.height > 0 ? requested.height
                                                                          : kEclipseLittleDefaultHeight;
-    width = MIN(MAX(width, kEclipseLittleMinWidth), maxSize.width);
-    height = MIN(MAX(height, kEclipseLittleMinHeight), maxSize.height);
-    NSRect contentRect = NSMakeRect(0, 0, width, height);
+    width = MIN(MAX(width, kEclipseLittleMinWidth), maxWindow.width - kEclipseLittleChromeWidth);
+    height = MIN(MAX(height, kEclipseLittleMinHeight), maxWindow.height - kEclipseLittleChromeHeight);
+    NSRect contentRect =
+        NSMakeRect(0, 0, width + kEclipseLittleChromeWidth, height + kEclipseLittleChromeHeight);
 
     NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                              NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+                              NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable |
+                              NSWindowStyleMaskFullSizeContentView;
     NSWindow *window = [[NSWindow alloc] initWithContentRect:contentRect
                                                    styleMask:style
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
     window.releasedWhenClosed = NO;
     window.restorable = NO;
+    // A compact frame: no visible title bar, the traffic lights on our bar.
+    window.titlebarAppearsTransparent = YES;
+    window.titleVisibility = NSWindowTitleHidden;
     // Shown over the browser window also when that is in full screen.
     window.collectionBehavior |= NSWindowCollectionBehaviorFullScreenAuxiliary;
-    window.contentMinSize = NSMakeSize(kEclipseLittleMinWidth, kEclipseLittleMinHeight);
+    window.contentMinSize = NSMakeSize(kEclipseLittleMinWidth + kEclipseLittleChromeWidth,
+                                       kEclipseLittleMinHeight + kEclipseLittleChromeHeight);
     if ([window respondsToSelector:@selector(setTabbingMode:)]) {
         window.tabbingMode = NSWindowTabbingModeDisallowed;
     }
 
     WKWebView *webView = nil;
     @try {
-        webView = [[WKWebView alloc] initWithFrame:contentRect configuration:configuration];
+        webView = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, width, height) configuration:configuration];
     } @catch (NSException *exception) {
         if (eclipse_perf_enabled()) {
             fprintf(stderr, "[little] webview creation failed: %s\n", exception.reason.UTF8String ?: "");
@@ -2117,23 +2483,100 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     // opener tab's page.
     if (gLittleWebViews == nil) gLittleWebViews = [NSHashTable weakObjectsHashTable];
     [gLittleWebViews addObject:webView];
-    webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    webView.customUserAgent = opener.customUserAgent;
+    if (opener != nil) webView.customUserAgent = opener.customUserAgent;
     webView.allowsMagnification = YES;
+    webView.allowsBackForwardNavigationGestures = YES;
     // respondsToSelector rather than @available: the 13.3 check is above the
     // 11.0 deployment target and would need compiler-rt, which rustc's link
     // line does not include.
     if ([webView respondsToSelector:@selector(setInspectable:)]) {
         [webView setValue:@YES forKey:@"inspectable"];
     }
-    window.contentView = webView;
+    // The page as a card, like a tab in the browser window.
+    webView.wantsLayer = YES;
+    webView.layer.cornerRadius = kEclipseLittleCardRadius;
+    if (@available(macOS 10.15, *)) {
+        webView.layer.cornerCurve = kCACornerCurveContinuous;
+    }
+    webView.layer.masksToBounds = YES;
+    webView.layer.borderWidth = 1.0;
 
-    // Where: the requested spot if the whole window fits on a screen there,
-    // else a step down from the last popup still open, else centred over the
-    // browser window.
+    EclipseLittleWindow *lw = [[EclipseLittleWindow alloc] init];
+
+    EclipseLittleContentView *container = [[EclipseLittleContentView alloc] initWithFrame:contentRect];
+    container.wantsLayer = YES;
+    [container addSubview:webView];
+
+    NSButton *host = eclipse_little_bar_button(@"eclipse-little-host", lw, @selector(hostClicked:));
+    host.alignment = NSTextAlignmentLeft;
+    host.imagePosition = NSImageLeading;
+    host.imageHugsTitle = YES;
+    host.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium];
+    host.cell.lineBreakMode = NSLineBreakByTruncatingHead;
+    host.toolTip = @"Show the full address (⌘L)";
+    [container addSubview:host];
+
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    field.identifier = @"eclipse-little-address";
+    field.bezeled = NO;
+    field.bordered = NO;
+    field.drawsBackground = NO;
+    field.focusRingType = NSFocusRingTypeNone;
+    field.font = [NSFont systemFontOfSize:12.5];
+    field.usesSingleLineMode = YES;
+    field.cell.scrollable = YES;
+    field.cell.wraps = NO;
+    field.placeholderString = @"Search or enter address";
+    field.hidden = YES;
+    field.delegate = lw;
+    NSView *box = [[NSView alloc] initWithFrame:NSZeroRect];
+    box.wantsLayer = YES;
+    box.layer.cornerRadius = 6.0;
+    box.hidden = YES;
+    [box addSubview:field];
+    [container addSubview:box];
+
+    NSButton *open = eclipse_little_bar_button(@"eclipse-little-open", lw, @selector(openClicked:));
+    NSImage *openImage = nil;
+    if (@available(macOS 11.0, *)) {
+        for (NSString *name in @[ @"arrow.up.forward.app", @"arrow.up.right.square" ]) {
+            openImage = [NSImage imageWithSystemSymbolName:name accessibilityDescription:@"Open in Eclipse"];
+            if (openImage != nil) break;
+        }
+    }
+    if (openImage != nil) {
+        open.image = openImage;
+        open.imagePosition = NSImageOnly;
+    } else {
+        open.title = @"Open";
+    }
+    open.contentTintColor = [NSColor secondaryLabelColor];
+    open.toolTip = @"Open in Eclipse (⌘O)";
+    open.accessibilityLabel = @"Open in Eclipse";
+    [container addSubview:open];
+
+    window.contentView = container;
+
+    // Where: a standalone window in the middle of the screen with the
+    // pointer (a step down from the last one if that is already there). A
+    // popup at the requested spot if the whole window fits on a screen
+    // there, else a step down from the last popup still open, else centred
+    // over the browser window.
     NSRect frame = [window frameRectForContentRect:contentRect];
     BOOL placed = NO;
-    if (hasPosition && isfinite(topLeft.x) && isfinite(topLeft.y)) {
+    EclipseLittleWindow *previous = gLastLittleWindow;
+    BOOL previousShown = previous != nil && !previous.closed && previous.window.isVisible;
+    if (standalone) {
+        frame.origin.x = floor(NSMidX(visible) - frame.size.width / 2.0);
+        frame.origin.y = floor(NSMidY(visible) - frame.size.height / 2.0);
+        if (previousShown && NSEqualPoints(previous.window.frame.origin, frame.origin)) {
+            frame.origin.x += 24.0;
+            frame.origin.y -= 24.0;
+        }
+        frame = eclipse_clamp_frame(frame, visible);
+        placed = YES;
+    }
+    if (!placed && hasPosition && isfinite(topLeft.x) && isfinite(topLeft.y)) {
         NSScreen *primary = [NSScreen screens].firstObject;
         if (primary != nil) {
             NSRect candidate = frame;
@@ -2145,8 +2588,7 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
             }
         }
     }
-    EclipseLittleWindow *previous = gLastLittleWindow;
-    if (!placed && previous != nil && !previous.closed && previous.window.isVisible) {
+    if (!placed && previousShown) {
         NSRect last = previous.window.frame;
         NSRect candidate = frame;
         candidate.origin.x = NSMinX(last) + 24.0;
@@ -2164,10 +2606,17 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     }
     [window setFrame:frame display:NO];
 
-    EclipseLittleWindow *lw = [[EclipseLittleWindow alloc] init];
     lw.window = window;
     lw.webView = webView;
     lw.opener = opener;
+    lw.standalone = standalone;
+    lw.serial = gLittleNextSerial++;
+    lw.container = container;
+    lw.hostButton = host;
+    lw.addressField = field;
+    lw.addressBox = box;
+    lw.openButton = open;
+    container.owner = lw;
     webView.UIDelegate = lw;
     webView.navigationDelegate = lw;
     window.delegate = lw;
@@ -2175,7 +2624,9 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     [webView addObserver:lw forKeyPath:@"loading" options:0 context:kEclipseLittleKVOContext];
     [webView addObserver:lw forKeyPath:@"title" options:0 context:kEclipseLittleKVOContext];
     lw.observing = YES;
+    [lw applyTheme];
     [lw refreshTitle];
+    [lw layoutChrome];
 
     if (gLittleWindows == nil) gLittleWindows = [NSMutableSet set];
     [gLittleWindows addObject:lw];
@@ -2183,28 +2634,31 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     eclipse_little_start_opener_timer();
 
     [window makeKeyAndOrderFront:nil];
+    // The traffic lights have their final place once the window is shown.
+    [lw layoutChrome];
     if (eclipse_perf_enabled()) {
-        fprintf(stderr, "[little] opened %.0fx%.0f open=%lu\n", width, height,
+        fprintf(stderr, "[little] opened %.0fx%.0f standalone=%d open=%lu\n", width, height, standalone ? 1 : 0,
                 (unsigned long)gLittleWindows.count);
     }
     return lw;
 }
 
-/* Opens a Little Eclipse window for a popup requested by `openerPtr` (a tab's
-   WKWebView), built on `configurationPtr` (the WKWebViewConfiguration WebKit
-   handed the opener's UI delegate). `x`/`y` are the requested top-left in
-   screen coordinates with y downwards from the primary screen's top.
-   Only called from wry's new-window handler, inside the wrapped UI delegate
-   method: a request without a user gesture gets no window.
-   Returns the popup's WKWebView retained (+1; the caller owns that
-   reference and hands it to WebKit), or NULL when no window may or could be
-   made (the caller then opens the URL as a tab). */
 /* Whether the window.open being decided (inside wry's new-window handler)
    asked for a popup window; see eclipse_features_want_popup. */
 int eclipse_popup_request_wants_popup(void) {
     return (gPopupRequestContext & ECLIPSE_POPUP_WANTS_POPUP) != 0;
 }
 
+/* Opens a Little Eclipse window for a popup requested by `openerPtr` (a tab's
+   WKWebView), built on `configurationPtr` (the WKWebViewConfiguration WebKit
+   handed the opener's UI delegate). `width`/`height` are the page area asked
+   for (0: the default); `x`/`y` are the requested top-left in screen
+   coordinates with y downwards from the primary screen's top.
+   Only called from wry's new-window handler, inside the wrapped UI delegate
+   method: a request without a user gesture gets no window.
+   Returns the popup's WKWebView retained (+1; the caller owns that
+   reference and hands it to WebKit), or NULL when no window may or could be
+   made (the caller then opens the URL as a tab). */
 void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double width, double height,
                                  int hasPosition, double x, double y) {
     if (configurationPtr == NULL || openerPtr == NULL) return NULL;
@@ -2225,9 +2679,104 @@ void *eclipse_open_little_window(void *configurationPtr, void *openerPtr, double
         if (width <= 0 && features.width != nil) width = features.width.doubleValue;
         if (height <= 0 && features.height != nil) height = features.height.doubleValue;
         EclipseLittleWindow *lw = eclipse_little_window_create(
-            configuration, opener, NSMakeSize(width, height), hasPosition != 0, NSMakePoint(x, y));
+            configuration, opener, NSMakeSize(width, height), hasPosition != 0, NSMakePoint(x, y), NO);
         if (lw == nil) return NULL;
         return (__bridge_retained void *)lw.webView;
+    }
+}
+
+/* Opens a standalone Little Eclipse window (no opener): a link from another
+   app (`url`, http(s) only) or a blank one with the address field focused
+   (`url` empty, `focusAddress`). Built on a fresh configuration that shares
+   the tabs' website data store (wry's tabs use the default store), with the
+   tabs' `userAgent` (empty: WebKit's) and, if `adblock`, the native content
+   blocker; no tab scripts or IPC. 1 when it opened, 0 when it may not (the
+   overall limit) or the URL is not a web address: Rust then opens a tab. */
+int eclipse_open_standalone_little_window(const char *url, const char *userAgent, int adblock, int focusAddress) {
+    @autoreleasepool {
+        NSURL *target = nil;
+        if (url != NULL && url[0] != '\0') {
+            target = eclipse_little_loadable_url(url);
+            if (target == nil) {
+                if (eclipse_perf_enabled()) fprintf(stderr, "[little] refused a standalone window for a non-web URL\n");
+                return 0;
+            }
+        }
+        WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+        configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+        EclipseLittleWindow *lw =
+            eclipse_little_window_create(configuration, nil, NSZeroSize, NO, NSZeroPoint, YES);
+        if (lw == nil) return 0;
+        NSString *agent = userAgent != NULL ? [NSString stringWithUTF8String:userAgent] : nil;
+        if (agent.length > 0) lw.webView.customUserAgent = agent;
+        if (adblock) eclipse_adblock_want_webview(lw.webView);
+        if (target != nil) {
+            [lw.webView loadRequest:[NSURLRequest requestWithURL:target]];
+        }
+        [NSApp activateIgnoringOtherApps:YES];
+        if (focusAddress || target == nil) {
+            [lw beginEditingAddress];
+        } else {
+            [lw.window makeFirstResponder:lw.webView];
+        }
+        return 1;
+    }
+}
+
+static EclipseLittleWindow *eclipse_little_window_with_serial(uint64_t serial) {
+    for (EclipseLittleWindow *lw in gLittleWindows) {
+        if (!lw.closed && lw.serial == serial) return lw;
+    }
+    return nil;
+}
+
+/* Loads `url` (Rust's resolution of what was typed in the address field of
+   window `windowId`) into that window. Only http(s) addresses with a host
+   load; anything else (NULL: Rust found nothing to load) beeps. 1 when the
+   load started. */
+int eclipse_little_window_load(uint64_t windowId, const char *url) {
+    @autoreleasepool {
+        EclipseLittleWindow *lw = eclipse_little_window_with_serial(windowId);
+        if (lw == nil) return 0;
+        NSURL *target = eclipse_little_loadable_url(url);
+        if (target == nil) {
+            if (eclipse_perf_enabled()) fprintf(stderr, "[little] refused an address that is not a web page\n");
+            NSBeep();
+            return 0;
+        }
+        [lw.webView loadRequest:[NSURLRequest requestWithURL:target]];
+        [lw.window makeFirstResponder:lw.webView];
+        return 1;
+    }
+}
+
+/* The current Space's theme colour (sRGB, 0…1) and whether it is dark; every
+   Little Eclipse window, open or later, is framed in it. */
+void eclipse_set_little_window_theme(double red, double green, double blue, int dark) {
+    @autoreleasepool {
+        if (!isfinite(red) || !isfinite(green) || !isfinite(blue)) return;
+        gLittleFrameColor = [NSColor colorWithSRGBRed:MIN(MAX(red, 0.0), 1.0)
+                                                green:MIN(MAX(green, 0.0), 1.0)
+                                                 blue:MIN(MAX(blue, 0.0), 1.0)
+                                                alpha:1.0];
+        gLittleFrameDark = dark != 0;
+        for (EclipseLittleWindow *lw in gLittleWindows) [lw applyTheme];
+    }
+}
+
+/* Closes every Little Eclipse window (the app is quitting). */
+void eclipse_close_all_little_windows(void) {
+    @autoreleasepool {
+        NSArray<EclipseLittleWindow *> *open = [gLittleWindows allObjects];
+        NSUInteger count = 0;
+        for (EclipseLittleWindow *lw in open) {
+            if (lw.closed) continue;
+            count++;
+            [lw.window close];
+        }
+        if (eclipse_perf_enabled() && count > 0) {
+            fprintf(stderr, "[little] closed all on quit count=%lu\n", (unsigned long)count);
+        }
     }
 }
 
@@ -2244,10 +2793,11 @@ static BOOL eclipse_is_little_window(NSWindow *window) {
 }
 
 /* Menu commands while a Little Eclipse window is key (or one of its sheets
-   is). Page commands act on the popup; commands about a tab's page (Home,
+   is). Page commands act on the window; commands about a tab's page (Home,
    Bookmark, Find, which needs the tab's in-page find bar) are refused rather
-   than sent to the hidden tab behind the popup. YES when the command was
-   handled here; the rest go to the browser (⌘W closes the popup, see
+   than sent to the hidden tab behind it. ⌘L edits the window's address and
+   ⌘O opens its page in the browser window. YES when the command was handled
+   here; the rest go to the browser (⌘W closes the window, see
    performEclipseAction:). */
 static BOOL eclipse_little_window_perform_action(NSWindow *window, NSString *action) {
     EclipseLittleWindow *lw = eclipse_little_window_for(window);
@@ -2260,7 +2810,8 @@ static BOOL eclipse_little_window_perform_action(NSWindow *window, NSString *act
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         pageCommands = [NSSet setWithArray:@[ @"reload", @"stop_loading", @"go_back", @"go_forward", @"print",
-                                              @"zoom_in", @"zoom_out", @"zoom_reset", @"open_devtools" ]];
+                                              @"zoom_in", @"zoom_out", @"zoom_reset", @"open_devtools",
+                                              @"open_in_eclipse", @"focus_omnibar" ]];
         tabCommands = [NSSet setWithArray:@[ @"home", @"favorite_tab", @"duplicate_tab", @"find", @"find_next",
                                              @"find_prev" ]];
     });
@@ -2280,6 +2831,10 @@ static BOOL eclipse_little_window_perform_action(NSWindow *window, NSString *act
         [webView goForward];
     } else if ([action isEqualToString:@"print"]) {
         eclipse_print_webview(webView);
+    } else if ([action isEqualToString:@"open_in_eclipse"]) {
+        [lw openInEclipse];
+    } else if ([action isEqualToString:@"focus_omnibar"]) {
+        [lw beginEditingAddress];
     } else if ([action hasPrefix:@"zoom_"]) {
         if (@available(macOS 11.0, *)) {
             // The same steps and limits as a tab (tab::MIN_ZOOM/MAX_ZOOM).
@@ -2290,7 +2845,7 @@ static BOOL eclipse_little_window_perform_action(NSWindow *window, NSString *act
             webView.pageZoom = MIN(MAX(round(zoom * 100.0) / 100.0, 0.5), 3.0);
         }
     } else if ([action isEqualToString:@"open_devtools"]) {
-        // The popup's own Web Inspector (WebKit's _inspector SPI).
+        // The window's own Web Inspector (WebKit's _inspector SPI).
         SEL inspectorSel = NSSelectorFromString(@"_inspector");
         id inspector = [webView respondsToSelector:inspectorSel]
                            ? ((id (*)(id, SEL))objc_msgSend)(webView, inspectorSel)

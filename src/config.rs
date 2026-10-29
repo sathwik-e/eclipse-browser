@@ -294,6 +294,10 @@ pub struct BrowserConfig {
     pub downloads: Vec<DownloadItem>,
     #[serde(default = "default_rounded_corners_radius")]
     pub rounded_corners_radius: f64,
+    /// Links from other apps (Eclipse as the default browser) open
+    /// in a standalone Little Eclipse window; off: a new tab.
+    #[serde(default = "default_true")]
+    pub open_links_in_little_window: bool,
 }
 
 impl Default for BrowserConfig {
@@ -321,6 +325,7 @@ impl Default for BrowserConfig {
             space_profiles: default_space_profiles(),
             downloads: Vec::new(),
             rounded_corners_radius: default_rounded_corners_radius(),
+            open_links_in_little_window: true,
         }
     }
 }
@@ -515,6 +520,7 @@ impl BrowserConfig {
         "custom_css",
         "custom_user_agent",
         "rounded_corners_radius",
+        "open_links_in_little_window",
     ];
 
     /// Applies an `update_settings` patch. Only keys in `PATCHABLE_SETTINGS`
@@ -565,6 +571,9 @@ impl BrowserConfig {
             "autoplay_enabled" => value.as_bool().is_some_and(|b| set(&mut self.autoplay_enabled, b)),
             "adblock_enabled" => value.as_bool().is_some_and(|b| set(&mut self.adblock_enabled, b)),
             "webextensions_enabled" => value.as_bool().is_some_and(|b| set(&mut self.webextensions_enabled, b)),
+            "open_links_in_little_window" => value
+                .as_bool()
+                .is_some_and(|b| set(&mut self.open_links_in_little_window, b)),
             "tab_hibernation_mins" => value
                 .as_u64()
                 .filter(|m| *m <= MAX_HIBERNATION_MINS)
@@ -826,6 +835,22 @@ mod tests {
     }
 
     #[test]
+    fn links_from_other_apps_open_in_little_windows_by_default() {
+        assert!(BrowserConfig::default().open_links_in_little_window);
+        // A config saved before the setting existed gets the default.
+        let old: BrowserConfig = serde_json::from_str(r#"{"search_engine": "kagi"}"#).unwrap();
+        assert!(old.open_links_in_little_window);
+        let mut config = BrowserConfig::default();
+        let changed = config.apply_settings_patch(&patch(r#"{"open_links_in_little_window": false}"#));
+        assert_eq!(changed, vec!["open_links_in_little_window"]);
+        assert!(!config.open_links_in_little_window);
+        // Only a boolean is taken.
+        let changed = config.apply_settings_patch(&patch(r#"{"open_links_in_little_window": "yes"}"#));
+        assert!(changed.is_empty());
+        assert!(!config.open_links_in_little_window);
+    }
+
+    #[test]
     fn default_config_is_sane() {
         let config = BrowserConfig::default();
         assert_eq!(config.search_engine, "duckduckgo");
@@ -980,7 +1005,7 @@ mod tests {
                 "tab_hibernation_mins": 0, "adblock_enabled": false,
                 "adblock_disabled_domains": ["a.example"], "webextensions_enabled": false,
                 "custom_js": "1", "custom_css": "a{}", "custom_user_agent": "UA/2",
-                "rounded_corners_radius": 4
+                "rounded_corners_radius": 4, "open_links_in_little_window": false
             }"##,
         );
         let changed = config.apply_settings_patch(&samples);

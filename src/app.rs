@@ -136,6 +136,10 @@ pub struct BrowserApp {
     /// Download sequence number (from tab.rs) to the DownloadItem id it
     /// created, so a completion updates exactly that item.
     download_items: HashMap<u64, usize>,
+    /// Links other apps asked Eclipse to open, opened from `pump`.
+    pending_external_links: Vec<String>,
+    /// The frame colour last given to Little Eclipse windows.
+    little_theme_pushed: Option<([u8; 3], bool)>,
 }
 
 impl BrowserApp {
@@ -270,6 +274,8 @@ impl BrowserApp {
             sidebar_crashes: Vec::new(),
             sidebar_reload_due: None,
             download_items: HashMap::new(),
+            pending_external_links: Vec::new(),
+            little_theme_pushed: None,
         };
         app.last_broadcast_memory_mb = app.memory_mb;
 
@@ -294,6 +300,8 @@ impl BrowserApp {
         if app.config.sidebar_collapsed {
             app.schedule_sidebar_hide();
         }
+        // After the session restore, which applies the current Space's look.
+        app.push_little_window_theme();
 
         if app.perf {
             eprintln!(
@@ -387,7 +395,79 @@ impl BrowserApp {
         for tab in &mut self.tabs {
             sync_tab_config(tab, &self.config, self.config_revision, &reference);
         }
+        self.push_little_window_theme();
         self.broadcast_state();
+    }
+
+    /// Frames Little Eclipse windows in the current Space's theme (the
+    /// global theme and accent mirror the current Space's look).
+    fn push_little_window_theme(&mut self) {
+        let frame = little_window_frame_color(&self.config.theme, &self.config.accent_color);
+        if self.little_theme_pushed == Some(frame) {
+            return;
+        }
+        self.little_theme_pushed = Some(frame);
+        #[cfg(target_os = "macos")]
+        crate::macos_menu::set_little_window_theme(frame.0, frame.1);
+    }
+
+    /// Links other apps asked Eclipse to open (Eclipse as the default
+    /// browser, `ECLIPSE_SMOKE_LITTLE_URL`). They are opened from
+    /// `pump`, so a link that arrives while the app launches waits for the
+    /// browser to be up.
+    pub fn queue_external_links(&mut self, urls: impl IntoIterator<Item = String>) {
+        self.pending_external_links.extend(urls);
+    }
+
+    fn open_pending_external_links(&mut self) {
+        for url in std::mem::take(&mut self.pending_external_links) {
+            self.open_external_link(&url);
+        }
+    }
+
+    /// A link from another app: a standalone Little Eclipse window, like
+    /// Little Arc, or a new tab when that setting is off or no more windows
+    /// may open. Only http(s) links are opened.
+    fn open_external_link(&mut self, url: &str) {
+        match external_link_route(url, self.config.open_links_in_little_window) {
+            ExternalLinkRoute::LittleWindow(url) => {
+                if self.perf {
+                    eprintln!("[little] link from another app");
+                }
+                if !self.open_standalone_little_window(&url, false) {
+                    self.open_external_link_in_tab(&url);
+                }
+            }
+            ExternalLinkRoute::Tab(url) => self.open_external_link_in_tab(&url),
+            ExternalLinkRoute::Ignore => {
+                if self.perf {
+                    eprintln!("[little] ignored a link from another app that is not http(s)");
+                }
+            }
+        }
+    }
+
+    fn open_external_link_in_tab(&mut self, url: &str) {
+        self.create_tab(url, true);
+        self.window.set_visible(true);
+        self.window.set_focus();
+    }
+
+    /// Opens a standalone Little Eclipse window for `url` (empty: a blank one
+    /// with its address field focused) with the current Space's user agent
+    /// and ad blocking. `false` when none opened.
+    fn open_standalone_little_window(&mut self, url: &str, focus_address: bool) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let user_agent = crate::tab::space_user_agent(&self.config, &self.current_workspace);
+            let adblock = crate::tab::adblock_active_for(&self.config, &self.current_workspace, url);
+            crate::macos_menu::open_standalone_little_window(url, &user_agent, adblock, focus_address)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (url, focus_address);
+            false
+        }
     }
 
     fn save_config_now(&mut self) {
@@ -2308,9 +2388,24 @@ impl BrowserApp {
         // An unsized window.open or target=_blank link inside a Little Eclipse
         // window (menu.m) opens as a tab, like one from a tab. The URL comes
         // from a web page: only http(s) is opened.
+        // Also "Open in Eclipse" (⌘O) in a Little Eclipse window.
         if let Some(url) = action.strip_prefix("little_window_new_tab:") {
             if is_http_url(url) {
                 self.create_tab(url, true);
+            }
+            return;
+        }
+        // Return in a Little Eclipse window's address field: what the user
+        // typed, resolved to a web address or a search (never eclipse://).
+        if let Some(rest) = action.strip_prefix("little_window_address:") {
+            if let Some((id, text)) = rest.split_once(':')
+                && let Ok(id) = id.parse::<u64>()
+            {
+                let url = little_window_url_from_input(text, &self.config);
+                #[cfg(target_os = "macos")]
+                crate::macos_menu::little_window_load(id, url.as_deref());
+                #[cfg(not(target_os = "macos"))]
+                let _ = (id, url);
             }
             return;
         }
@@ -2324,6 +2419,14 @@ impl BrowserApp {
             "new_tab" => {
                 self.create_tab("eclipse://newtab", true);
             }
+            "new_little_window" => {
+                if !self.open_standalone_little_window("", true) {
+                    self.create_tab("eclipse://newtab", true);
+                }
+            }
+            // Handled by menu.m while a Little Eclipse window is in front
+            // (the menu item is disabled otherwise).
+            "open_in_eclipse" => {}
             "command_bar" => {
                 self.open_command_bar();
             }
@@ -2542,6 +2645,9 @@ impl BrowserApp {
     /// Runs deferred work that is due (state push, config/session saves,
     /// sidebar hold expiry and hiding) and returns when to wake up next.
     pub fn pump(&mut self) -> Option<Instant> {
+        if !self.pending_external_links.is_empty() {
+            self.open_pending_external_links();
+        }
         let now = Instant::now();
         if self.state_dirty && now >= self.next_state_flush {
             self.flush_state();
@@ -2587,6 +2693,8 @@ impl BrowserApp {
 
     /// Writes everything that is pending; called when the app quits.
     pub fn shutdown(&mut self) {
+        #[cfg(target_os = "macos")]
+        crate::macos_menu::close_all_little_windows();
         self.save_session();
         if self.config_save_due.is_some() {
             self.save_config_now();
@@ -3488,6 +3596,88 @@ pub fn normalize_url(input: &str, config: &BrowserConfig) -> String {
     config.get_search_url(trimmed)
 }
 
+/// What a Little Eclipse window's address field loads for `input`: the
+/// address bar's rule (`normalize_url`: a web address as typed, a bare word
+/// or phrase searched with the configured engine), but only ever an http(s)
+/// page. Internal `eclipse://` pages are refused, never searched for.
+pub fn little_window_url_from_input(input: &str, config: &BrowserConfig) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed.len() > 8192 || trimmed.to_ascii_lowercase().starts_with("eclipse:") {
+        return None;
+    }
+    let url = normalize_url(trimmed, config);
+    let parsed = url::Url::parse(&url).ok()?;
+    let web = matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some_and(|h| !h.is_empty());
+    web.then_some(url)
+}
+
+/// Where a link another app asked Eclipse to open goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExternalLinkRoute {
+    /// A standalone Little Eclipse window, like Little Arc.
+    LittleWindow(String),
+    /// A new foreground tab in the browser window.
+    Tab(String),
+    /// Not a web page (file:, eclipse:, javascript: ...): not opened.
+    Ignore,
+}
+
+pub(crate) fn external_link_route(url: &str, little_windows: bool) -> ExternalLinkRoute {
+    let Ok(parsed) = url::Url::parse(url.trim()) else {
+        return ExternalLinkRoute::Ignore;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none_or(str::is_empty) {
+        return ExternalLinkRoute::Ignore;
+    }
+    let url = String::from(parsed);
+    if little_windows {
+        ExternalLinkRoute::LittleWindow(url)
+    } else {
+        ExternalLinkRoute::Tab(url)
+    }
+}
+
+/// The colour Little Eclipse windows are framed in for a Space's `theme` and
+/// `accent`: the sidebar's colour for that theme as it shows over the
+/// browser window, tinted with the accent. sRGB, and whether it is dark.
+pub(crate) fn little_window_frame_color(theme: &str, accent: &str) -> ([u8; 3], bool) {
+    let (base, dark): ([u8; 3], bool) = match theme {
+        "void" => ([9, 10, 14], true),
+        "lunar" => ([17, 22, 33], true),
+        "nebula" => ([20, 16, 30], true),
+        "aurora" => ([14, 22, 23], true),
+        "sol" => ([240, 241, 244], false),
+        _ => ([15, 17, 23], true),
+    };
+    let tint = parse_hex_rgb(accent).unwrap_or([0x5E, 0x9E, 0xFF]);
+    let amount = if dark { 0.14 } else { 0.10 };
+    let mixed = std::array::from_fn(|i| {
+        (f64::from(base[i]) * (1.0 - amount) + f64::from(tint[i]) * amount).round() as u8
+    });
+    (mixed, dark)
+}
+
+/// `#rgb`, `#rrggbb` or `#rrggbbaa` (the alpha is ignored).
+fn parse_hex_rgb(color: &str) -> Option<[u8; 3]> {
+    let hex = color.trim().strip_prefix('#')?;
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let channel = |s: &str| u8::from_str_radix(s, 16).ok();
+    match hex.len() {
+        3 => {
+            let mut out = [0u8; 3];
+            for (i, c) in hex.chars().enumerate() {
+                let v = channel(&c.to_string())?;
+                out[i] = v * 17;
+            }
+            Some(out)
+        }
+        6 | 8 => Some([channel(&hex[0..2])?, channel(&hex[2..4])?, channel(&hex[4..6])?]),
+        _ => None,
+    }
+}
+
 pub fn get_process_memory_mb() -> f64 {
     #[cfg(target_os = "macos")]
     unsafe {
@@ -3562,6 +3752,85 @@ mod tests {
         assert!(quit_ready(Some(deadline), false, now));
         // The wait timed out.
         assert!(quit_ready(Some(deadline), true, deadline));
+    }
+
+    #[test]
+    fn little_window_address_field_loads_web_pages_and_searches_only() {
+        let config = config();
+        let url = |input: &str| little_window_url_from_input(input, &config);
+        assert_eq!(url("https://example.com/a?b=1").as_deref(), Some("https://example.com/a?b=1"));
+        assert_eq!(url("  http://127.0.0.1:8831/x.html ").as_deref(), Some("http://127.0.0.1:8831/x.html"));
+        assert_eq!(url("example.com").as_deref(), Some("https://example.com"));
+        assert_eq!(url("localhost:3000").as_deref(), Some("http://localhost:3000"));
+        assert!(url("rust borrow checker").unwrap().starts_with("https://duckduckgo.com/?q=rust+borrow+checker"));
+        assert!(url("hello").unwrap().starts_with("https://duckduckgo.com/?q=hello"));
+        // The configured engine is used.
+        let google = BrowserConfig {
+            search_engine: "google".into(),
+            ..BrowserConfig::default()
+        };
+        assert!(
+            little_window_url_from_input("hello", &google)
+                .unwrap()
+                .starts_with("https://www.google.com/search?q=hello")
+        );
+        // Internal pages are refused outright, never searched for.
+        assert_eq!(url("eclipse://settings"), None);
+        assert_eq!(url("ECLIPSE://localhost/newtab"), None);
+        assert_eq!(url("eclipse:settings"), None);
+        // Other schemes become searches, so only http(s) is ever loaded.
+        for input in ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,hi", "about:blank"] {
+            let resolved = url(input).unwrap();
+            assert!(resolved.starts_with("https://duckduckgo.com/?q="), "{input} -> {resolved}");
+        }
+        assert_eq!(url(""), None);
+        assert_eq!(url("   "), None);
+        assert_eq!(url(&"a".repeat(9000)), None);
+    }
+
+    #[test]
+    fn links_from_other_apps_open_little_windows_or_tabs() {
+        assert_eq!(
+            external_link_route("https://example.com/a", true),
+            ExternalLinkRoute::LittleWindow("https://example.com/a".into())
+        );
+        assert_eq!(
+            external_link_route("http://127.0.0.1:8000/x.html", false),
+            ExternalLinkRoute::Tab("http://127.0.0.1:8000/x.html".into())
+        );
+        for url in [
+            "eclipse://settings",
+            "file:///Users/me/a.html",
+            "javascript:alert(1)",
+            "mailto:a@b.example",
+            "data:text/html,hi",
+            "about:blank",
+            "not a url",
+            "",
+        ] {
+            assert_eq!(external_link_route(url, true), ExternalLinkRoute::Ignore, "{url}");
+            assert_eq!(external_link_route(url, false), ExternalLinkRoute::Ignore, "{url}");
+        }
+    }
+
+    #[test]
+    fn little_windows_are_framed_in_the_space_theme() {
+        let (eclipse, dark) = little_window_frame_color("eclipse", "#5E9EFF");
+        assert!(dark);
+        assert!(eclipse.iter().all(|&c| c < 64), "{eclipse:?}");
+        // The accent tints the frame.
+        assert_ne!(little_window_frame_color("eclipse", "#FF0000").0, eclipse);
+        assert!(little_window_frame_color("eclipse", "#FF0000").0[0] > eclipse[0]);
+        let (sol, sol_dark) = little_window_frame_color("sol", "#5E9EFF");
+        assert!(!sol_dark);
+        assert!(sol.iter().all(|&c| c > 180), "{sol:?}");
+        // Unknown themes and bad accents fall back to the defaults.
+        assert_eq!(little_window_frame_color("nope", "#5E9EFF"), (eclipse, true));
+        assert_eq!(little_window_frame_color("eclipse", "red"), (eclipse, true));
+        assert_eq!(parse_hex_rgb("#abc"), Some([0xAA, 0xBB, 0xCC]));
+        assert_eq!(parse_hex_rgb("#5E9EFF80"), Some([0x5E, 0x9E, 0xFF]));
+        assert_eq!(parse_hex_rgb("#12"), None);
+        assert_eq!(parse_hex_rgb("#gggggg"), None);
     }
 
     #[test]

@@ -90,6 +90,15 @@ fn main() {
             app.create_tab(url, true);
         }
     }
+    // Optional smoke-test link from "another app": opens a URL through the
+    // same path as a link macOS hands Eclipse (a standalone Little Eclipse
+    // window by default). Inert unless ECLIPSE_SMOKE_LITTLE_URL is set.
+    if let Ok(url) = std::env::var("ECLIPSE_SMOKE_LITTLE_URL") {
+        let url = url.trim();
+        if !url.is_empty() {
+            app.queue_external_links([url.to_string()]);
+        }
+    }
 
     event_loop.run(move |event, _, control_flow| {
         match event {
@@ -107,6 +116,15 @@ fn main() {
                 ..
             } => {
                 *control_flow = ControlFlow::Exit;
+            }
+
+            // Links other apps hand Eclipse (it is the default browser, or
+            // an app asked for it by name): AppKit's handler for the "open
+            // URL" Apple Event calls tao's application:openURLs:, also for a
+            // link that launches the app (tao delivers it once the loop runs).
+            // Anything but http(s) is ignored (app::external_link_route).
+            Event::Opened { urls } => {
+                app.queue_external_links(urls.into_iter().map(String::from));
             }
 
             // Also delivered when AppKit terminates the app (⌘Q).

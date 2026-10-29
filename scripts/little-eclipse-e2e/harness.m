@@ -28,6 +28,9 @@ extern int eclipse_navigation_policy_context(void);
 extern int eclipse_little_window_count_for_view(void *viewPtr);
 extern void eclipse_install_menu(void (*callback)(const char *action));
 extern void eclipse_configure_window(void *windowPtr);
+extern int eclipse_open_standalone_little_window(const char *url, const char *userAgent, int adblock,
+                                                 int focusAddress);
+extern int eclipse_little_window_load(uint64_t windowId, const char *url);
 
 static Class gFakeWryClass;
 static WKWebView *gTab;
@@ -60,8 +63,28 @@ static void ipc_receive(id self, SEL _cmd, WKUserContentController *controller, 
            eclipse_script_message_from_little_window());
 }
 
+/* Stands in for Rust's handling of the menu callback: an address typed in a
+   Little Eclipse window is passed through unchanged (app.rs resolves it; this
+   checks menu.m's own refusal of anything but http(s)), and ⌥⌘N opens a
+   blank standalone window. Asynchronous, like the event loop. */
 static void menu_action(const char *action) {
     printf("ACTION %s\n", action);
+    NSString *command = @(action);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *prefix = @"little_window_address:";
+        if ([command hasPrefix:prefix]) {
+            NSString *rest = [command substringFromIndex:prefix.length];
+            NSRange colon = [rest rangeOfString:@":"];
+            if (colon.location == NSNotFound) return;
+            uint64_t windowId = strtoull([rest substringToIndex:colon.location].UTF8String, NULL, 10);
+            NSString *text = [rest substringFromIndex:colon.location + 1];
+            int ok = eclipse_little_window_load(windowId, text.UTF8String);
+            printf("LOAD %s ok=%d\n", text.UTF8String, ok);
+        } else if ([command isEqualToString:@"new_little_window"]) {
+            int ok = eclipse_open_standalone_little_window("", "", 0, 1);
+            printf("NEWLITTLE ok=%d\n", ok);
+        }
+    });
 }
 
 /* Stands in for wry's navigation delegate and the Rust policy for eclipse://
@@ -112,14 +135,59 @@ static void menu_action(const char *action) {
 }
 @end
 
+static NSView *find_view(NSView *root, BOOL (^match)(NSView *)) {
+    if (root == nil) return nil;
+    if (match(root)) return root;
+    for (NSView *child in root.subviews) {
+        NSView *found = find_view(child, match);
+        if (found != nil) return found;
+    }
+    return nil;
+}
+
+static WKWebView *window_webview(NSWindow *window) {
+    return (WKWebView *)find_view(window.contentView, ^BOOL(NSView *v) { return [v isKindOfClass:[WKWebView class]]; });
+}
+
+static NSView *window_control(NSWindow *window, NSString *identifier) {
+    return find_view(window.contentView, ^BOOL(NSView *v) { return [v.identifier isEqualToString:identifier]; });
+}
+
 static NSArray<NSWindow *> *little_windows(void) {
     NSMutableArray<NSWindow *> *out = [NSMutableArray array];
     for (NSWindow *window in NSApp.windows) {
-        if (window != gTabWindow && window.isVisible && [window.contentView isKindOfClass:[WKWebView class]]) {
+        if (window != gTabWindow && window.isVisible && !window.isSheet && window_webview(window) != nil) {
             [out addObject:window];
         }
     }
     return out;
+}
+
+/* The host label on a Little Eclipse window's top bar. */
+static NSString *host_label(NSWindow *window) {
+    NSButton *host = (NSButton *)window_control(window, @"eclipse-little-host");
+    return host != nil ? host.title : @"(no label)";
+}
+
+static void print_editing(NSWindow *window, const char *when) {
+    NSTextField *field = (NSTextField *)window_control(window, @"eclipse-little-address");
+    NSView *host = window_control(window, @"eclipse-little-host");
+    BOOL focused = field != nil && field.currentEditor != nil && window.firstResponder == field.currentEditor;
+    printf("EDITING %s field=%d focused=%d host_hidden=%d text=\"%s\"\n", when, field != nil && !field.hidden,
+           focused, host.hidden, field.stringValue.UTF8String ?: "");
+}
+
+/* Types `text` into the address field being edited, then sends `command`
+   (insertNewline: is Return, cancelOperation: is Escape). */
+static void type_in_address(NSWindow *window, NSString *text, SEL command) {
+    NSTextField *field = (NSTextField *)window_control(window, @"eclipse-little-address");
+    NSTextView *editor = (NSTextView *)field.currentEditor;
+    if (editor == nil) {
+        printf("NO EDITOR\n");
+        return;
+    }
+    if (text != nil) editor.string = text;
+    [editor doCommandBySelector:command];
 }
 
 static void click(NSWindow *window, NSView *view) {
@@ -229,7 +297,7 @@ int main(int argc, char **argv) {
 
         WKWebView *(^littleWebView)(NSString *) = ^WKWebView *(NSString *path) {
             for (NSWindow *window in little_windows()) {
-                WKWebView *webView = (WKWebView *)window.contentView;
+                WKWebView *webView = window_webview(window);
                 if ([webView.URL.path isEqualToString:path]) return webView;
             }
             return nil;
@@ -260,7 +328,7 @@ int main(int argc, char **argv) {
                 // closed popup (and its page) alive.
                 after(3.8, ^{
                     for (NSWindow *w in NSApp.windows) {
-                        if (w != gTabWindow && [w.contentView isKindOfClass:[WKWebView class]]) {
+                        if (w != gTabWindow && !w.isSheet && window_webview(w) != nil) {
                             printf("LEFT visible=%d sheet=%d\n", w.isVisible, w.attachedSheet != nil);
                         }
                     }
@@ -290,6 +358,83 @@ int main(int argc, char **argv) {
                     press(@"t", NSEventModifierFlagCommand);
                 });
                 after(3.5, ^{ print_key(); });
+            } else if ([scenario isEqualToString:@"openin"]) {
+                // The bar's "Open in Eclipse" button (a real click, through
+                // the transparent title bar).
+                after(1.5, ^{
+                    WKWebView *webView = littleWebView(@"/pop.html");
+                    NSView *open = window_control(webView.window, @"eclipse-little-open");
+                    printf("HOST \"%s\"\n", host_label(webView.window).UTF8String);
+                    if (open != nil) click(webView.window, open);
+                    else printf("NO OPEN BUTTON\n");
+                });
+                after(3.5, ^{ print_key(); });
+            } else if ([scenario isEqualToString:@"openkey"]) {
+                after(1.5, ^{
+                    print_key();
+                    press(@"o", NSEventModifierFlagCommand);
+                });
+                // With the browser window in front ⌘O is not for it.
+                after(3.0, ^{
+                    print_key();
+                    press(@"o", NSEventModifierFlagCommand);
+                });
+            } else if ([scenario isEqualToString:@"standalone"]) {
+                // As a link from another app arrives (app.rs): no opener.
+                printf("STANDALONE ok=%d\n",
+                       eclipse_open_standalone_little_window(
+                           [NSString stringWithFormat:@"http://localhost:%d/pop.html", port + 1].UTF8String,
+                           "EclipseHarness/1.0", 0, 0));
+                printf("STANDALONE-ECLIPSE ok=%d\n",
+                       eclipse_open_standalone_little_window("eclipse://localhost/settings", "", 0, 0));
+                printf("STANDALONE-FILE ok=%d\n",
+                       eclipse_open_standalone_little_window("file:///etc/passwd", "", 0, 0));
+                after(1.5, ^{
+                    print_key();
+                    WKWebView *webView = littleWebView(@"/pop.html");
+                    [webView evaluateJavaScript:@"String(window.opener) + ' ' + navigator.userAgent"
+                              completionHandler:^(id result, NSError *error) {
+                                  (void)error;
+                                  printf("PAGE %s\n", [[result description] UTF8String] ?: "(error)");
+                              }];
+                });
+                // The tab goes away: a standalone window has no opener to follow.
+                after(2.0, ^{ [gTab removeFromSuperview]; });
+            } else if ([scenario isEqualToString:@"address"]) {
+                // ⌥⌘N: a blank standalone window, address field focused.
+                press(@"n", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+                after(1.0, ^{
+                    NSWindow *w = little_windows().firstObject;
+                    print_key();
+                    print_editing(w, "new");
+                    type_in_address(w, [NSString stringWithFormat:@"http://localhost:%d/pop.html?typed", port + 1],
+                                    @selector(insertNewline:));
+                });
+                after(2.5, ^{
+                    NSWindow *w = little_windows().firstObject;
+                    print_editing(w, "loaded");
+                    NSView *host = window_control(w, @"eclipse-little-host");
+                    if (host != nil) click(w, host);
+                    print_editing(w, "clicked");
+                    type_in_address(w, @"http://localhost:1/never", @selector(cancelOperation:));
+                    print_editing(w, "escaped");
+                });
+            } else if ([scenario isEqualToString:@"addreclipse"]) {
+                eclipse_open_standalone_little_window(
+                    [NSString stringWithFormat:@"http://localhost:%d/pop.html", port + 1].UTF8String, "", 0, 0);
+                after(1.5, ^{
+                    NSWindow *w = little_windows().firstObject;
+                    NSView *host = window_control(w, @"eclipse-little-host");
+                    if (host != nil) click(w, host);
+                    type_in_address(w, @"eclipse://localhost/settings", @selector(insertNewline:));
+                });
+                after(2.2, ^{
+                    NSWindow *w = little_windows().firstObject;
+                    [w makeFirstResponder:nil];
+                    NSView *host = window_control(w, @"eclipse-little-host");
+                    if (host != nil) click(w, host);
+                    type_in_address(w, @"javascript:alert(1)", @selector(insertNewline:));
+                });
             } else if ([scenario isEqualToString:@"linktab"]) {
                 after(1.5, ^{
                     print_key();
@@ -306,10 +451,10 @@ int main(int argc, char **argv) {
                 printf("TABURL %s\n", gTab.URL.absoluteString.UTF8String ?: "(nil)");
                 CGFloat top = NSMaxY([NSScreen screens].firstObject.frame);
                 for (NSWindow *window in windows) {
-                    WKWebView *webView = (WKWebView *)window.contentView;
+                    WKWebView *webView = window_webview(window);
                     NSRect frame = window.frame;
-                    printf("WINDOW title=\"%s\" subtitle=\"%s\" url=%s frame=%.0f,%.0f,%.0fx%.0f\n",
-                           window.title.UTF8String, window.subtitle.UTF8String,
+                    printf("WINDOW title=\"%s\" host=\"%s\" url=%s frame=%.0f,%.0f,%.0fx%.0f\n",
+                           window.title.UTF8String, host_label(window).UTF8String,
                            webView.URL.absoluteString.UTF8String ?: "(nil)", NSMinX(frame), top - NSMaxY(frame),
                            NSWidth(frame), NSHeight(frame));
                 }

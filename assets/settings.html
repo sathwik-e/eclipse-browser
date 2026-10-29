@@ -579,6 +579,13 @@ textarea.code-input {
       <option value="0">Never</option>
     </select>
   </div>
+  <div class="row">
+    <div>
+      <div style="font-weight: 500;">Open links from other apps in Little Eclipse</div>
+      <div class="hint" style="margin-top:2px;">A link you click in another app opens in a small window of its own (⌘O moves it into a tab). When off, it opens as a new tab. Make Eclipse your default browser in System Settings &gt; Desktop &amp; Dock.</div>
+    </div>
+    <input type="checkbox" id="chk-little-links" checked />
+  </div>
 
   <!-- Toggle to turn off adblocker on this current page only -->
   <div class="row" id="row-current-site-adblock">
@@ -684,6 +691,7 @@ const DEFAULT_CONFIG = {
   drm_fairplay_enabled: true,
   autoplay_enabled: true,
   tab_hibernation_mins: 15,
+  open_links_in_little_window: true,
   adblock_enabled: true,
   adblock_disabled_domains: [],
   webextensions_enabled: true,
@@ -846,6 +854,7 @@ function renderUI() {
   document.getElementById('chk-adblock').checked = cfg.adblock_enabled !== false;
   document.getElementById('chk-drm').checked = cfg.drm_fairplay_enabled !== false;
   document.getElementById('chk-autoplay').checked = cfg.autoplay_enabled !== false;
+  document.getElementById('chk-little-links').checked = cfg.open_links_in_little_window !== false;
   document.getElementById('chk-extensions').checked = cfg.webextensions_enabled !== false;
   setTextIfIdle('txt-custom-js', 'custom_js');
   setTextIfIdle('txt-custom-css', 'custom_css');
@@ -1135,6 +1144,10 @@ document.getElementById('chk-drm').addEventListener('change', (e) => {
 
 document.getElementById('chk-autoplay').addEventListener('change', (e) => {
   setSetting('autoplay_enabled', e.target.checked);
+});
+
+document.getElementById('chk-little-links').addEventListener('change', (e) => {
+  setSetting('open_links_in_little_window', e.target.checked);
 });
 
 document.getElementById('chk-extensions').addEventListener('change', (e) => {

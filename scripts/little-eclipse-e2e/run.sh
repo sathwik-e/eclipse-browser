@@ -6,7 +6,8 @@
 #   scripts/little-eclipse-e2e/run.sh [scenario ...]
 #
 # HARNESS_PORT (default 8831) and HARNESS_PORT+1 must be free. Set
-# GUARD_MALLOC=1 to run the harness under libgmalloc.
+# GUARD_MALLOC=1 to run the harness under libgmalloc, VERBOSE=1 to print what
+# the harness printed.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -69,12 +70,14 @@ run() {
 scenarios=("$@")
 if [[ ${#scenarios[@]} -eq 0 ]]; then
     scenarios=(legit popupkw widthonly notoolbar plainopen stopwrite nocontent blankthen eclipse sameorigin nogesture five nested
-               openernav sheet print2 printclose refocus focus resize menu linktab)
+               openernav sheet print2 printclose refocus focus resize menu linktab openin openkey standalone
+               address addreclipse)
 fi
 
 for scenario in "${scenarios[@]}"; do
     echo "$scenario"
     out="$(run "$scenario")"
+    if [[ "${VERBOSE:-}" == 1 ]]; then sed 's/^/    | /' <<<"$out"; fi
     if grep -q "NOT KEY" <<<"$out"; then
         # Synthetic clicks only reach WebKit in the active app's key window.
         echo "  FAIL: the harness could not become the active app (is the screen locked?)"
@@ -83,23 +86,24 @@ for scenario in "${scenarios[@]}"; do
     fi
     case "$scenario" in
     legit)
-        check "$out" "a committed page shows its host" "subtitle=\"Not Secure — $victim\"" ;;
+        check "$out" "the top bar shows the committed page's host" "host=\"Not Secure — $victim\"" ;;
     popupkw | notoolbar)
         # Popup windows by WebKit's reading of the features, with or without
         # a full size, open as Little Eclipse windows.
         check "$out" "a popup window opens as a Little Eclipse window" "RESULT .* little=1 fallbacks=0"
-        check "$out" "it shows the popup's host" "subtitle=\"Not Secure — $victim\"" ;;
+        check "$out" "it shows the popup's host" "host=\"Not Secure — $victim\"" ;;
     widthonly)
         check "$out" "a popup that gave only a width keeps it" "RESULT .* little=1 fallbacks=0"
-        check "$out" "and gets the default height" "WINDOW .* frame=[0-9-]+,[0-9-]+,520x672" ;;
+        # The window is the page area plus the top bar (36) and margins (6).
+        check "$out" "and gets the default height" "WINDOW .* frame=[0-9-]+,[0-9-]+,532x682" ;;
     plainopen)
         check "$out" "window.open(url, name) opens as a tab" "RESULT .* little=0 fallbacks=1" ;;
     stopwrite | nocontent | blankthen)
         # The opener wrote a fake page into the popup's initial document
         # after its load to the other site was stopped / got a 204.
         check "$out" "the opener wrote into the popup" "MSG opener:wrote:Sign in"
-        check "$out" "the subtitle shows the document's real host" \
-            "WINDOW title=\"Sign in\" subtitle=\"Not Secure — $opener\"" "$victim" ;;
+        check "$out" "the top bar shows the document's real host" \
+            "WINDOW title=\"Sign in\" host=\"Not Secure — $opener\"" "$victim" ;;
     eclipse)
         check "$out" "eclipse:// subresources fail in the popup" "MSG popup:img=error&fetch=err little=1"
         check "$out" "the scheme handler never sees the popup's view" "unsafe_scheme=0" "UNSAFE" ;;
@@ -161,6 +165,44 @@ for scenario in "${scenarios[@]}"; do
         check "$out" "the popup stayed key" "KEY little"
         check "$out" "a clicked link opens a tab" "ACTION little_window_new_tab:http://$victim/pop.html\?terms"
         check "$out" "and brings the browser window forward" "KEY tab" ;;
+    openin)
+        check "$out" "the bar shows the popup's host" "HOST \"Not Secure — $victim\""
+        check "$out" "Open in Eclipse opens the page as a tab" "ACTION little_window_new_tab:http://$victim/pop.html$"
+        check "$out" "and closes the window" "RESULT .* little=0 "
+        check "$out" "and brings the browser window forward" "KEY tab" ;;
+    openkey)
+        check "$out" "the popup is key" "KEY little"
+        check "$out" "⌘O opens the page as a tab" "ACTION little_window_new_tab:http://$victim/pop.html$"
+        check "$out" "and closes the window" "RESULT .* little=0 "
+        check "$out" "⌘O is not sent to the browser" "KEY tab" "ACTION open_in_eclipse" ;;
+    standalone)
+        check "$out" "a standalone window opens" "STANDALONE ok=1"
+        check "$out" "but never for eclipse://" "STANDALONE-ECLIPSE ok=0"
+        check "$out" "or file:" "STANDALONE-FILE ok=0"
+        check "$out" "it is key" "KEY little"
+        check "$out" "it has no opener and the given user agent" "PAGE null EclipseHarness/1.0"
+        check "$out" "it stays open when the tab goes away, and counts for no tab" "RESULT .* little=1 .*count=0"
+        check "$out" "it shows the page's host" \
+            "WINDOW title=\"Popup page\" host=\"Not Secure — $victim\" url=http://$victim/pop.html " ;;
+    address)
+        check "$out" "⌥⌘N asks for a new Little Eclipse window" "ACTION new_little_window"
+        check "$out" "it opens, key" "NEWLITTLE ok=1"
+        check "$out" "with the empty address field focused" "EDITING new field=1 focused=1 host_hidden=1 text=\"\""
+        check "$out" "Return hands the typed address to the browser" \
+            "ACTION little_window_address:[0-9]+:http://$victim/pop.html\?typed"
+        check "$out" "which loads it" "LOAD http://$victim/pop.html\?typed ok=1"
+        check "$out" "the host label is back after loading" "EDITING loaded field=0 focused=0 host_hidden=0"
+        check "$out" "clicking the host shows the full address" \
+            "EDITING clicked field=1 focused=1 host_hidden=1 text=\"http://$victim/pop.html\?typed\""
+        check "$out" "Escape cancels editing" "EDITING escaped field=0 focused=0 host_hidden=0" \
+            "little_window_address:[0-9]+:http://localhost:1/"
+        check "$out" "the window shows the typed page" \
+            "WINDOW .* host=\"Not Secure — $victim\" url=http://$victim/pop.html\?typed " ;;
+    addreclipse)
+        check "$out" "eclipse:// typed in the address field is refused" "LOAD eclipse://localhost/settings ok=0"
+        check "$out" "so is javascript:" "LOAD javascript:alert\(1\) ok=0"
+        check "$out" "the window stays on its page" \
+            "WINDOW .* host=\"Not Secure — $victim\" url=http://$victim/pop.html " "url=(eclipse|javascript)" ;;
     *)
         echo "  unknown scenario"; failures=$((failures + 1)) ;;
     esac

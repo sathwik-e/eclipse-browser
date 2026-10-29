@@ -31,6 +31,11 @@ var S = {
   resize: function () { var w = window.open('/rsz.html', 'x', 'width=480,height=600'); report('outer=' + w.outerWidth + 'x' + w.outerHeight); },
   menu: function () { window.open('/pop.html', 'x', 'width=480,height=600'); },
   linktab: function () { window.open('/lnk.html', 'x', 'width=480,height=600'); },
+  // Open in Eclipse from the bar's button / ⌘O.
+  openin: function () { window.open(V + '/pop.html', 'x', 'width=480,height=600'); },
+  openkey: function () { window.open(V + '/pop.html', 'x', 'width=480,height=600'); },
+  // Standalone windows are opened by the harness itself (no opener).
+  standalone: function () {}, address: function () {}, addreclipse: function () {},
   // The second click reopens the popup by name / focuses it.
   refocus: function () { clicks++; window.open(V + '/pop.html?n=' + clicks, 'x', 'width=480,height=600'); },
   focus: function () { clicks++; if (clicks === 1) popup = window.open(V + '/pop.html', 'x', 'width=480,height=600'); else { popup.focus(); report('focused'); } },

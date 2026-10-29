@@ -470,6 +470,33 @@ impl BrowserApp {
         }
     }
 
+    /// ⌥⌘N: the New Little Eclipse Window bar (menu.m), suggesting open tabs
+    /// and favourites. Without it, a blank standalone window with its address
+    /// field focused, and past the window limit a new tab.
+    fn show_little_command_bar(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            let tabs: Vec<CommandBarTab> = self
+                .tabs
+                .iter()
+                .map(|tab| CommandBarTab {
+                    title: &tab.title,
+                    url: &tab.url,
+                    current_space: tab.workspace == self.current_workspace,
+                    last_active: tab.last_active,
+                })
+                .collect();
+            let suggestions = little_command_bar_suggestions(&tabs, &self.config.favorites);
+            let accent = parse_hex_rgb(&self.config.accent_color).unwrap_or([0x5E, 0x9E, 0xFF]);
+            if crate::macos_menu::show_little_command_bar(&suggestions, accent) {
+                return;
+            }
+        }
+        if !self.open_standalone_little_window("", true) {
+            self.create_tab("eclipse://newtab", true);
+        }
+    }
+
     fn save_config_now(&mut self) {
         self.config_save_due = None;
         self.config.save();
@@ -2106,10 +2133,10 @@ impl BrowserApp {
     }
 
     /// window.open / target=_blank from a page that did not open a Little
-    /// Eclipse window (`sized`: the page asked for a popup window). Pages may
-    /// not open internal eclipse:// pages.
-    pub fn handle_new_window(&mut self, url: String, sized: bool) {
-        match new_window_fallback(&url, sized) {
+    /// Eclipse window (`popup`: the page asked for a window of its own).
+    /// Pages may not open internal eclipse:// pages.
+    pub fn handle_new_window(&mut self, url: String, popup: bool) {
+        match new_window_fallback(&url, popup) {
             NewWindowFallback::NewTabPage => {
                 self.create_tab("eclipse://newtab", true);
             }
@@ -2385,8 +2412,8 @@ impl BrowserApp {
 
     /// Actions from the native menu (menu.m owns every browser shortcut).
     pub fn handle_menu_action(&mut self, action: &str) {
-        // An unsized window.open or target=_blank link inside a Little Eclipse
-        // window (menu.m) opens as a tab, like one from a tab. The URL comes
+        // A target=_blank link or noopener window.open inside a Little
+        // Eclipse window (menu.m) opens as a tab, like one from a tab. The URL comes
         // from a web page: only http(s) is opened.
         // Also "Open in Eclipse" (⌘O) in a Little Eclipse window.
         if let Some(url) = action.strip_prefix("little_window_new_tab:") {
@@ -2409,6 +2436,25 @@ impl BrowserApp {
             }
             return;
         }
+        // Return in the New Little Eclipse Window bar (⌥⌘N): a suggestion's
+        // address or what the user typed, resolved like the address field
+        // (never eclipse://), opens in a new standalone Little Eclipse
+        // window, or a tab past the window limit.
+        if let Some(text) = action.strip_prefix("little_command_bar_open:") {
+            match little_window_url_from_input(text, &self.config) {
+                Some(url) => {
+                    if !self.open_standalone_little_window(&url, false) {
+                        self.open_external_link_in_tab(&url);
+                    }
+                }
+                None => {
+                    if self.perf {
+                        eprintln!("[little] the command bar's text is not a web page");
+                    }
+                }
+            }
+            return;
+        }
         if let Some(index) = action.strip_prefix("select_tab_index:") {
             if let Ok(index) = index.parse::<usize>() {
                 self.select_tab_by_workspace_index(index.min(7));
@@ -2420,9 +2466,7 @@ impl BrowserApp {
                 self.create_tab("eclipse://newtab", true);
             }
             "new_little_window" => {
-                if !self.open_standalone_little_window("", true) {
-                    self.create_tab("eclipse://newtab", true);
-                }
+                self.show_little_command_bar();
             }
             // Handled by menu.m while a Little Eclipse window is in front
             // (the menu item is disabled otherwise).
@@ -3202,13 +3246,12 @@ enum NewWindowFallback {
     Ignore,
 }
 
-fn new_window_fallback(url: &str, sized: bool) -> NewWindowFallback {
+fn new_window_fallback(url: &str, popup: bool) -> NewWindowFallback {
     if url.is_empty() || url == "about:blank" {
-        // A blank popup with a size (no user gesture, or over the popup
-        // limit) only makes sense to the script that opened it, and that
-        // script got null instead of a window: an empty tab would just be
-        // left behind.
-        return if sized {
+        // A blank popup (no user gesture, or over the popup limit) only
+        // makes sense to the script that opened it, and that script got null
+        // instead of a window: an empty tab would just be left behind.
+        return if popup {
             NewWindowFallback::Blocked
         } else {
             NewWindowFallback::NewTabPage
@@ -3611,6 +3654,68 @@ pub fn little_window_url_from_input(input: &str, config: &BrowserConfig) -> Opti
     web.then_some(url)
 }
 
+/// An open tab as the New Little Eclipse Window bar sees it.
+pub(crate) struct CommandBarTab<'a> {
+    pub title: &'a str,
+    pub url: &'a str,
+    /// In the Space on screen.
+    pub current_space: bool,
+    pub last_active: Instant,
+}
+
+const COMMAND_BAR_SUGGESTIONS: usize = 64;
+
+/// What the New Little Eclipse Window bar (⌥⌘N) suggests, as (title, URL):
+/// the current Space's tabs, most recently used first, then the favourites,
+/// then other Spaces' tabs. Web pages only, each address once, titles
+/// cleaned of control characters (the URL's host stands in for a missing
+/// one).
+pub(crate) fn little_command_bar_suggestions(
+    tabs: &[CommandBarTab],
+    favorites: &[FavoriteShortcut],
+) -> Vec<(String, String)> {
+    let mut ordered: Vec<&CommandBarTab> = tabs.iter().collect();
+    ordered.sort_by_key(|tab| (!tab.current_space, std::cmp::Reverse(tab.last_active)));
+    let (current, other): (Vec<&CommandBarTab>, Vec<&CommandBarTab>) =
+        ordered.into_iter().partition(|tab| tab.current_space);
+    let candidates = current
+        .iter()
+        .map(|tab| (tab.title, tab.url))
+        .chain(favorites.iter().map(|favorite| (favorite.title.as_str(), favorite.url.as_str())))
+        .chain(other.iter().map(|tab| (tab.title, tab.url)));
+    let mut seen = HashSet::new();
+    let mut suggestions = Vec::new();
+    for (title, url) in candidates {
+        let Ok(parsed) = url::Url::parse(url.trim()) else {
+            continue;
+        };
+        if !matches!(parsed.scheme(), "http" | "https") {
+            continue;
+        }
+        let Some(host) = parsed.host_str().filter(|host| !host.is_empty()).map(str::to_string) else {
+            continue;
+        };
+        let url = String::from(parsed);
+        if !seen.insert(url.clone()) {
+            continue;
+        }
+        let title = title
+            .chars()
+            .take(200)
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let title = if title.is_empty() { host } else { title };
+        suggestions.push((title, url));
+        if suggestions.len() == COMMAND_BAR_SUGGESTIONS {
+            break;
+        }
+    }
+    suggestions
+}
+
 /// Where a link another app asked Eclipse to open goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExternalLinkRoute {
@@ -3724,14 +3829,15 @@ mod tests {
     }
 
     #[test]
-    fn popups_that_open_no_window_fall_back_to_tabs_unless_blank_and_sized() {
+    fn popups_that_open_no_window_fall_back_to_tabs_unless_blank() {
         use NewWindowFallback::*;
-        // A sized blank popup the page got null for leaves no empty tab.
+        // A blank popup the page got null for (a sized one, or
+        // window.open('', name) without a gesture) leaves no empty tab.
         assert_eq!(new_window_fallback("", true), Blocked);
         assert_eq!(new_window_fallback("about:blank", true), Blocked);
-        // Sized web popups (no gesture, over the limit) still open as tabs.
+        // Web popups (no gesture, over the limit) still open as tabs.
         assert_eq!(new_window_fallback("https://accounts.example/", true), Tab);
-        // Unsized ones are unchanged.
+        // Links and noopener windows are unchanged.
         assert_eq!(new_window_fallback("", false), NewTabPage);
         assert_eq!(new_window_fallback("about:blank", false), NewTabPage);
         assert_eq!(new_window_fallback("http://a.example/", false), Tab);
@@ -3786,6 +3892,52 @@ mod tests {
         assert_eq!(url(""), None);
         assert_eq!(url("   "), None);
         assert_eq!(url(&"a".repeat(9000)), None);
+    }
+
+    #[test]
+    fn the_little_window_bar_suggests_tabs_then_favourites() {
+        let now = Instant::now();
+        let earlier = now - Duration::from_secs(60);
+        let tab = |title, url, current_space, last_active| CommandBarTab {
+            title,
+            url,
+            current_space,
+            last_active,
+        };
+        let tabs = [
+            tab("Old", "https://old.example/", true, earlier),
+            tab("Elsewhere", "https://other-space.example/", false, now),
+            tab("New Tab", "eclipse://newtab", true, now),
+            tab("Recent\n\tpage", "https://recent.example/a?b=1", true, now),
+            tab("", "http://untitled.example/", true, earlier),
+            tab("Dup", "https://old.example/", false, now),
+            tab("File", "file:///etc/passwd", true, now),
+        ];
+        let favorite = |title: &str, url: &str| FavoriteShortcut {
+            title: title.into(),
+            url: url.into(),
+            icon: String::new(),
+        };
+        let favorites = [
+            favorite("Fav", "https://fav.example/"),
+            favorite("Old again", "https://old.example/"),
+            favorite("Script", "javascript:alert(1)"),
+        ];
+        let suggestions = little_command_bar_suggestions(&tabs, &favorites);
+        let urls: Vec<&str> = suggestions.iter().map(|(_, url)| url.as_str()).collect();
+        assert_eq!(
+            urls,
+            [
+                "https://recent.example/a?b=1",
+                "https://old.example/",
+                "http://untitled.example/",
+                "https://fav.example/",
+                "https://other-space.example/",
+            ]
+        );
+        assert_eq!(suggestions[0].0, "Recent page");
+        assert_eq!(suggestions[2].0, "untitled.example");
+        assert!(little_command_bar_suggestions(&[], &[]).is_empty());
     }
 
     #[test]

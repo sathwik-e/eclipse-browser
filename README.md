@@ -40,17 +40,27 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     apps in Little Eclipse") to get a new tab instead.
   - **Open in Eclipse (⌘O)**, or the button on the right of the bar, moves the
     page into the browser window as a new tab and closes the little window.
-  - **New Little Eclipse Window (⌥⌘N)** opens an empty one with the address
-    field ready: type an address or a search.
-  - The bar always shows the real host of the page on screen, with a lock or
-    "Not Secure" for plain http; the page has no say in it. Click it (or press
-    ⌘L) to see and edit the full address; Escape puts the host back. Only web
-    pages load there, never internal `eclipse://` pages.
-  - **Sign-in popups** (window.open with popup features, opened with a click)
-    get one too, so they keep `window.opener` and can hand their result back
-    to the page. Shortcuts such as Reload, Print and Zoom act on the little
-    window while it is in front. Ordinary links that open new windows, and
-    popups a page opens on its own, still open as tabs.
+  - **New Little Eclipse Window (⌥⌘N)** shows a floating "Search or Enter
+    URL…" bar at the top right of the screen, as in Arc, also while the
+    browser window is hidden. It suggests your open tabs and favourites;
+    type to filter or to enter an address or search, ↑/↓ to choose and
+    Return to open it in a new Little Eclipse window. Escape, the × or a
+    click elsewhere closes the bar.
+  - The top bar looks like Arc's: faint diagonal stripes over the Space's
+    colour, an "i" button for site information (whether the connection is
+    secure, the host, Copy Link, Open in Eclipse), and the full address of
+    the page on screen in a small monospaced font with the host brightest.
+    When space runs short the path is shortened first and the host last, and
+    plain http always shows "Not Secure". The page has no say in what the bar
+    shows. Copy Link sits on the right, next to Open in Eclipse. Click the
+    address (or press ⌘L) to edit it; Escape puts it back. Only web pages
+    load there, never internal `eclipse://` pages.
+  - **Popups** get one too, so they keep `window.opener` and can hand their
+    result back to the page: sign-in popups (window.open with popup
+    features) and, as in Arc, any `window.open(url, name)` a click opens.
+    Shortcuts such as Reload, Print and Zoom act on the little window while
+    it is in front. Links with `target=_blank`, `noopener` windows and
+    popups a page opens on its own still open as tabs.
   - They share the tabs' cookies and sign-ins, user agent and ad blocking.
   - Files download as they would from a tab, into `~/Downloads` and the
     Downloads list. A window opened only for a file (a link to a `.zip` from
@@ -146,7 +156,7 @@ cargo clippy --all-targets -- -D warnings
 | Shortcut | Action |
 | :--- | :--- |
 | ⌘T / ⇧⌘T | New tab / reopen closed tab |
-| ⌥⌘N | New Little Eclipse window |
+| ⌥⌘N | New Little Eclipse window (search or enter an address) |
 | ⌘O | Open in Eclipse (move the Little Eclipse window in front into a tab) |
 | ⌘W / ⇧⌘W | Close tab / close window |
 | ⌘K | Command bar |
@@ -206,16 +216,19 @@ ECLIPSE_SMOKE_LITTLE_URL=https://example.com   # open a URL as a link from anoth
 ```
 
 `scripts/little-eclipse-e2e/run.sh` checks Little Eclipse windows end to end
-(user gesture, limits, the host on the top bar for loads that never commit,
-popup messages, `eclipse://` requests and opener navigation, shortcuts with
-and without a dialog up, focus, resizing, links that open tabs, Open in
-Eclipse, standalone windows without an opener, the address field,
-including its refusal of `eclipse://`, "Not Secure" on long http hosts, and
-downloads from standalone windows, popups and links). It builds
+(user gesture, which window.open calls get a window and which links and
+`noopener` windows get tabs, limits, the address on the top bar for loads
+that never commit, popup messages, `eclipse://` requests and opener
+navigation, shortcuts with and without a dialog up, focus, resizing, links
+that open tabs, Open in Eclipse, Copy Link and the site-information popover,
+standalone windows without an opener, the address field, including its
+refusal of `eclipse://`, "Not Secure" and the host kept on long addresses,
+the ⌥⌘N bar, and downloads from standalone windows, popups and links). It builds
 `src/menu.m` into a small harness, serves local test pages on ports 8831 and
 8832, and opens windows for about two minutes; the harness makes itself the
 active app, so leave the keyboard alone while it runs. `GUARD_MALLOC=1` runs
-it under `libgmalloc`.
+it under `libgmalloc`; `SNAPSHOT_DIR=<dir>` saves a picture of each window at
+the end of a scenario (`HARNESS_LIGHT=1` for the light theme).
 
 ## Known limitations
 

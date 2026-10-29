@@ -27,6 +27,8 @@ static NSWindow *eclipse_browser_window(void) {
 static BOOL eclipse_is_little_window(NSWindow *window);
 static BOOL eclipse_little_window_perform_action(NSWindow *window, NSString *action);
 static void eclipse_end_all_sheets(NSWindow *window);
+static BOOL eclipse_is_command_bar_window(NSWindow *window);
+static NSWindow *eclipse_command_bar_dismiss_for_command(void);
 
 /* The window a shortcut is meant for: the key window, or the window a sheet
    (a JavaScript dialog, a print or open panel) is attached to while that
@@ -52,6 +54,14 @@ static NSWindow *eclipse_shortcut_window(void) {
 
     NSWindow *key = eclipse_shortcut_window();
     NSWindow *browser = gBrowserWindow;
+
+    // The ⌥⌘N bar in front: ⌥⌘N again refreshes it; any other command closes
+    // it and is for the window that was in front before it (⌘W only closes
+    // the bar).
+    if (eclipse_is_command_bar_window(key) && ![action isEqualToString:@"new_little_window"]) {
+        key = eclipse_command_bar_dismiss_for_command();
+        if ([action isEqualToString:@"close_tab"] || [action isEqualToString:@"close_window"]) return;
+    }
 
     // Page commands act on a Little Eclipse window when it is key (sign-in
     // popups, see below), never on the hidden tab behind it.
@@ -1161,8 +1171,7 @@ static BOOL eclipse_action_user_initiated(WKNavigationAction *action) {
 /* Whether window.open asked for a popup window rather than a tab, by the
    HTML rule browsers use (WebKit's -[WKWindowFeatures _wantsPopup]): a
    "popup" feature, a size or position, or turned-off toolbars/location/menu
-   bar. window.open(url) and window.open(url, name) with no features, and
-   target=_blank links, are tabs. */
+   bar. */
 static BOOL eclipse_features_want_popup(WKWindowFeatures *features) {
     if (features == nil) return NO;
     SEL sel = NSSelectorFromString(@"_wantsPopup");
@@ -1170,6 +1179,23 @@ static BOOL eclipse_features_want_popup(WKWindowFeatures *features) {
     // Older WebKit: any size or position, or toolbars explicitly off.
     if (features.width != nil || features.height != nil || features.x != nil || features.y != nil) return YES;
     return features.toolbarsVisibility != nil && !features.toolbarsVisibility.boolValue;
+}
+
+/* Whether a new window opens as a Little Eclipse window (which keeps
+   window.opener) rather than a tab, as in Arc: a window.open that asked for a
+   popup window (above), and also one with no features at all
+   (window.open(url, name)) as long as the new page gets an opener. WebKit
+   keeps the opener only for a page in a web view of its own, so such a
+   window cannot be a tab. A link the user clicked (target=_blank, which
+   WebKit opens without an opener anyway), a form, and window.open(url,
+   '_blank', 'noopener') are tabs. -[WKNavigationAction _hasOpener] is SPI
+   (present since macOS 10.15); without it only popup features count. */
+static BOOL eclipse_request_wants_popup(WKNavigationAction *action, WKWindowFeatures *features) {
+    if (eclipse_features_want_popup(features)) return YES;
+    if (action == nil || action.navigationType != WKNavigationTypeOther) return NO;
+    SEL sel = NSSelectorFromString(@"_hasOpener");
+    if (![action respondsToSelector:sel]) return NO;
+    return ((BOOL (*)(id, SEL))objc_msgSend)(action, sel);
 }
 
 typedef WKWebView *(*EclipseCreateWebViewIMP)(id, SEL, WKWebView *, WKWebViewConfiguration *,
@@ -1185,7 +1211,7 @@ static WKWebView *eclipse_create_web_view(id self, SEL _cmd, WKWebView *webView,
     gPopupRequestFeatures = features;
     gPopupRequestContext = ECLIPSE_POPUP_REQUEST |
                            (eclipse_action_user_initiated(action) ? ECLIPSE_POPUP_USER_INITIATED : 0) |
-                           (eclipse_features_want_popup(features) ? ECLIPSE_POPUP_WANTS_POPUP : 0);
+                           (eclipse_request_wants_popup(action, features) ? ECLIPSE_POPUP_WANTS_POPUP : 0);
     WKWebView *created = nil;
     @try {
         created = ((EclipseCreateWebViewIMP)original)(self, _cmd, webView, configuration, action, features);
@@ -1603,16 +1629,24 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
    limit only and never close because of an opener. A popup a standalone
    window opens follows that window as its root opener.
 
-   The top bar shows a security indicator and the host of the document on
-   screen, derived here from WebKit's URL and never from page content: the
-   host of a load only once it commits, never of one still pending. Clicking
-   it shows the full address for editing; Return hands what was typed to Rust,
-   which resolves it to a web address or a search and loads it through
-   eclipse_little_window_load (http(s) only). "Open in Eclipse" (⌘O) moves the
-   page into a new tab of the browser window. A Little Eclipse window only ever
-   loads web content: internal eclipse:// pages and other schemes are refused
-   by its navigation delegate. The window title is the page title, for Mission
-   Control and the Window menu; the host on the bar is never page-controlled. */
+   The top bar, like Arc's, has a faint diagonal-stripe texture over the
+   Space's colour; on its left a site-information button (a popover with the
+   connection's security, the host, Copy Link and Open in Eclipse) and the
+   full address of the document on screen in a small monospaced font, the
+   host brighter than the rest; on its right Copy Link and Open in Eclipse.
+   The address is derived here from WebKit's URL and never from page content:
+   that of a load only once it commits, never of one still pending. When it
+   does not fit, the path is shortened first and the host last, and "Not
+   Secure" for anything but https always stays. Clicking the address shows it
+   for editing; Return hands what was typed to Rust, which resolves it to a
+   web address or a search and loads it through eclipse_little_window_load
+   (http(s) only). "Open in Eclipse" (⌘O) moves the page into a new tab of
+   the browser window. A Little Eclipse window only ever loads web content:
+   internal eclipse:// pages and other schemes are refused by its navigation
+   delegate. The window title is the page title, for Mission Control and the
+   Window menu; the address on the bar is never page-controlled. */
+
+@class EclipseLittleAddress;
 
 @interface EclipseLittleWindow : NSObject <NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, NSTextFieldDelegate>
 @property(nonatomic, strong) NSWindow *window;
@@ -1632,21 +1666,38 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
 /* Identifies the window to Rust (address-field requests). Never reused. */
 @property(nonatomic) uint64_t serial;
 @property(nonatomic, strong) NSView *container;
+/* The faint stripes behind the bar's controls. */
+@property(nonatomic, strong) NSView *texture;
+/* The site-information button left of the address. */
+@property(nonatomic, strong) NSButton *infoButton;
+/* The address (its identifier is still "eclipse-little-host"). */
 @property(nonatomic, strong) NSButton *hostButton;
-/* What the host button stands for (eclipse_little_host_label); its title is
-   this, shortened to fit (see -fitHostLabel). */
-@property(nonatomic, copy) NSString *hostLabel;
+/* What the address button stands for (eclipse_little_address); its title
+   is this, shortened to fit (see -fitHostLabel). */
+@property(nonatomic, strong) EclipseLittleAddress *address;
 @property(nonatomic, strong) NSTextField *addressField;
 /* The rounded background the address field sits on while editing. */
 @property(nonatomic, strong) NSView *addressBox;
+@property(nonatomic, strong) NSButton *linkButton;
+/* "Copied", shown for a moment after Copy Link. */
+@property(nonatomic, strong) NSTextField *copiedLabel;
+@property(nonatomic) NSUInteger copiedGeneration;
+@property(nonatomic, strong) NSView *separator;
 @property(nonatomic, strong) NSButton *openButton;
+@property(nonatomic, strong) NSPopover *infoPopover;
 @property(nonatomic) BOOL editing;
 - (void)layoutChrome;
 - (void)applyTheme;
 - (void)fitHostLabel;
 - (void)beginEditingAddress;
 - (void)openInEclipse;
+- (void)copyLink;
 - (void)downloadStarted;
+@end
+
+/* The bar's diagonal stripes, drawn faintly in the frame's own contrast
+   colour. Never takes a click (the bar moves the window). */
+@interface EclipseLittleBarTexture : NSView
 @end
 
 /* The window's content view: the theme-coloured frame that holds the bar's
@@ -1665,6 +1716,34 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
 - (void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
     [self.owner layoutChrome];
+}
+@end
+
+static BOOL gLittleFrameDark;
+
+@implementation EclipseLittleBarTexture
+- (BOOL)isFlipped {
+    return YES;
+}
+- (NSView *)hitTest:(NSPoint)point {
+    (void)point;
+    return nil;
+}
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    NSRect bounds = self.bounds;
+    NSColor *stripe = gLittleFrameDark ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.035]
+                                       : [NSColor colorWithCalibratedWhite:0.0 alpha:0.035];
+    [stripe setStroke];
+    NSBezierPath *path = [NSBezierPath bezierPath];
+    path.lineWidth = 3.0;
+    CGFloat height = NSHeight(bounds), spacing = 9.0;
+    // Lines at 45°, from the bottom edge up to the right.
+    for (CGFloat x = -height; x < NSWidth(bounds) + height; x += spacing) {
+        [path moveToPoint:NSMakePoint(x, height)];
+        [path lineToPoint:NSMakePoint(x + height, 0.0)];
+    }
+    [path stroke];
 }
 @end
 
@@ -1736,97 +1815,247 @@ static BOOL eclipse_same_web_origin(NSURL *a, NSURL *b) {
     return (pa == nil && pb == nil) || (pa != nil && pb != nil && [pa isEqualToNumber:pb]);
 }
 
-/* What the top bar shows for the committed document. A long host keeps its
-   end (the registrable domain) and loses its start. */
-static NSString *eclipse_little_host_label(NSURL *url) {
-    if (url == nil) return @"about:blank";
+/* What the top bar shows for the committed document, in parts: the full
+   address as Arc shows it (scheme, host, path and query; never the user
+   name or password a URL may carry, nor the fragment), with "Not Secure — "
+   in front of anything that is not https. A long host keeps its end (the
+   registrable domain) and loses its start. Only web addresses show more
+   than their scheme: a data: or file: URL never shows its content. */
+typedef NS_ENUM(NSInteger, EclipseLittleSecurity) {
+    EclipseLittleSecurityNone,  /* no page (about:) */
+    EclipseLittleSecuritySecure,
+    EclipseLittleSecurityNotSecure,
+};
+
+static NSString *const kEclipseLittleNotSecurePrefix = @"Not Secure — ";
+static const NSUInteger kEclipseLittleMaxRestLength = 1024;
+
+@interface EclipseLittleAddress : NSObject
+@property(nonatomic) EclipseLittleSecurity security;
+/* kEclipseLittleNotSecurePrefix or empty. */
+@property(nonatomic, copy) NSString *prefix;
+/* "https://", "http://", "blob:https://" or empty. */
+@property(nonatomic, copy) NSString *scheme;
+/* The host and port (or "about:blank", "data:", ...): never empty. */
+@property(nonatomic, copy) NSString *host;
+/* The path and query, or empty. */
+@property(nonatomic, copy) NSString *rest;
+/* prefix + scheme + host + rest. */
+@property(nonatomic, readonly) NSString *plain;
+@end
+
+@implementation EclipseLittleAddress
+- (instancetype)init {
+    if ((self = [super init])) {
+        _prefix = @"";
+        _scheme = @"";
+        _host = @"about:blank";
+        _rest = @"";
+    }
+    return self;
+}
+- (NSString *)plain {
+    return [NSString stringWithFormat:@"%@%@%@%@", self.prefix, self.scheme, self.host, self.rest];
+}
+- (BOOL)isEqual:(id)other {
+    if (![other isKindOfClass:[EclipseLittleAddress class]]) return NO;
+    EclipseLittleAddress *o = other;
+    return o.security == self.security && [o.plain isEqualToString:self.plain] && [o.host isEqualToString:self.host];
+}
+- (NSUInteger)hash {
+    return self.plain.hash;
+}
+@end
+
+static EclipseLittleAddress *eclipse_little_address(NSURL *url) {
+    EclipseLittleAddress *address = [[EclipseLittleAddress alloc] init];
     NSString *scheme = url.scheme.lowercaseString ?: @"";
-    if (scheme.length == 0) return @"about:blank";
+    if (url == nil || scheme.length == 0) return address;
     if ([scheme isEqualToString:@"about"]) {
         // Never the query or fragment: the page controls those.
         NSString *rest = url.resourceSpecifier ?: @"";
         NSRange cut = [rest rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"?#"]];
         if (cut.location != NSNotFound) rest = [rest substringToIndex:cut.location];
-        return [@"about:" stringByAppendingString:(rest.length > 0 ? rest : @"blank")];
+        if (rest.length > 64) rest = [[rest substringToIndex:64] stringByAppendingString:@"…"];
+        address.host = [@"about:" stringByAppendingString:(rest.length > 0 ? rest : @"blank")];
+        return address;
     }
+    address.security = EclipseLittleSecurityNotSecure;
+    address.prefix = kEclipseLittleNotSecurePrefix;
     if ([scheme isEqualToString:@"blob"]) {
         NSURL *inner = [NSURL URLWithString:url.resourceSpecifier ?: @""];
-        if (inner != nil && eclipse_is_web_scheme(inner.scheme)) return eclipse_little_host_label(inner);
-        return @"Not Secure — blob:";
-    }
-    if (!eclipse_is_web_scheme(scheme)) {
-        return [NSString stringWithFormat:@"Not Secure — %@:", scheme];
+        if (inner != nil && eclipse_is_web_scheme(inner.scheme) && inner.host.length > 0) {
+            EclipseLittleAddress *innerAddress = eclipse_little_address(inner);
+            innerAddress.scheme = [@"blob:" stringByAppendingString:innerAddress.scheme];
+            return innerAddress;
+        }
+        address.host = @"blob:";
+        return address;
     }
     NSString *host = url.host.lowercaseString ?: @"";
-    if (host.length == 0) return [NSString stringWithFormat:@"Not Secure — %@:", scheme];
+    if (!eclipse_is_web_scheme(scheme) || host.length == 0) {
+        address.host = [scheme stringByAppendingString:@":"];
+        return address;
+    }
+    if ([host containsString:@":"]) host = [NSString stringWithFormat:@"[%@]", host];
     if (url.port != nil) host = [NSString stringWithFormat:@"%@:%@", host, url.port];
     if (host.length > kEclipseLittleMaxHostLength) {
         host = [@"…" stringByAppendingString:[host substringFromIndex:host.length - kEclipseLittleMaxHostLength]];
     }
-    if ([scheme isEqualToString:@"https"]) return host;
-    return [NSString stringWithFormat:@"Not Secure — %@", host];
+    // Percent-encoded, so the path shows no look-alike or invisible characters.
+    NSURLComponents *components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:YES];
+    NSString *rest = components.percentEncodedPath ?: @"";
+    if (components.percentEncodedQuery != nil) rest = [NSString stringWithFormat:@"%@?%@", rest, components.percentEncodedQuery];
+    if (rest.length > kEclipseLittleMaxRestLength) {
+        rest = [[rest substringToIndex:kEclipseLittleMaxRestLength] stringByAppendingString:@"…"];
+    }
+    address.host = host;
+    address.scheme = [scheme stringByAppendingString:@"://"];
+    address.rest = rest;
+    if ([scheme isEqualToString:@"https"]) {
+        address.security = EclipseLittleSecuritySecure;
+        address.prefix = @"";
+    }
+    return address;
 }
 
-/* The security indicator next to the host label, chosen from that label
-   (and so from the committed URL alone). */
-static NSImage *eclipse_little_security_image(NSString *label) {
+/* The security state and host alone ("Not Secure — example.com"), for the
+   window title of a page without one and for logs. */
+static NSString *eclipse_little_host_label(NSURL *url) {
+    EclipseLittleAddress *address = eclipse_little_address(url);
+    return [address.prefix stringByAppendingString:address.host];
+}
+
+/* The site-information button's symbol for a security state. */
+static NSImage *eclipse_little_security_image(EclipseLittleSecurity security) {
     if (@available(macOS 11.0, *)) {
-        NSString *name = @"lock.fill";
-        NSString *description = @"Secure connection";
-        if ([label hasPrefix:@"Not Secure"]) {
-            name = @"exclamationmark.triangle.fill";
-            description = @"Not secure";
-        } else if ([label hasPrefix:@"about:"]) {
-            name = @"globe";
-            description = @"No page";
+        NSArray<NSString *> *names = @[ @"info", @"info.circle" ];
+        NSString *description = @"Site information";
+        if (security == EclipseLittleSecurityNotSecure) {
+            names = @[ @"exclamationmark.triangle.fill" ];
+            description = @"Not secure: site information";
         }
-        NSImage *image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:description];
-        NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration configurationWithPointSize:10.5
-                                                                                           weight:NSFontWeightSemibold];
-        return [image imageWithSymbolConfiguration:config] ?: image;
+        NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration configurationWithPointSize:11.5
+                                                                                           weight:NSFontWeightBold];
+        for (NSString *name in names) {
+            NSImage *image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:description];
+            if (image != nil) return [image imageWithSymbolConfiguration:config] ?: image;
+        }
     }
     return nil;
 }
 
-static NSString *const kEclipseLittleNotSecurePrefix = @"Not Secure — ";
+static NSFont *eclipse_little_address_font(NSFontWeight weight) {
+    if (@available(macOS 10.15, *)) return [NSFont monospacedSystemFontOfSize:11.0 weight:weight];
+    return [NSFont userFixedPitchFontOfSize:11.0];
+}
 
-/* `label` as it fits on `button`. When the whole of it does not, the host
-   loses characters from its start (its end, the registrable domain, stays)
-   and a "Not Secure — " in front of it always stays: the security state is
-   never what gets cut. */
-static NSString *eclipse_little_fit_label(NSButton *button, NSString *label) {
-    CGFloat width = NSWidth(button.frame);
-    if (label.length == 0 || !isfinite(width) || width <= 0) return label;
-    NSButtonCell *probe = [button.cell copy];
-    BOOL (^fits)(NSString *) = ^BOOL(NSString *title) {
-        probe.title = title;
-        return probe.cellSize.width <= width;
-    };
-    if (fits(label)) return label;
-    NSString *prefix = @"";
-    NSString *host = label;
-    if ([label hasPrefix:kEclipseLittleNotSecurePrefix]) {
-        prefix = kEclipseLittleNotSecurePrefix;
-        host = [label substringFromIndex:prefix.length];
-    }
-    if ([host hasPrefix:@"…"]) host = [host substringFromIndex:1];
-    if (host.length == 0) return label;
-    // The longest end of the host that fits after "…" (at least one character).
-    NSString *(^shortened)(NSUInteger) = ^NSString *(NSUInteger keep) {
-        NSUInteger start = [host rangeOfComposedCharacterSequenceAtIndex:host.length - keep].location;
-        return [NSString stringWithFormat:@"%@…%@", prefix, [host substringFromIndex:start]];
-    };
-    NSUInteger low = 1, high = host.length, best = 1;
-    while (low <= high) {
-        NSUInteger mid = low + (high - low) / 2;
-        if (fits(shortened(mid))) {
-            best = mid;
-            low = mid + 1;
-        } else {
-            high = mid - 1;
+/* The first of `names` this macOS has as an SF Symbol, sized for the bar. */
+static NSImage *eclipse_little_symbol(NSArray<NSString *> *names, NSString *description) {
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration configurationWithPointSize:12.0
+                                                                                           weight:NSFontWeightMedium];
+        for (NSString *name in names) {
+            NSImage *image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:description];
+            if (image != nil) return [image imageWithSymbolConfiguration:config] ?: image;
         }
     }
-    return shortened(best);
+    return nil;
+}
+
+/* The pasteboard Copy Link writes to: the general one, or for the
+   end-to-end checks (ECLIPSE_TEST_PASTEBOARD) one of that name, so a test
+   run leaves the user's clipboard alone. */
+static NSPasteboard *eclipse_pasteboard(void) {
+    const char *name = getenv("ECLIPSE_TEST_PASTEBOARD");
+    if (name != NULL && name[0] != '\0') return [NSPasteboard pasteboardWithName:@(name)];
+    return [NSPasteboard generalPasteboard];
+}
+
+/* The address as the bar draws it: the host bright, the scheme and path
+   dimmer, "Not Secure" in orange. `scheme`, `host` and `rest` are the parts
+   to show (possibly shortened). Colours are dynamic, so the title follows
+   the window's appearance. */
+static NSAttributedString *eclipse_little_address_title(EclipseLittleAddress *address, NSString *scheme,
+                                                         NSString *host, NSString *rest) {
+    NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+    style.alignment = NSTextAlignmentLeft;
+    // A last resort (see eclipse_little_fit_address): the cell cuts the end
+    // rather than the security state, and otherwise the start of the host.
+    style.lineBreakMode = address.prefix.length > 0 ? NSLineBreakByTruncatingTail : NSLineBreakByTruncatingHead;
+    NSMutableAttributedString *title = [[NSMutableAttributedString alloc] init];
+    void (^add)(NSString *, NSFont *, NSColor *) = ^(NSString *text, NSFont *font, NSColor *color) {
+        if (text.length == 0) return;
+        [title appendAttributedString:[[NSAttributedString alloc]
+                                          initWithString:text
+                                              attributes:@{NSFontAttributeName : font,
+                                                           NSForegroundColorAttributeName : color,
+                                                           NSParagraphStyleAttributeName : style}]];
+    };
+    add(address.prefix, [NSFont systemFontOfSize:11.0 weight:NSFontWeightSemibold], [NSColor systemOrangeColor]);
+    add(scheme, eclipse_little_address_font(NSFontWeightRegular), [NSColor tertiaryLabelColor]);
+    add(host, eclipse_little_address_font(NSFontWeightSemibold), [NSColor labelColor]);
+    add(rest, eclipse_little_address_font(NSFontWeightRegular), [NSColor secondaryLabelColor]);
+    return title;
+}
+
+/* `address` as it fits on `button`. When the whole of it does not, the path
+   goes first (from its end, down to "/…"), then the scheme, then the rest of
+   the path, and only then does the host lose characters from its start (its
+   end, the registrable domain, stays). A "Not Secure — " in front always
+   stays: the security state is never what gets cut. */
+static NSAttributedString *eclipse_little_fit_address(NSButton *button, EclipseLittleAddress *address) {
+    NSString *scheme = address.scheme, *host = address.host, *rest = address.rest;
+    NSAttributedString *whole = eclipse_little_address_title(address, scheme, host, rest);
+    CGFloat width = NSWidth(button.frame);
+    if (!isfinite(width) || width <= 0) return whole;
+    NSButtonCell *probe = [button.cell copy];
+    BOOL (^fits)(NSAttributedString *) = ^BOOL(NSAttributedString *title) {
+        probe.attributedTitle = title;
+        return probe.cellSize.width <= width;
+    };
+    if (fits(whole)) return whole;
+    // The longest `keep` in [low, high] for which `make(keep)` fits, or 0.
+    NSUInteger (^longest)(NSUInteger, NSUInteger, NSAttributedString * (^)(NSUInteger)) =
+        ^NSUInteger(NSUInteger low, NSUInteger high, NSAttributedString * (^make)(NSUInteger)) {
+            NSUInteger best = 0;
+            while (low <= high && high > 0) {
+                NSUInteger mid = low + (high - low) / 2;
+                if (fits(make(mid))) {
+                    best = mid;
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+            }
+            return best;
+        };
+    // 1. The path loses its end ("/very/long/pa…"), down to "/…".
+    if (rest.length > 1) {
+        NSAttributedString * (^cutRest)(NSUInteger) = ^NSAttributedString *(NSUInteger keep) {
+            NSUInteger end = NSMaxRange([rest rangeOfComposedCharacterSequenceAtIndex:keep - 1]);
+            NSString *shown = [[rest substringToIndex:MIN(end, rest.length)] stringByAppendingString:@"…"];
+            return eclipse_little_address_title(address, scheme, host, shown);
+        };
+        NSUInteger keep = longest(1, rest.length - 1, cutRest);
+        if (keep > 0) return cutRest(keep);
+    }
+    NSString *minimalRest = rest.length > 1 ? [[rest substringToIndex:1] stringByAppendingString:@"…"] : rest;
+    // 2. Without the scheme, then 3. without the path.
+    NSAttributedString *title = eclipse_little_address_title(address, @"", host, minimalRest);
+    if (fits(title)) return title;
+    title = eclipse_little_address_title(address, @"", host, @"");
+    if (fits(title)) return title;
+    // 4. The longest end of the host that fits after "…" (at least one
+    // character).
+    NSString *bare = [host hasPrefix:@"…"] ? [host substringFromIndex:1] : host;
+    if (bare.length == 0) return title;
+    NSAttributedString * (^cutHost)(NSUInteger) = ^NSAttributedString *(NSUInteger keep) {
+        NSUInteger start = [bare rangeOfComposedCharacterSequenceAtIndex:bare.length - keep].location;
+        return eclipse_little_address_title(address, @"", [@"…" stringByAppendingString:[bare substringFromIndex:start]],
+                                            @"");
+    };
+    return cutHost(MAX((NSUInteger)1, longest(1, bare.length, cutHost)));
 }
 
 static NSString *eclipse_little_clean_title(NSString *title) {
@@ -2017,33 +2246,35 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
 
 - (void)refreshTitle {
     if (self.closed) return;
-    NSString *label = eclipse_little_host_label(self.displayURL);
+    EclipseLittleAddress *address = eclipse_little_address(self.displayURL);
     NSString *title = eclipse_little_clean_title(self.webView.title);
     // The title bar is hidden: the title is what Mission Control, the Window
-    // menu and the Dock list. The host on the bar is ours.
-    self.window.title = title.length > 0 ? title : label;
-    if (![self.hostLabel isEqualToString:label]) {
-        self.hostLabel = label;
-        NSButton *host = self.hostButton;
-        host.image = eclipse_little_security_image(label);
-        host.accessibilityLabel = [@"Address: " stringByAppendingString:label];
+    // menu and the Dock list. The address on the bar is ours.
+    self.window.title = title.length > 0 ? title : [address.prefix stringByAppendingString:address.host];
+    if (![self.address isEqual:address]) {
+        self.address = address;
+        NSButton *info = self.infoButton;
+        info.image = eclipse_little_security_image(address.security);
+        info.contentTintColor = address.security == EclipseLittleSecurityNotSecure ? [NSColor systemOrangeColor]
+                                                                                   : [NSColor secondaryLabelColor];
+        info.accessibilityLabel = address.security == EclipseLittleSecurityNotSecure ? @"Not secure: site information"
+                                                                                      : @"Site information";
+        self.hostButton.accessibilityLabel = [@"Address: " stringByAppendingString:address.plain];
+        [self.infoPopover close];
         [self fitHostLabel];
     }
 }
 
-/* The host button's title: the label, shortened to the button's width by
-   eclipse_little_fit_label rather than by the cell (which would cut "Not
-   Secure" off the front). Again whenever the button changes size. */
+/* The address button's title: the address, shortened to the button's width
+   by eclipse_little_fit_address rather than by the cell (which would cut
+   "Not Secure" off the front, or the host before the path). Again whenever
+   the button changes size. */
 - (void)fitHostLabel {
     NSButton *host = self.hostButton;
     if (host == nil || self.closed) return;
-    NSString *label = self.hostLabel ?: @"";
-    // Should even "Not Secure — …" and one character not fit, the cell cuts
-    // the end rather than the security state.
-    host.cell.lineBreakMode = [label hasPrefix:kEclipseLittleNotSecurePrefix] ? NSLineBreakByTruncatingTail
-                                                                              : NSLineBreakByTruncatingHead;
-    NSString *shown = eclipse_little_fit_label(host, label);
-    if (![host.title isEqualToString:shown]) host.title = shown;
+    EclipseLittleAddress *address = self.address ?: eclipse_little_address(nil);
+    NSAttributedString *shown = eclipse_little_fit_address(host, address);
+    if (![host.attributedTitle isEqualToAttributedString:shown]) host.attributedTitle = shown;
 }
 
 - (void)applyTheme {
@@ -2059,6 +2290,11 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     NSColor *field = gLittleFrameDark ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.10]
                                       : [NSColor colorWithCalibratedWhite:0.0 alpha:0.07];
     self.addressBox.layer.backgroundColor = field.CGColor;
+    self.copiedLabel.layer.backgroundColor = field.CGColor;
+    NSColor *line = gLittleFrameDark ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.16]
+                                     : [NSColor colorWithCalibratedWhite:0.0 alpha:0.14];
+    self.separator.layer.backgroundColor = line.CGColor;
+    self.texture.needsDisplay = YES;
 }
 
 - (void)layoutChrome {
@@ -2069,14 +2305,24 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     eclipse_little_bar_metrics(self.window, &mid, &leading);
     CGFloat bar = MAX(kEclipseLittleBarHeight, ceil(mid * 2.0));
     CGFloat inset = kEclipseLittleInset;
+    self.texture.frame = NSMakeRect(0, 0, NSWidth(bounds), bar);
     self.webView.frame = NSMakeRect(inset, bar, MAX(0.0, NSWidth(bounds) - 2.0 * inset),
                                     MAX(0.0, NSHeight(bounds) - bar - inset));
-    CGFloat button = 26.0;
-    self.openButton.frame = NSMakeRect(NSWidth(bounds) - 8.0 - button, floor(mid - button / 2.0), button, button);
-    CGFloat right = NSMinX(self.openButton.frame) - 6.0;
-    self.hostButton.frame = NSMakeRect(leading, floor(mid - 12.0), MAX(40.0, right - leading), 24.0);
+    // Right to left: Open in Eclipse | Copy Link.
+    CGFloat button = 24.0, top = floor(mid - button / 2.0);
+    self.openButton.frame = NSMakeRect(NSWidth(bounds) - 8.0 - button, top, button, button);
+    self.separator.frame = NSMakeRect(NSMinX(self.openButton.frame) - 5.0, floor(mid - 7.0), 1.0, 14.0);
+    self.linkButton.frame = NSMakeRect(NSMinX(self.separator.frame) - 4.0 - button, top, button, button);
+    CGFloat right = NSMinX(self.linkButton.frame) - 4.0;
+    NSSize copied = self.copiedLabel.intrinsicContentSize;
+    CGFloat copiedWidth = isfinite(copied.width) ? ceil(copied.width) + 14.0 : 60.0;
+    self.copiedLabel.frame = NSMakeRect(right - copiedWidth, floor(mid - 9.0), copiedWidth, 18.0);
+    // Left to right: site information, then the address.
+    self.infoButton.frame = NSMakeRect(leading - 4.0, top, button, button);
+    CGFloat start = NSMaxX(self.infoButton.frame) + 1.0;
+    self.hostButton.frame = NSMakeRect(start, floor(mid - 12.0), MAX(40.0, right - start), 24.0);
     [self fitHostLabel];
-    NSRect box = NSMakeRect(leading, floor(mid - 12.0), MAX(40.0, right - leading), 24.0);
+    NSRect box = NSMakeRect(leading - 4.0, floor(mid - 12.0), MAX(40.0, right - leading + 4.0), 24.0);
     self.addressBox.frame = box;
     CGFloat textHeight = ceil(self.addressField.intrinsicContentSize.height);
     if (!isfinite(textHeight) || textHeight <= 0 || textHeight > NSHeight(box)) textHeight = 17.0;
@@ -2137,7 +2383,9 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     NSURL *url = self.displayURL;
     self.addressField.stringValue = eclipse_is_web_scheme(url.scheme) ? (url.absoluteString ?: @"") : @"";
     self.editing = YES;
+    [self.infoPopover close];
     self.hostButton.hidden = YES;
+    self.infoButton.hidden = YES;
     self.addressBox.hidden = NO;
     self.addressField.hidden = NO;
     [self.window makeFirstResponder:self.addressField];
@@ -2154,6 +2402,7 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     self.addressField.hidden = YES;
     self.addressBox.hidden = YES;
     self.hostButton.hidden = NO;
+    self.infoButton.hidden = NO;
 }
 
 /* Return in the address field: Rust resolves the text (an address or a
@@ -2180,7 +2429,129 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
 
 - (void)openClicked:(id)sender {
     (void)sender;
+    [self.infoPopover close];
     [self openInEclipse];
+}
+
+- (void)copyClicked:(id)sender {
+    (void)sender;
+    [self.infoPopover close];
+    [self copyLink];
+}
+
+- (void)infoClicked:(id)sender {
+    (void)sender;
+    [self showSiteInfo];
+}
+
+/* Copies the committed page's address (http(s) only) and says so for a
+   moment: "Copied" on the bar and a checkmark on the button. */
+- (void)copyLink {
+    if (self.closed) return;
+    NSURL *url = self.displayURL;
+    NSString *string = url.absoluteString;
+    if (!eclipse_is_web_scheme(url.scheme) || string.length == 0) {
+        NSBeep();
+        return;
+    }
+    NSPasteboard *pasteboard = eclipse_pasteboard();
+    [pasteboard clearContents];
+    NSPasteboardItem *item = [[NSPasteboardItem alloc] init];
+    [item setString:string forType:NSPasteboardTypeString];
+    [item setString:string forType:NSPasteboardTypeURL];
+    [pasteboard writeObjects:@[ item ]];
+    eclipse_little_log(@"copied link", self);
+
+    NSUInteger generation = ++self.copiedGeneration;
+    self.copiedLabel.hidden = NO;
+    self.linkButton.image = eclipse_little_symbol(@[ @"checkmark" ], @"Copied") ?: self.linkButton.image;
+    __weak EclipseLittleWindow *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        EclipseLittleWindow *me = weakSelf;
+        if (me == nil || me.closed || me.copiedGeneration != generation) return;
+        me.copiedLabel.hidden = YES;
+        me.linkButton.image = eclipse_little_symbol(@[ @"link" ], @"Copy Link") ?: me.linkButton.image;
+    });
+}
+
+/* The site-information popover under the "i" button: whether the connection
+   is secure, the full host (from the committed URL, like the bar), Copy Link
+   and Open in Eclipse. */
+- (void)showSiteInfo {
+    if (self.closed) return;
+    if (self.infoPopover.shown) {
+        [self.infoPopover close];
+        return;
+    }
+    EclipseLittleAddress *address = self.address ?: eclipse_little_address(nil);
+    BOOL web = eclipse_is_web_scheme(self.displayURL.scheme);
+    NSString *heading = @"No page";
+    NSString *detail = @"This window is not showing a web page.";
+    NSColor *tint = [NSColor secondaryLabelColor];
+    NSArray<NSString *> *symbol = @[ @"globe" ];
+    if (address.security == EclipseLittleSecuritySecure) {
+        heading = @"Connection is secure";
+        detail = @"Information you send to this site is private.";
+        symbol = @[ @"lock.fill" ];
+    } else if (address.security == EclipseLittleSecurityNotSecure) {
+        heading = @"Connection is not secure";
+        detail = @"Don't enter passwords or payment details here: others on the network could see them.";
+        tint = [NSColor systemOrangeColor];
+        symbol = @[ @"exclamationmark.triangle.fill" ];
+    }
+
+    NSImageView *icon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    icon.image = eclipse_little_symbol(symbol, heading);
+    icon.contentTintColor = tint;
+    NSTextField *headingLabel = [NSTextField labelWithString:heading];
+    headingLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    headingLabel.identifier = @"eclipse-little-info-heading";
+    NSStackView *top = [NSStackView stackViewWithViews:@[ icon, headingLabel ]];
+    top.spacing = 6;
+
+    NSTextField *hostLabel = [NSTextField labelWithString:address.host];
+    hostLabel.font = eclipse_little_address_font(NSFontWeightSemibold);
+    hostLabel.selectable = YES;
+    hostLabel.lineBreakMode = NSLineBreakByTruncatingHead;
+    hostLabel.identifier = @"eclipse-little-info-host";
+    NSTextField *detailLabel = [NSTextField wrappingLabelWithString:detail];
+    detailLabel.font = [NSFont systemFontOfSize:11.5];
+    detailLabel.textColor = [NSColor secondaryLabelColor];
+    detailLabel.preferredMaxLayoutWidth = 260;
+
+    NSButton *copy = [NSButton buttonWithTitle:@"Copy Link" target:self action:@selector(copyClicked:)];
+    copy.identifier = @"eclipse-little-info-copy";
+    copy.enabled = web;
+    NSButton *open = [NSButton buttonWithTitle:@"Open in Eclipse" target:self action:@selector(openClicked:)];
+    open.identifier = @"eclipse-little-info-open";
+    open.enabled = web;
+    NSStackView *buttons = [NSStackView stackViewWithViews:@[ copy, open ]];
+    buttons.spacing = 8;
+
+    NSStackView *stack = [NSStackView stackViewWithViews:@[ top, hostLabel, detailLabel, buttons ]];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 8;
+    stack.edgeInsets = NSEdgeInsetsMake(14, 14, 14, 14);
+    [stack setCustomSpacing:4 afterView:top];
+    // A fixed text width: the popover takes the stack's fitting size.
+    [hostLabel.widthAnchor constraintLessThanOrEqualToConstant:260].active = YES;
+    [detailLabel.widthAnchor constraintEqualToConstant:260].active = YES;
+    NSSize size = stack.fittingSize;
+    stack.frame = NSMakeRect(0, 0, size.width, size.height);
+
+    NSViewController *controller = [[NSViewController alloc] init];
+    controller.view = stack;
+    controller.preferredContentSize = size;
+    NSPopover *popover = [[NSPopover alloc] init];
+    popover.behavior = NSPopoverBehaviorTransient;
+    popover.contentViewController = controller;
+    popover.appearance = self.window.appearance;
+    self.infoPopover = popover;
+    // Below the button (the edge is in the button's own coordinates).
+    [popover showRelativeToRect:self.infoButton.bounds
+                         ofView:self.infoButton
+                  preferredEdge:self.infoButton.isFlipped ? NSRectEdgeMaxY : NSRectEdgeMinY];
 }
 
 /* Moves the committed page into a new foreground tab of the browser window
@@ -2305,7 +2676,11 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     self.closed = YES;
     [self stopObserving];
     self.addressField.delegate = nil;
+    [self.infoPopover close];
+    self.infoPopover = nil;
+    self.infoButton.target = nil;
     self.hostButton.target = nil;
+    self.linkButton.target = nil;
     self.openButton.target = nil;
     WKWebView *webView = self.webView;
     webView.UIDelegate = nil;
@@ -2416,9 +2791,10 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
     NSURL *url = action.request.URL;
     // The chain's root: the tab, or this window if it is standalone.
     WKWebView *root = self.standalone ? self.webView : self.opener;
-    // A popup window.open with a user gesture nests another Little Eclipse
-    // window, as it would from a tab (within the same limits).
-    if (eclipse_features_want_popup(features) && root != nil &&
+    // A window.open with a user gesture that keeps its opener (see
+    // eclipse_request_wants_popup) nests another Little Eclipse window, as it
+    // would from a tab (within the same limits).
+    if (eclipse_request_wants_popup(action, features) && root != nil &&
         eclipse_action_user_initiated(action) && eclipse_little_initial_url_allowed(url)) {
         BOOL hasPosition = features.x != nil && features.y != nil;
         NSPoint topLeft = hasPosition ? NSMakePoint(features.x.doubleValue, features.y.doubleValue) : NSZeroPoint;
@@ -2427,9 +2803,9 @@ static void eclipse_little_take_download(EclipseLittleWindow *lw, WKWebView *pre
             hasPosition, topLeft, NO);
         if (nested != nil) return nested.webView;
     }
-    // Anything else (a target=_blank link, window.open without popup
-    // features or a gesture, a popup over the limit): a web page opens as a
-    // tab, as it would from a tab.
+    // Anything else (a target=_blank link, a noopener window.open, one
+    // without a gesture, a popup over the limit): a web page opens as a tab,
+    // as it would from a tab.
     if (eclipse_is_web_scheme(url.scheme) && gCallback != NULL) {
         NSString *command = [@"little_window_new_tab:" stringByAppendingString:url.absoluteString];
         gCallback(command.UTF8String);
@@ -2787,17 +3163,26 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
 
     EclipseLittleContentView *container = [[EclipseLittleContentView alloc] initWithFrame:contentRect];
     container.wantsLayer = YES;
+    EclipseLittleBarTexture *texture = [[EclipseLittleBarTexture alloc] initWithFrame:NSZeroRect];
+    [container addSubview:texture];
     [container addSubview:webView];
+
+    NSButton *info = eclipse_little_bar_button(@"eclipse-little-info", lw, @selector(infoClicked:));
+    info.imagePosition = NSImageOnly;
+    info.image = eclipse_little_security_image(EclipseLittleSecurityNone);
+    if (info.image == nil) info.title = @"i";
+    info.contentTintColor = [NSColor secondaryLabelColor];
+    info.toolTip = @"Site information";
+    [container addSubview:info];
 
     NSButton *host = eclipse_little_bar_button(@"eclipse-little-host", lw, @selector(hostClicked:));
     host.alignment = NSTextAlignmentLeft;
-    host.imagePosition = NSImageLeading;
-    host.imageHugsTitle = YES;
-    host.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium];
-    // -fitHostLabel shortens the host to fit and sets the cell's own
-    // truncation, a last resort.
+    host.imagePosition = NSNoImage;
+    host.font = eclipse_little_address_font(NSFontWeightRegular);
+    // -fitHostLabel shortens the address to fit; the title's own truncation
+    // is a last resort.
     host.cell.lineBreakMode = NSLineBreakByTruncatingHead;
-    host.toolTip = @"Show the full address (⌘L)";
+    host.toolTip = @"Edit the address (⌘L)";
     [container addSubview:host];
 
     NSTextField *field = [[NSTextField alloc] initWithFrame:NSZeroRect];
@@ -2806,11 +3191,11 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     field.bordered = NO;
     field.drawsBackground = NO;
     field.focusRingType = NSFocusRingTypeNone;
-    field.font = [NSFont systemFontOfSize:12.5];
+    field.font = eclipse_little_address_font(NSFontWeightRegular);
     field.usesSingleLineMode = YES;
     field.cell.scrollable = YES;
     field.cell.wraps = NO;
-    field.placeholderString = @"Search or enter address";
+    field.placeholderString = @"Search or Enter URL…";
     field.hidden = YES;
     field.delegate = lw;
     NSView *box = [[NSView alloc] initWithFrame:NSZeroRect];
@@ -2820,16 +3205,35 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     [box addSubview:field];
     [container addSubview:box];
 
-    NSButton *open = eclipse_little_bar_button(@"eclipse-little-open", lw, @selector(openClicked:));
-    NSImage *openImage = nil;
-    if (@available(macOS 11.0, *)) {
-        for (NSString *name in @[ @"arrow.up.forward.app", @"arrow.up.right.square" ]) {
-            openImage = [NSImage imageWithSystemSymbolName:name accessibilityDescription:@"Open in Eclipse"];
-            if (openImage != nil) break;
-        }
+    NSTextField *copied = [NSTextField labelWithString:@"Copied"];
+    copied.identifier = @"eclipse-little-copied";
+    copied.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    copied.textColor = [NSColor labelColor];
+    copied.alignment = NSTextAlignmentCenter;
+    copied.wantsLayer = YES;
+    copied.layer.cornerRadius = 9.0;
+    copied.hidden = YES;
+    [container addSubview:copied];
+
+    NSButton *copy = eclipse_little_bar_button(@"eclipse-little-copy", lw, @selector(copyClicked:));
+    copy.image = eclipse_little_symbol(@[ @"link" ], @"Copy Link");
+    if (copy.image != nil) {
+        copy.imagePosition = NSImageOnly;
+    } else {
+        copy.title = @"Copy";
     }
-    if (openImage != nil) {
-        open.image = openImage;
+    copy.contentTintColor = [NSColor secondaryLabelColor];
+    copy.toolTip = @"Copy Link";
+    copy.accessibilityLabel = @"Copy Link";
+    [container addSubview:copy];
+
+    NSView *separator = [[NSView alloc] initWithFrame:NSZeroRect];
+    separator.wantsLayer = YES;
+    [container addSubview:separator];
+
+    NSButton *open = eclipse_little_bar_button(@"eclipse-little-open", lw, @selector(openClicked:));
+    open.image = eclipse_little_symbol(@[ @"arrow.up.forward.app", @"arrow.up.right.square" ], @"Open in Eclipse");
+    if (open.image != nil) {
         open.imagePosition = NSImageOnly;
     } else {
         open.title = @"Open";
@@ -2896,9 +3300,14 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
     lw.standalone = standalone;
     lw.serial = gLittleNextSerial++;
     lw.container = container;
+    lw.texture = texture;
+    lw.infoButton = info;
     lw.hostButton = host;
     lw.addressField = field;
     lw.addressBox = box;
+    lw.copiedLabel = copied;
+    lw.linkButton = copy;
+    lw.separator = separator;
     lw.openButton = open;
     container.owner = lw;
     webView.UIDelegate = lw;
@@ -2928,7 +3337,8 @@ static EclipseLittleWindow *eclipse_little_window_create(WKWebViewConfiguration 
 }
 
 /* Whether the window.open being decided (inside wry's new-window handler)
-   asked for a popup window; see eclipse_features_want_popup. */
+   opens as a Little Eclipse window: it asked for a popup window or keeps its
+   opener; see eclipse_request_wants_popup. */
 int eclipse_popup_request_wants_popup(void) {
     return (gPopupRequestContext & ECLIPSE_POPUP_WANTS_POPUP) != 0;
 }
@@ -3157,5 +3567,497 @@ int eclipse_little_window_count_for_view(void *viewPtr) {
             if (!lw.closed && lw.opener == webView) count++;
         }
         return count;
+    }
+}
+
+/* ------------------------------------------------------------- New Little Eclipse Window bar */
+/* ⌥⌘N, as in Arc: a floating "Search or Enter URL…" bar near the top right
+   of the screen with the pointer, over whatever is in front (also while the
+   browser window is hidden). Its suggestions come from Rust (open tabs and
+   favourites, eclipse_show_little_command_bar); typing filters them and
+   adds the typed text as the first row. ↑/↓ choose, Return opens the chosen
+   row in a new standalone Little Eclipse window (Rust resolves typed text to
+   an address or a search: "little_command_bar_open:<text>"), and Escape,
+   the × button or a click anywhere else closes the bar. */
+
+@class EclipseCommandBar;
+
+static const CGFloat kEclipseCommandBarWidth = 560.0;
+static const CGFloat kEclipseCommandBarSearchHeight = 52.0;
+static const CGFloat kEclipseCommandBarRowHeight = 38.0;
+static const NSUInteger kEclipseCommandBarMaxRows = 7;
+static const NSUInteger kEclipseCommandBarMaxSuggestions = 64;
+
+/* A borderless panel that still takes the keyboard. */
+@interface EclipseCommandBarPanel : NSPanel
+@end
+
+@implementation EclipseCommandBarPanel
+- (BOOL)canBecomeKeyWindow {
+    return YES;
+}
+- (BOOL)canBecomeMainWindow {
+    return NO;
+}
+@end
+
+@interface EclipseCommandBarContentView : NSView
+@end
+
+@implementation EclipseCommandBarContentView
+- (BOOL)isFlipped {
+    return YES;
+}
+@end
+
+/* One suggestion row: an icon (the site's initial on a tile coloured from
+   its host, or a symbol for the typed text) and "Title — host". */
+@interface EclipseCommandBarRow : NSView
+@property(nonatomic, weak) EclipseCommandBar *owner;
+@property(nonatomic) NSUInteger index;
+@property(nonatomic, strong) NSTextField *label;
+@property(nonatomic, strong) NSView *tile;
+@property(nonatomic, strong) NSTextField *initial;
+@property(nonatomic, strong) NSImageView *symbol;
+@property(nonatomic, copy) NSString *title;
+@property(nonatomic, copy) NSString *detail;
+/* What Return opens: a suggestion's URL or the typed text. */
+@property(nonatomic, copy) NSString *value;
+@property(nonatomic) BOOL selected;
+@end
+
+@interface EclipseCommandBar : NSObject <NSTextFieldDelegate, NSWindowDelegate>
+@property(nonatomic, strong) EclipseCommandBarPanel *panel;
+@property(nonatomic, strong) NSView *tint;
+@property(nonatomic, strong) NSTextField *field;
+@property(nonatomic, strong) NSButton *closeButton;
+@property(nonatomic, strong) NSView *rowsView;
+@property(nonatomic, strong) NSMutableArray<EclipseCommandBarRow *> *rows;
+/* From Rust: @[title, url] pairs. */
+@property(nonatomic, copy) NSArray<NSArray<NSString *> *> *suggestions;
+@property(nonatomic, strong) NSColor *accent;
+@property(nonatomic) NSUInteger selected;
+/* The window that was key before the bar (menu commands go to it). */
+@property(nonatomic, weak) NSWindow *previousKey;
+@property(nonatomic) BOOL closing;
+- (void)selectRow:(NSUInteger)index;
+- (void)openRow:(NSUInteger)index;
+- (void)close;
+@end
+
+static EclipseCommandBar *gCommandBar = nil;
+
+/* A short host for a suggestion's second part ("www." dropped). */
+static NSString *eclipse_command_bar_host(NSString *urlString) {
+    NSString *host = [NSURL URLWithString:urlString].host.lowercaseString ?: @"";
+    if ([host hasPrefix:@"www."]) host = [host substringFromIndex:4];
+    return host;
+}
+
+/* Whether typed text looks like an address rather than a search (for the
+   label only: Rust decides what it opens). */
+static BOOL eclipse_command_bar_looks_like_address(NSString *text) {
+    if (text.length == 0 || [text rangeOfCharacterFromSet:[NSCharacterSet whitespaceCharacterSet]].location != NSNotFound) {
+        return NO;
+    }
+    return [text containsString:@"."] || [text containsString:@"://"] || [text hasPrefix:@"localhost"];
+}
+
+@implementation EclipseCommandBarRow
+
+- (instancetype)initWithFrame:(NSRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        self.wantsLayer = YES;
+        self.layer.cornerRadius = 8.0;
+        if (@available(macOS 10.15, *)) self.layer.cornerCurve = kCACornerCurveContinuous;
+        _tile = [[NSView alloc] initWithFrame:NSMakeRect(12, floor((NSHeight(frame) - 20) / 2), 20, 20)];
+        _tile.wantsLayer = YES;
+        _tile.layer.cornerRadius = 5.0;
+        [self addSubview:_tile];
+        _initial = [NSTextField labelWithString:@""];
+        _initial.font = [NSFont systemFontOfSize:11 weight:NSFontWeightBold];
+        _initial.textColor = [NSColor whiteColor];
+        _initial.alignment = NSTextAlignmentCenter;
+        _initial.frame = NSMakeRect(0, 3, 20, 14);
+        [_tile addSubview:_initial];
+        _symbol = [[NSImageView alloc] initWithFrame:_tile.frame];
+        _symbol.hidden = YES;
+        [self addSubview:_symbol];
+        _label = [NSTextField labelWithString:@""];
+        _label.lineBreakMode = NSLineBreakByTruncatingTail;
+        _label.cell.truncatesLastVisibleLine = YES;
+        _label.maximumNumberOfLines = 1;
+        [self addSubview:_label];
+        [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                           options:NSTrackingMouseEnteredAndExited |
+                                                                   NSTrackingActiveAlways | NSTrackingInVisibleRect
+                                                             owner:self
+                                                          userInfo:nil]];
+    }
+    return self;
+}
+
+- (BOOL)isFlipped {
+    return YES;
+}
+
+/* The whole row takes the click, not its label. */
+- (NSView *)hitTest:(NSPoint)point {
+    return NSPointInRect([self convertPoint:point fromView:self.superview], self.bounds) ? self : nil;
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    (void)event;
+    [self.owner selectRow:self.index];
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    (void)event;
+    [self.owner openRow:self.index];
+}
+
+- (void)layout {
+    [super layout];
+    CGFloat height = NSHeight(self.bounds);
+    self.tile.frame = NSMakeRect(12, floor((height - 20) / 2), 20, 20);
+    self.symbol.frame = self.tile.frame;
+    CGFloat labelHeight = 18.0;
+    self.label.frame = NSMakeRect(42, floor((height - labelHeight) / 2), MAX(0.0, NSWidth(self.bounds) - 54), labelHeight);
+}
+
+/* Sets the row's content; `typed` rows show a symbol, others a tile. */
+- (void)setTitle:(NSString *)title detail:(NSString *)detail value:(NSString *)value typed:(BOOL)typed {
+    self.title = title;
+    self.detail = detail;
+    self.value = value;
+    self.symbol.hidden = !typed;
+    self.tile.hidden = typed;
+    if (typed) {
+        NSArray<NSString *> *names = eclipse_command_bar_looks_like_address(value) ? @[ @"globe" ] : @[ @"magnifyingglass" ];
+        self.symbol.image = eclipse_little_symbol(names, detail);
+    } else {
+        NSString *host = eclipse_command_bar_host(value);
+        NSString *letter = host.length > 0 ? [host substringToIndex:[host rangeOfComposedCharacterSequenceAtIndex:0].length]
+                                            : @"•";
+        self.initial.stringValue = letter.uppercaseString;
+        // A steady colour per site.
+        NSUInteger hash = 5381;
+        for (NSUInteger i = 0; i < host.length; i++) hash = hash * 33 + [host characterAtIndex:i];
+        self.tile.layer.backgroundColor =
+            [NSColor colorWithCalibratedHue:(CGFloat)(hash % 360) / 360.0 saturation:0.55 brightness:0.78 alpha:1.0]
+                .CGColor;
+    }
+    [self refresh];
+}
+
+- (void)setSelected:(BOOL)selected {
+    _selected = selected;
+    [self refresh];
+}
+
+- (void)refresh {
+    NSColor *accent = self.owner.accent ?: [NSColor controlAccentColor];
+    self.layer.backgroundColor = self.selected ? accent.CGColor : [NSColor clearColor].CGColor;
+    NSColor *titleColor = self.selected ? [NSColor whiteColor] : [NSColor labelColor];
+    NSColor *detailColor = self.selected ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.72] : [NSColor secondaryLabelColor];
+    self.symbol.contentTintColor = self.selected ? [NSColor whiteColor] : [NSColor secondaryLabelColor];
+    NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+    style.lineBreakMode = NSLineBreakByTruncatingTail;
+    NSMutableAttributedString *text = [[NSMutableAttributedString alloc]
+        initWithString:self.title ?: @""
+            attributes:@{NSFontAttributeName : [NSFont systemFontOfSize:13 weight:NSFontWeightMedium],
+                         NSForegroundColorAttributeName : titleColor,
+                         NSParagraphStyleAttributeName : style}];
+    if (self.detail.length > 0) {
+        [text appendAttributedString:[[NSAttributedString alloc]
+                                         initWithString:[@" — " stringByAppendingString:self.detail]
+                                             attributes:@{NSFontAttributeName : [NSFont systemFontOfSize:13],
+                                                          NSForegroundColorAttributeName : detailColor,
+                                                          NSParagraphStyleAttributeName : style}]];
+    }
+    self.label.attributedStringValue = text;
+}
+
+@end
+
+@implementation EclipseCommandBar
+
+/* The rows for what is typed: the text itself first, then the suggestions
+   whose title or address contains it (all of them while nothing is typed). */
+- (void)refilter {
+    NSString *text = [self.field.stringValue
+        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSMutableArray<NSArray *> *items = [NSMutableArray array];
+    if (text.length > 0) {
+        NSString *what = eclipse_command_bar_looks_like_address(text) ? @"Open" : @"Search";
+        [items addObject:@[ text, what, text, @YES ]];
+    }
+    for (NSArray<NSString *> *suggestion in self.suggestions) {
+        if (items.count >= kEclipseCommandBarMaxRows) break;
+        NSString *title = suggestion[0], *url = suggestion[1];
+        if (text.length > 0 && [title rangeOfString:text options:NSCaseInsensitiveSearch].location == NSNotFound &&
+            [url rangeOfString:text options:NSCaseInsensitiveSearch].location == NSNotFound) {
+            continue;
+        }
+        NSString *host = eclipse_command_bar_host(url);
+        [items addObject:@[ title.length > 0 ? title : host, host, url, @NO ]];
+    }
+
+    for (EclipseCommandBarRow *row in self.rows) [row removeFromSuperview];
+    [self.rows removeAllObjects];
+    CGFloat width = kEclipseCommandBarWidth - 16.0;
+    for (NSUInteger i = 0; i < items.count; i++) {
+        NSArray *item = items[i];
+        EclipseCommandBarRow *row = [[EclipseCommandBarRow alloc]
+            initWithFrame:NSMakeRect(0, i * kEclipseCommandBarRowHeight, width, kEclipseCommandBarRowHeight)];
+        row.owner = self;
+        row.index = i;
+        row.identifier = [NSString stringWithFormat:@"eclipse-commandbar-row-%lu", (unsigned long)i];
+        [row setTitle:item[0] detail:item[1] value:item[2] typed:[item[3] boolValue]];
+        [self.rowsView addSubview:row];
+        [self.rows addObject:row];
+    }
+    self.selected = 0;
+    for (EclipseCommandBarRow *row in self.rows) row.selected = row.index == 0;
+    [self resize];
+}
+
+/* The panel's height for its rows; its top edge stays where it is. */
+- (void)resize {
+    CGFloat rowsHeight = self.rows.count * kEclipseCommandBarRowHeight;
+    CGFloat height = kEclipseCommandBarSearchHeight + (rowsHeight > 0 ? rowsHeight + 10.0 : 0.0);
+    self.rowsView.frame = NSMakeRect(8, kEclipseCommandBarSearchHeight, kEclipseCommandBarWidth - 16.0, rowsHeight);
+    NSRect frame = self.panel.frame;
+    CGFloat top = NSMaxY(frame);
+    frame.size.height = height;
+    frame.origin.y = top - height;
+    [self.panel setFrame:frame display:YES];
+    [self.panel invalidateShadow];
+}
+
+- (void)selectRow:(NSUInteger)index {
+    if (index >= self.rows.count) return;
+    self.selected = index;
+    for (EclipseCommandBarRow *row in self.rows) row.selected = row.index == index;
+}
+
+- (void)openRow:(NSUInteger)index {
+    if (index >= self.rows.count || self.closing) return;
+    NSString *value = self.rows[index].value;
+    [self close];
+    if (value.length == 0 || value.length > kEclipseLittleMaxAddressLength || gCallback == NULL) {
+        NSBeep();
+        return;
+    }
+    NSString *command = [@"little_command_bar_open:" stringByAppendingString:value];
+    gCallback(command.UTF8String);
+}
+
+- (void)closeClicked:(id)sender {
+    (void)sender;
+    [self close];
+}
+
+- (void)close {
+    if (self.closing) return;
+    self.closing = YES;
+    self.field.delegate = nil;
+    self.panel.delegate = nil;
+    self.closeButton.target = nil;
+    [self.panel orderOut:nil];
+    if (eclipse_perf_enabled()) fprintf(stderr, "[little] command bar closed\n");
+    // Released on the next turn of the run loop: AppKit may still be
+    // delivering the event that closed it.
+    EclipseCommandBar *me = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gCommandBar == me) gCommandBar = nil;
+    });
+}
+
+/* NSTextFieldDelegate */
+
+- (void)controlTextDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self refilter];
+}
+
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)selector {
+    (void)control; (void)textView;
+    if (selector == @selector(moveDown:)) {
+        if (self.rows.count > 0) [self selectRow:(self.selected + 1) % self.rows.count];
+        return YES;
+    }
+    if (selector == @selector(moveUp:)) {
+        if (self.rows.count > 0) [self selectRow:(self.selected + self.rows.count - 1) % self.rows.count];
+        return YES;
+    }
+    if (selector == @selector(insertNewline:)) {
+        if (self.rows.count > 0) [self openRow:self.selected];
+        else NSBeep();
+        return YES;
+    }
+    if (selector == @selector(cancelOperation:)) {
+        [self close];
+        return YES;
+    }
+    return NO;
+}
+
+/* NSWindowDelegate: a click anywhere else (another window, another app). */
+- (void)windowDidResignKey:(NSNotification *)notification {
+    (void)notification;
+    [self close];
+}
+
+@end
+
+static BOOL eclipse_is_command_bar_window(NSWindow *window) {
+    return window != nil && gCommandBar != nil && !gCommandBar.closing && gCommandBar.panel == window;
+}
+
+/* Closes the bar for a menu command and returns the window that was key
+   before it, which the command is for. */
+static NSWindow *eclipse_command_bar_dismiss_for_command(void) {
+    NSWindow *previous = gCommandBar.previousKey;
+    [gCommandBar close];
+    return previous;
+}
+
+/* Shows the bar (or refreshes the one showing) with `count` suggestions
+   (`titles[i]`, `urls[i]`: UTF-8, http(s) addresses only) and the Space's
+   accent colour for the chosen row. 1 when it shows. */
+int eclipse_show_little_command_bar(const char *const *titles, const char *const *urls, size_t count, double red,
+                                    double green, double blue) {
+    @autoreleasepool {
+        NSMutableArray<NSArray<NSString *> *> *suggestions = [NSMutableArray array];
+        for (size_t i = 0; i < count && suggestions.count < kEclipseCommandBarMaxSuggestions; i++) {
+            if (titles == NULL || urls == NULL || urls[i] == NULL) break;
+            NSURL *url = eclipse_little_loadable_url(urls[i]);
+            if (url == nil) continue;
+            NSString *title = titles[i] != NULL ? [NSString stringWithUTF8String:titles[i]] : @"";
+            [suggestions addObject:@[ eclipse_little_clean_title(title ?: @""), url.absoluteString ]];
+        }
+        NSColor *accent = nil;
+        if (isfinite(red) && isfinite(green) && isfinite(blue)) {
+            accent = [NSColor colorWithSRGBRed:MIN(MAX(red, 0.0), 1.0)
+                                         green:MIN(MAX(green, 0.0), 1.0)
+                                          blue:MIN(MAX(blue, 0.0), 1.0)
+                                         alpha:1.0];
+        }
+
+        EclipseCommandBar *bar = gCommandBar;
+        if (bar == nil || bar.closing) {
+            bar = [[EclipseCommandBar alloc] init];
+            bar.rows = [NSMutableArray array];
+            bar.previousKey = eclipse_shortcut_window();
+            NSScreen *screen = eclipse_screen_with_mouse();
+            if (screen == nil) return 0;
+            NSRect visible = screen.visibleFrame;
+            NSRect frame = NSMakeRect(NSMaxX(visible) - kEclipseCommandBarWidth - 16.0,
+                                      NSMaxY(visible) - 16.0 - kEclipseCommandBarSearchHeight,
+                                      kEclipseCommandBarWidth, kEclipseCommandBarSearchHeight);
+            frame = eclipse_clamp_frame(frame, visible);
+            EclipseCommandBarPanel *panel =
+                [[EclipseCommandBarPanel alloc] initWithContentRect:frame
+                                                          styleMask:NSWindowStyleMaskBorderless
+                                                            backing:NSBackingStoreBuffered
+                                                              defer:NO];
+            panel.releasedWhenClosed = NO;
+            panel.opaque = NO;
+            panel.backgroundColor = [NSColor clearColor];
+            panel.hasShadow = YES;
+            panel.level = NSFloatingWindowLevel;
+            panel.hidesOnDeactivate = NO;
+            panel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
+                                       NSWindowCollectionBehaviorFullScreenAuxiliary |
+                                       NSWindowCollectionBehaviorTransient;
+            panel.appearance = [NSAppearance appearanceNamed:gLittleFrameDark ? NSAppearanceNameDarkAqua
+                                                                               : NSAppearanceNameAqua];
+            panel.title = @"New Little Eclipse Window";
+
+            NSVisualEffectView *effect = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0, 0, NSWidth(frame), NSHeight(frame))];
+            effect.material = NSVisualEffectMaterialPopover;
+            effect.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+            effect.state = NSVisualEffectStateActive;
+            effect.wantsLayer = YES;
+            effect.layer.cornerRadius = 14.0;
+            if (@available(macOS 10.15, *)) effect.layer.cornerCurve = kCACornerCurveContinuous;
+            effect.layer.masksToBounds = YES;
+            effect.layer.borderWidth = 1.0;
+            effect.layer.borderColor = (gLittleFrameDark ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.14]
+                                                         : [NSColor colorWithCalibratedWhite:0.0 alpha:0.12])
+                                           .CGColor;
+            effect.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            panel.contentView = effect;
+
+            // The Space's colour over the blur, like the Little Eclipse frame.
+            EclipseCommandBarContentView *content = [[EclipseCommandBarContentView alloc] initWithFrame:effect.bounds];
+            content.wantsLayer = YES;
+            content.layer.backgroundColor = [eclipse_little_frame_color() colorWithAlphaComponent:0.82].CGColor;
+            content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            [effect addSubview:content];
+            bar.tint = content;
+
+            NSImageView *magnifier = [[NSImageView alloc] initWithFrame:NSMakeRect(18, 17, 18, 18)];
+            magnifier.image = eclipse_little_symbol(@[ @"magnifyingglass" ], @"Search");
+            magnifier.contentTintColor = [NSColor secondaryLabelColor];
+            [content addSubview:magnifier];
+
+            NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(44, 14, NSWidth(frame) - 44 - 52, 24)];
+            field.identifier = @"eclipse-commandbar-field";
+            field.bezeled = NO;
+            field.bordered = NO;
+            field.drawsBackground = NO;
+            field.focusRingType = NSFocusRingTypeNone;
+            field.font = [NSFont systemFontOfSize:18];
+            field.usesSingleLineMode = YES;
+            field.cell.scrollable = YES;
+            field.cell.wraps = NO;
+            field.placeholderString = @"Search or Enter URL…";
+            field.delegate = bar;
+            [content addSubview:field];
+            bar.field = field;
+
+            NSButton *close = [[NSButton alloc] initWithFrame:NSMakeRect(NSWidth(frame) - 42, 13, 26, 26)];
+            close.identifier = @"eclipse-commandbar-close";
+            close.bordered = NO;
+            close.wantsLayer = YES;
+            close.layer.cornerRadius = 6.0;
+            close.layer.backgroundColor = (gLittleFrameDark ? [NSColor colorWithCalibratedWhite:1.0 alpha:0.08]
+                                                            : [NSColor colorWithCalibratedWhite:0.0 alpha:0.06])
+                                              .CGColor;
+            close.refusesFirstResponder = YES;
+            close.image = eclipse_little_symbol(@[ @"xmark" ], @"Close");
+            if (close.image != nil) {
+                close.imagePosition = NSImageOnly;
+            } else {
+                close.title = @"×";
+            }
+            close.contentTintColor = [NSColor secondaryLabelColor];
+            close.toolTip = @"Close (Esc)";
+            close.target = bar;
+            close.action = @selector(closeClicked:);
+            [content addSubview:close];
+            bar.closeButton = close;
+
+            NSView *rowsView = [[EclipseCommandBarContentView alloc] initWithFrame:NSZeroRect];
+            [content addSubview:rowsView];
+            bar.rowsView = rowsView;
+
+            panel.delegate = bar;
+            bar.panel = panel;
+            gCommandBar = bar;
+        }
+        bar.accent = accent;
+        bar.suggestions = suggestions;
+        [bar refilter];
+        [NSApp activateIgnoringOtherApps:YES];
+        [bar.panel makeKeyAndOrderFront:nil];
+        [bar.panel makeFirstResponder:bar.field];
+        [bar.field selectText:nil];
+        if (eclipse_perf_enabled()) {
+            fprintf(stderr, "[little] command bar shown suggestions=%lu\n", (unsigned long)suggestions.count);
+        }
+        return 1;
     }
 }

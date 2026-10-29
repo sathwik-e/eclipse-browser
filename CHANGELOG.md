@@ -17,12 +17,26 @@
     bar) moves the page into the browser window as a new tab, brings the
     window forward and closes the little window. For a sign-in popup this
     drops its link to the page that opened it, as in Arc.
-  - **New Little Eclipse Window** (⌥⌘N) opens an empty one with the address
-    field focused.
-  - Click the host on the bar (or press ⌘L) to see and edit the full
-    address. Return loads a web address as typed, or searches for anything
-    else with your search engine; Escape or clicking away puts the host back.
-    Internal `eclipse://` pages and other schemes are never loaded.
+  - **New Little Eclipse Window** (⌥⌘N) works like Arc's: a floating
+    "Search or Enter URL…" bar near the top right of the screen (also while
+    the browser window is hidden or another window is in front) suggests
+    your open tabs (this Space's first, most recent first) and favourites,
+    each with its site's initial and host. Typing filters them and puts what
+    you typed first; ↑/↓ choose (the chosen row in your accent colour) and
+    Return opens it in a new Little Eclipse window, loading an address as
+    typed or searching for anything else. Escape, the × button, ⌘W or a
+    click anywhere else closes the bar.
+  - **The top bar looks like Arc's.** Faint diagonal stripes over the
+    Space's colour; on the left an "i" button and the full address of the
+    page on screen in a small monospaced font, the host brighter than the
+    scheme and path; on the right Copy Link (with a brief "Copied") and Open
+    in Eclipse. The "i" button shows whether the connection is secure, the
+    full host, Copy Link and Open in Eclipse; for plain http it is an orange
+    warning sign.
+  - Click the address on the bar (or press ⌘L) to edit it. Return loads a
+    web address as typed, or searches for anything else with your search
+    engine; Escape or clicking away puts the address back. Internal
+    `eclipse://` pages and other schemes are never loaded.
   - These windows share the tabs' cookies and sign-ins, the Space's user
     agent and its ad blocking, but get no page scripts and no channel to the
     browser. They count toward the limit of ten Little Eclipse windows (past
@@ -42,13 +56,15 @@
   native window instead of a tab. The popup keeps `window.opener`, so it can
   post its result back and close itself, which makes "Sign in with …" popups
   work.
-  - The top bar shows a lock and the host of the page actually on screen,
-    or "Not Secure" for plain http. When the host is too long for the bar it
-    loses its start (the end, the site's own domain, stays) and "Not Secure"
-    always stays in view. The page has no control over it: a page
-    that is still loading, or that never finishes loading, is not shown as
-    the host until it is actually on screen. The window title (Mission
-    Control, the Window menu) is the page title.
+  - The top bar shows the address of the page actually on screen (never a
+    user name or password in it), with "Not Secure" in front for plain http.
+    When it does not fit, the path is shortened first, then the scheme goes,
+    and only then does a long host lose its start (the end, the site's own
+    domain, stays); "Not Secure" always stays in view, and a site name in
+    the path is never drawn like the host. The page has no control over it:
+    a page that is still loading, or that never finishes loading, is not
+    shown until it is actually on screen. The window title (Mission Control,
+    the Window menu) is the page title.
   - JavaScript dialogs appear as sheets on the popup. `window.close()` closes
     it, and ⌘W closes it while it is in front, also while it shows a dialog.
   - While a popup is in front, Reload, Stop, Back, Forward, Print, Zoom and
@@ -65,8 +81,12 @@
     popup open is never hibernated automatically or by "Clean memory".
   - A popup's size is that of its page; popups that give no size get a
     500×640 page, or keep the one side they gave.
-  - Ordinary links that open a new window (`target=_blank`, or
-    `window.open(url)` with no features), popups from internal pages, popups a page opens
+  - As in Arc, a `window.open(url, name)` with no features at all also
+    opens in a Little Eclipse window when a click opens it, so it keeps
+    `window.opener` too (WebKit can keep the opener only for a window of its
+    own, not for a tab).
+  - Links that open a new window (`target=_blank`), `window.open(url,
+    '_blank', 'noopener')`, popups from internal pages, popups a page opens
     without a click or key press, and popups beyond three per tab (ten in
     all) still open as tabs. Such a popup with no address (the page meant to
     write into it) shows "Pop-up window blocked" instead of leaving an empty

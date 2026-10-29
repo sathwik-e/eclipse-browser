@@ -52,6 +52,14 @@ unsafe extern "C" {
         focus_address: i32,
     ) -> i32;
     fn eclipse_little_window_load(window_id: u64, url: *const c_char) -> i32;
+    fn eclipse_show_little_command_bar(
+        titles: *const *const c_char,
+        urls: *const *const c_char,
+        count: usize,
+        red: f64,
+        green: f64,
+        blue: f64,
+    ) -> i32;
     fn eclipse_set_little_window_theme(red: f64, green: f64, blue: f64, dark: i32);
     fn eclipse_close_all_little_windows();
 }
@@ -307,22 +315,23 @@ pub fn little_window_count_for_view(view_ptr: *mut std::ffi::c_void) -> usize {
     usize::try_from(count).unwrap_or(0)
 }
 
-/// Opens a Little Eclipse window (menu.m) for a popup `features` describes,
-/// built on the configuration WebKit handed the opener, and returns its
-/// webview for `NewWindowResponse::Create`. `None` when the request has no
-/// size, came without a user gesture, would exceed the popup limits, or the
-/// native window could not be made; the caller then opens it as a tab.
-/// Must be called from wry's new-window handler (menu.m reads the gesture
-/// state of the request being handled).
 /// Whether the window.open wry's new-window handler is deciding asked for a
-/// popup window rather than a tab, by WebKit's reading of the HTML rule: a
-/// `popup` feature, a size or position, or turned-off toolbars. Plain
-/// `window.open(url)` and target=_blank links are tabs. Outside the handler
-/// this is false.
+/// window of its own rather than a tab: a popup window by WebKit's reading
+/// of the HTML rule (a `popup` feature, a size or position, or turned-off
+/// toolbars), or, as in Arc, a script's `window.open` with no features whose
+/// page keeps its opener. target=_blank links and `noopener` windows are
+/// tabs. Outside the handler this is false.
 pub fn popup_request_wants_popup() -> bool {
     unsafe { eclipse_popup_request_wants_popup() != 0 }
 }
 
+/// Opens a Little Eclipse window (menu.m) for a popup `features` describes,
+/// built on the configuration WebKit handed the opener, and returns its
+/// webview for `NewWindowResponse::Create`. `None` when the request came
+/// without a user gesture, would exceed the popup limits, or the native
+/// window could not be made; the caller then opens it as a tab. Must be
+/// called from wry's new-window handler (menu.m reads the gesture state of
+/// the request being handled).
 pub fn open_little_window(
     features: &wry::NewWindowFeatures,
 ) -> Option<objc2::rc::Retained<objc2_web_kit::WKWebView>> {
@@ -388,6 +397,30 @@ pub fn little_window_load(window_id: u64, url: Option<&str>) -> bool {
     let url = url.and_then(|url| CString::new(url).ok());
     let ptr = url.as_ref().map_or(std::ptr::null(), |url| url.as_ptr());
     unsafe { eclipse_little_window_load(window_id, ptr) != 0 }
+}
+
+/// Shows the New Little Eclipse Window bar (⌥⌘N, menu.m) with `suggestions`
+/// (title, http(s) URL) and `accent` for the chosen row. Choosing a row or
+/// typing an address or search comes back as the menu action
+/// `little_command_bar_open:<text>`. `false` when the bar could not show.
+pub fn show_little_command_bar(suggestions: &[(String, String)], accent: [u8; 3]) -> bool {
+    // Titles and URLs from Rust never hold NUL; one that did is left out.
+    let pairs: Vec<(CString, CString)> = suggestions
+        .iter()
+        .filter_map(|(title, url)| {
+            Some((
+                CString::new(title.as_str()).ok()?,
+                CString::new(url.as_str()).ok()?,
+            ))
+        })
+        .collect();
+    let titles: Vec<*const c_char> = pairs.iter().map(|(title, _)| title.as_ptr()).collect();
+    let urls: Vec<*const c_char> = pairs.iter().map(|(_, url)| url.as_ptr()).collect();
+    let [r, g, b] = accent.map(|c| f64::from(c) / 255.0);
+    // The pointers stay valid for the call: `pairs` owns the strings.
+    unsafe {
+        eclipse_show_little_command_bar(titles.as_ptr(), urls.as_ptr(), titles.len(), r, g, b) != 0
+    }
 }
 
 /// Frames every Little Eclipse window in the current Space's theme colour.

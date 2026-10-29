@@ -14,12 +14,17 @@ var S = {
   nocontent: function () { var w = window.open(V + '/generate_204', 'x', 'width=480,height=600'); setTimeout(function () { fake(w); }, 800); },
   blankthen: function () { var w = window.open('', 'x', 'width=480,height=600'); w.location = V + '/slow'; setTimeout(function () { fake(w); }, 800); },
   legit: function () { window.open(V + '/pop.html', 'x', 'width=480,height=600'); },
-  // Popup windows that give no (or only part of a) size, and a plain
-  // window.open, which is a tab.
+  // Popup windows that give no (or only part of a) size, a window.open with
+  // no features (which keeps its opener, so it is a window too, as in Arc),
+  // and a noopener one, which is a tab. blanklink clicks a target=_blank link.
   popupkw: function () { window.open(V + '/pop.html', 'x', 'popup'); },
   widthonly: function () { window.open(V + '/pop.html', 'x', 'width=520'); },
   notoolbar: function () { window.open(V + '/pop.html', 'x', 'toolbar=no,location=no,menubar=no'); },
   plainopen: function () { window.open(V + '/pop.html', 'x'); },
+  noopener: function () { window.open(V + '/pop.html', '_blank', 'noopener'); },
+  blanklink: function () {},
+  copylink: function () { window.open(V + '/pop.html', 'x', 'width=480,height=600'); },
+  siteinfo: function () { window.open(V + '/pop.html', 'x', 'width=480,height=600'); },
   eclipse: function () { window.open('/eimg.html', 'x', 'width=480,height=600'); },
   sameorigin: function () { window.open('/same.html', 'x', 'width=480,height=600'); },
   five: function () { for (var i = 0; i < 5; i++) window.open('/pop.html?n=' + i, 'w' + i, 'width=400,height=300'); },
@@ -36,6 +41,7 @@ var S = {
   openkey: function () { window.open(V + '/pop.html', 'x', 'width=480,height=600'); },
   // Standalone windows are opened by the harness itself (no opener).
   standalone: function () {}, address: function () {}, addreclipse: function () {}, longhost: function () {},
+  longpath: function () {}, commandbar: function () {}, commandbarpick: function () {}, commandbarclose: function () {},
   dlstandalone: function () {}, dlnotab: function () {}, dllink: function () {}, dlattr: function () {},
   // A popup whose page turns out to be a file.
   dlpopup: function () { window.open('/dl/slow-popup.zip', 'x', 'popup'); },
@@ -45,5 +51,13 @@ var S = {
 };
 var clicks = 0, popup = null;
 if (s === 'nogesture') { window.open('/pop.html', 'x', 'width=480,height=600'); }
-document.getElementById('b').onclick = function () { S[s](); };
+if (s === 'blanklink') {
+  // A real link, filling the page like the button.
+  var a = document.createElement('a');
+  a.href = V + '/pop.html'; a.target = '_blank'; a.textContent = 'link';
+  a.style.cssText = 'display:block;height:100%;font-size:30px';
+  document.body.replaceChild(a, document.getElementById('b'));
+} else {
+  document.getElementById('b').onclick = function () { S[s](); };
+}
 </script></body></html>

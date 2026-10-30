@@ -692,6 +692,85 @@ body.is-fullscreen #traffic-lights {
   opacity: 1;
 }
 
+/* "Eclipse 1.0.2 is available": above the bottom bar after an update check
+   found a newer release (Rust decides when it shows; only the version is
+   sent, as text). Download sits under the text so the message has the
+   width of the row (and wraps, rather than being cut, at narrow widths). */
+.update-notice {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) 22px;
+  align-items: center;
+  column-gap: 7px;
+  row-gap: 5px;
+  margin: 0 8px 4px 8px;
+  padding: 6px 4px 7px 9px;
+  border-radius: 9px;
+  background: var(--bg-card);
+  border: 0.5px solid var(--border-hairline);
+  flex-shrink: 0;
+  min-width: 0;
+  animation: popoverFadeIn 0.18s var(--ease-spring) both;
+}
+
+.update-notice[hidden] {
+  display: none;
+}
+
+.update-notice-icon {
+  grid-column: 1;
+  grid-row: 1;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.update-notice-text {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+.update-notice-download {
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: start;
+  height: 22px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.update-notice-download:hover {
+  background: var(--accent-glow);
+}
+
+.update-notice .btn-icon {
+  grid-column: 3;
+  grid-row: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-dim);
+}
+
 /* Library / New / tab context menus. */
 .sb-menu {
   position: fixed;
@@ -2387,6 +2466,14 @@ body.is-collapsed-state:not(.floating-popout) *::after {
 <!-- Tab List (supports drag-and-drop & Tidy Tabs groups) -->
 <div class="tab-list" id="tab-container" role="group" aria-label="Tabs"></div>
 
+<!-- Update notice (a newer release; see updateUpdateNotice) -->
+<div class="update-notice" id="update-notice" role="status" hidden>
+  <svg class="update-notice-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v8M8.5 12.5 12 16l3.5-3.5"/></svg>
+  <span class="update-notice-text" id="update-notice-text">A new version of Eclipse is available</span>
+  <button type="button" class="update-notice-download" id="btn-update-download" title="Download the new version in a new tab">Download</button>
+  <button type="button" class="btn-icon" id="btn-update-dismiss" title="Hide until Eclipse restarts" aria-label="Dismiss">×</button>
+</div>
+
 <!-- Bottom bar: Library (left), Space dots (middle), New (right) -->
 <div class="arc-bottom-bar">
   <div class="bottom-left-actions">
@@ -3395,6 +3482,7 @@ function applyThemeVisuals(theme) {
 function applyAccentVisuals(color) {
   document.documentElement.style.setProperty('--accent', color);
   document.documentElement.style.setProperty('--accent-subtle', color + '29');
+  document.documentElement.style.setProperty('--accent-glow', color + '59');
 }
 
 function applyTheme(name) {
@@ -3542,6 +3630,32 @@ function syncSettingsControls() {
   });
 }
 
+// The update notice. Rust sends only whether it shows and the version; the
+// buttons send commands without data (Rust picks what Download opens).
+function updateUpdateNotice(update) {
+  const notice = document.getElementById('update-notice');
+  if (!notice) return;
+  const version = update && typeof update.available_version === 'string' ? update.available_version : '';
+  const show = !!(update && update.notice && version);
+  notice.hidden = !show;
+  if (show) {
+    const text = document.getElementById('update-notice-text');
+    const label = `Eclipse ${version} is available`;
+    if (text.textContent !== label) {
+      text.textContent = label;
+      text.title = label;
+    }
+  }
+}
+
+document.getElementById('btn-update-download').addEventListener('click', () => {
+  sendCommand({ action: 'download_update' });
+});
+document.getElementById('btn-update-dismiss').addEventListener('click', () => {
+  document.getElementById('update-notice').hidden = true;
+  sendCommand({ action: 'dismiss_update_notice' });
+});
+
 window.updateMemoryUsage = function(mb) {
   const ramEl = document.getElementById('ram-text');
   if (ramEl && typeof mb === 'number') {
@@ -3655,6 +3769,7 @@ window.updateBrowserState = function(state) {
   if (typeof state.memory_mb === 'number') {
     window.updateMemoryUsage(state.memory_mb);
   }
+  updateUpdateNotice(state.update);
 
   if (configChanged) {
     const theme = currentConfig.theme || 'eclipse';

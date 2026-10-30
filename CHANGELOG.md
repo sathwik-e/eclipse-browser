@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Update available notices.** About once a day (at most, also across
+  relaunches), Eclipse asks GitHub's releases API whether a newer version is
+  out. Nothing is installed automatically. A newer release shows a notice
+  above the sidebar's bottom bar ("Eclipse 1.0.2 is available") with
+  Download and ×, and the app menu item reads "Update Available: 1.0.2…".
+  Download opens the release's `.dmg` (else `.zip`) for this Mac (Apple
+  silicon or Intel) in a new tab, so the downloads list handles it (the
+  tab closes once the file downloads and is never restored), or the
+  release page when there is no such file. Only links to this repository's
+  GitHub releases are ever opened; anything else falls back to the latest
+  release page. Release notes are shown as plain text only.
+  - **Eclipse > Check for Updates…** (under About Eclipse) always asks right
+    away and answers in an alert: up to date, a newer version (Download,
+    Later, Release Notes, Skip This Version) or why the check failed.
+  - **Settings > Updates**: "Check for updates automatically" (on by
+    default), Check Now and when the last check was. Skip This Version hides
+    the notice until a newer release appears; × hides it until the next
+    launch.
+  - Requests go out without cookies, cache or credentials, with only an
+    `Eclipse/<version>` user agent. Offline, rate-limited or failed automatic
+    checks stay silent and are retried later. Only Eclipse's own pages (the
+    sidebar, Settings and its other eclipse:// pages) can start a check or a
+    download; websites and Little Eclipse windows cannot.
+
 ## 1.0.1 — 2026-10-29
 
 ### Added

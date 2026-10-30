@@ -1,4 +1,5 @@
 use crate::config::{BrowserConfig, DownloadItem, EaselItem, FavoriteShortcut, NoteItem, SpaceProfile};
+use crate::updates::UpdateUiState;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -70,6 +71,14 @@ pub enum UserEvent {
     ExtensionDownloaded {
         ext_id: String,
         result: Result<PathBuf, String>,
+    },
+    /// menu.m's update-check request `request_id` finished: the HTTP
+    /// `status` (0: no response, with the system's `error`) and the body.
+    UpdateFeed {
+        request_id: u64,
+        status: i32,
+        body: Vec<u8>,
+        error: Option<String>,
     },
     TickMemory,
     HoverExpandSidebar,
@@ -281,6 +290,15 @@ pub enum IpcCommand {
     WindowZoom,
     DragWindow,
     OpenDevtools,
+    /// Settings' Check Now (the result shows on the page).
+    CheckForUpdates,
+    /// The update notice's or Settings' Download: Rust opens the file it
+    /// picked for the newest known release (never a URL from the page).
+    DownloadUpdate,
+    /// The update notice's ×: hidden for the rest of this run.
+    DismissUpdateNotice,
+    /// Settings' Skip This Version, for the newest known release.
+    SkipUpdate,
     Ready,
 }
 
@@ -321,6 +339,7 @@ pub struct BrowserUiState {
     /// Resident memory of the browser (UI) process only; WebContent processes
     /// are not included.
     pub memory_mb: f64,
+    pub update: UpdateUiState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<BrowserConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]

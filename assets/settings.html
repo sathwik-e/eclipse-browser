@@ -829,6 +829,30 @@ textarea.code-input {
   </div>
 </div>
 
+<div class="card" id="updates-card">
+  <div class="card-header">
+    <h2>Updates</h2>
+  </div>
+  <div class="row">
+    <div>
+      <div style="font-weight: 500;">Check for updates automatically</div>
+      <div class="hint" style="margin-top:2px;">About once a day Eclipse asks GitHub (api.github.com) for its newest release and shows a notice in the sidebar when there is one. Only the app's name and version are sent. Nothing is downloaded or installed until you choose Download.</div>
+    </div>
+    <input type="checkbox" id="chk-update-auto" checked />
+  </div>
+  <div class="row">
+    <div style="min-width:0;">
+      <div style="font-weight: 500;" id="txt-update-status">Eclipse</div>
+      <div class="hint" style="margin-top:2px;" id="txt-update-detail">Never checked</div>
+    </div>
+    <div style="display:flex; gap:6px; flex-shrink:0; margin-left:12px;">
+      <button type="button" class="btn" id="btn-update-skip" hidden>Skip This Version</button>
+      <button type="button" class="btn primary" id="btn-update-download" hidden>Download</button>
+      <button type="button" class="btn" id="btn-update-check">Check Now</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // Config only ever arrives from Rust: the init seed (window.__ECLIPSE_CONFIG__)
 // and window.onEclipseConfigUpdated(cfg, activeUrl). The page never sends the
@@ -848,6 +872,8 @@ const DEFAULT_CONFIG = {
   tidy_tab_titles: true,
   tidy_downloads: true,
   ai_in_command_bar: true,
+  check_for_updates: true,
+  update_last_checked: 0,
   adblock_enabled: true,
   adblock_disabled_domains: [],
   webextensions_enabled: true,
@@ -1015,8 +1041,10 @@ function renderUI() {
   document.querySelectorAll('input[data-max-setting]').forEach(input => {
     input.checked = cfg[input.dataset.maxSetting] !== false;
   });
+  document.getElementById('chk-update-auto').checked = cfg.check_for_updates !== false;
   setTextIfIdle('txt-custom-js', 'custom_js');
   setTextIfIdle('txt-custom-css', 'custom_css');
+  renderUpdates();
 
   const disabledDomains = Array.isArray(cfg.adblock_disabled_domains) ? cfg.adblock_disabled_domains : [];
   renderSiteAdblockRow(disabledDomains);
@@ -1322,6 +1350,77 @@ document.getElementById('chk-extensions').addEventListener('change', (e) => {
   area.addEventListener('input', () => setSettingDebounced(key, area.value));
   area.addEventListener('blur', () => flushSettings());
 });
+
+// The update check's state (state.update, pushed by Rust to the active
+// internal page). Only versions and short messages arrive, shown as text.
+let updateState = null;
+
+function describeLastCheck(seconds) {
+  if (!seconds) return 'Never checked';
+  const ago = Math.max(0, Math.round(Date.now() / 1000 - seconds));
+  if (ago < 60) return 'Last checked just now';
+  if (ago < 3600) {
+    const m = Math.round(ago / 60);
+    return `Last checked ${m} minute${m === 1 ? '' : 's'} ago`;
+  }
+  if (ago < 86400) {
+    const h = Math.round(ago / 3600);
+    return `Last checked ${h} hour${h === 1 ? '' : 's'} ago`;
+  }
+  return 'Last checked ' + new Date(seconds * 1000).toLocaleDateString(undefined, { dateStyle: 'medium' });
+}
+
+function renderUpdates() {
+  const u = updateState || {};
+  const current = typeof u.current_version === 'string' && u.current_version ? u.current_version : '';
+  const available = typeof u.available_version === 'string' ? u.available_version : '';
+  const status = document.getElementById('txt-update-status');
+  const detail = document.getElementById('txt-update-detail');
+  const checkBtn = document.getElementById('btn-update-check');
+  let title = current ? `Eclipse ${current}` : 'Eclipse';
+  let line = describeLastCheck(Number(cfg.update_last_checked) || 0);
+  if (u.checking) {
+    line = 'Checking for updates…';
+  } else if (u.status === 'failed') {
+    // Ahead of `available`: a release an earlier check found stays known
+    // after a failed check, and Check Now must still report the failure.
+    if (available) title = `Eclipse ${available} is available`;
+    line = 'Couldn’t check for updates. ' + String(u.error || '');
+  } else if (available) {
+    title = `Eclipse ${available} is available`;
+    line = (u.skipped ? 'You skipped this version. ' : '') + `You have ${current || 'an older version'}. ` + line + '.';
+  } else if (u.status === 'up_to_date') {
+    title = `You’re up to date (Eclipse ${current})`;
+  }
+  status.textContent = title;
+  detail.textContent = line;
+  checkBtn.disabled = !!u.checking;
+  checkBtn.textContent = u.checking ? 'Checking…' : 'Check Now';
+  document.getElementById('btn-update-download').hidden = !available;
+  document.getElementById('btn-update-skip').hidden = !available || !!u.skipped;
+}
+
+document.getElementById('chk-update-auto').addEventListener('change', (e) => {
+  setSetting('check_for_updates', e.target.checked);
+});
+document.getElementById('btn-update-check').addEventListener('click', () => {
+  postIpc({ action: 'check_for_updates' });
+  updateState = Object.assign({}, updateState, { checking: true });
+  renderUpdates();
+});
+document.getElementById('btn-update-download').addEventListener('click', () => {
+  postIpc({ action: 'download_update' });
+});
+document.getElementById('btn-update-skip').addEventListener('click', () => {
+  postIpc({ action: 'skip_update' });
+});
+
+window.onEclipseStateUpdated = function(state) {
+  if (state && state.update && typeof state.update === 'object') {
+    updateState = state.update;
+    renderUpdates();
+  }
+};
 
 window.onEclipseConfigUpdated = function(newCfg, activeUrl) {
   if (newCfg && typeof newCfg === 'object') {

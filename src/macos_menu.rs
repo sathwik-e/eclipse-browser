@@ -6,6 +6,7 @@ use tao::event_loop::EventLoopProxy;
 use crate::app::CommandBarSuggestion;
 use crate::events::UserEvent;
 use crate::tab::PolicyContext;
+use crate::updates::AlertSpec;
 
 type MenuCallback = extern "C" fn(*const c_char);
 
@@ -65,7 +66,34 @@ unsafe extern "C" {
     ) -> i32;
     fn eclipse_set_little_window_theme(red: f64, green: f64, blue: f64, dark: i32);
     fn eclipse_close_all_little_windows();
+    fn eclipse_fetch_update_feed(
+        url: *const c_char,
+        user_agent: *const c_char,
+        request_id: u64,
+        callback: UpdateFeedCallback,
+    ) -> i32;
+    fn eclipse_show_update_alert(
+        message: *const c_char,
+        info: *const c_char,
+        titles: *const *const c_char,
+        actions: *const *const c_char,
+        count: usize,
+        cancel_index: i32,
+        warning: i32,
+    ) -> i32;
+    fn eclipse_set_update_menu_title(title: *const c_char);
 }
+
+/// menu.m's update-check result, called on a URL-session queue (not the
+/// main thread): HTTP `status` (0: no response), the body (`length` bytes,
+/// may be null) and, without a response, the system's error description.
+type UpdateFeedCallback = extern "C" fn(
+    request_id: u64,
+    status: i32,
+    body: *const u8,
+    length: usize,
+    error: *const c_char,
+);
 
 /// `kind`: 0 = provisional navigation failed, 1 = committed navigation failed.
 /// `domain` is the NSError domain. Strings are UTF-8, may be null. Every
@@ -453,4 +481,81 @@ pub fn set_little_window_theme(rgb: [u8; 3], dark: bool) {
 /// Closes every Little Eclipse window (the app is quitting).
 pub fn close_all_little_windows() {
     unsafe { eclipse_close_all_little_windows() }
+}
+
+extern "C" fn handle_update_feed(request_id: u64, status: i32, body: *const u8, length: usize, error: *const c_char) {
+    let body = if body.is_null() || length == 0 {
+        Vec::new()
+    } else {
+        // menu.m keeps the bytes alive for the duration of the call.
+        unsafe { std::slice::from_raw_parts(body, length) }.to_vec()
+    };
+    let error = (!error.is_null()).then(|| c_string(error));
+    // The menu's proxy: installed before anything can start a check.
+    let proxy = MENU_PROXY
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().cloned());
+    if let Some(proxy) = proxy {
+        let _ = proxy.send_event(UserEvent::UpdateFeed {
+            request_id,
+            status,
+            body,
+            error,
+        });
+    }
+}
+
+/// Asks `url` (the releases API, see `updates::feed_url`) for the latest
+/// release with an ephemeral, cookie-less and cache-less session; the result
+/// arrives as `UserEvent::UpdateFeed` for `request_id`. `false` when no
+/// request was made (not an http(s) URL).
+pub fn fetch_update_feed(url: &str, user_agent: &str, request_id: u64) -> bool {
+    let (Ok(url), Ok(user_agent)) = (CString::new(url), CString::new(user_agent)) else {
+        return false;
+    };
+    unsafe { eclipse_fetch_update_feed(url.as_ptr(), user_agent.as_ptr(), request_id, handle_update_feed) != 0 }
+}
+
+/// Shows `alert` as a sheet on the browser window; the button chosen comes
+/// back as its menu action (none for a button without one). `false` when it
+/// could not be shown.
+pub fn show_update_alert(alert: &AlertSpec) -> bool {
+    let Ok(message) = CString::new(alert.message.as_str()) else {
+        return false;
+    };
+    // Release notes come from the network: a NUL never truncates the alert.
+    let Ok(info) = CString::new(alert.info.replace('\0', "")) else {
+        return false;
+    };
+    let buttons: Vec<(CString, CString)> = alert
+        .buttons
+        .iter()
+        .filter_map(|(title, action)| Some((CString::new(*title).ok()?, CString::new(action.as_str()).ok()?)))
+        .collect();
+    let titles: Vec<*const c_char> = buttons.iter().map(|(title, _)| title.as_ptr()).collect();
+    let actions: Vec<*const c_char> = buttons.iter().map(|(_, action)| action.as_ptr()).collect();
+    let cancel = alert
+        .cancel
+        .and_then(|index| i32::try_from(index).ok())
+        .unwrap_or(-1);
+    // The pointers stay valid for the call: menu.m copies the strings.
+    unsafe {
+        eclipse_show_update_alert(
+            message.as_ptr(),
+            info.as_ptr(),
+            titles.as_ptr(),
+            actions.as_ptr(),
+            titles.len(),
+            cancel,
+            i32::from(alert.warning),
+        ) != 0
+    }
+}
+
+/// Retitles Eclipse > Check for Updates… ("Update Available: 1.0.2…").
+pub fn set_update_menu_title(title: &str) {
+    if let Ok(title) = CString::new(title) {
+        unsafe { eclipse_set_update_menu_title(title.as_ptr()) }
+    }
 }

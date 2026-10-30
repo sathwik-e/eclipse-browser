@@ -6,6 +6,7 @@ mod macos_menu;
 mod max;
 mod tab;
 mod ui_assets;
+mod updates;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -236,6 +237,14 @@ fn main() {
                 }
                 UserEvent::MenuAction(action) => {
                     app.handle_menu_action(&action);
+                }
+                UserEvent::UpdateFeed {
+                    request_id,
+                    status,
+                    body,
+                    error,
+                } => {
+                    app.handle_update_feed(request_id, status, &body, error.as_deref());
                 }
                 UserEvent::TickMemory => {
                     app.handle_maintenance_tick();

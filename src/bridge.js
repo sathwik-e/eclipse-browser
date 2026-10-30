@@ -313,13 +313,17 @@
   /* ------------------------------------------------- single-page-app URLs */
   var lastReportedUrl = location.href;
 
-  function reportUrl() {
+  // kind: 'push' (a new back-forward entry), 'replace' (the same entry at a
+  // new address), 'pop' (back or forward within the document) or 'hash'.
+  // History records a visit for a new entry only.
+  function reportUrl(kind) {
     if (internal) return;
     var href = location.href;
     if (!href || href === lastReportedUrl || !isHttpUrl(href)) return;
     lastReportedUrl = href;
     var payload = message('url_changed');
     payload.url = href;
+    payload.kind = kind;
     post(payload);
     scheduleFaviconScan(400);
   }
@@ -329,18 +333,18 @@
     var originalReplaceState = history.replaceState;
     history.pushState = function () {
       var result = originalPushState.apply(this, arguments);
-      reportUrl();
+      reportUrl('push');
       return result;
     };
     history.replaceState = function () {
       var result = originalReplaceState.apply(this, arguments);
-      reportUrl();
+      reportUrl('replace');
       return result;
     };
   } catch (_) {}
-  window.addEventListener('popstate', reportUrl, true);
-  window.addEventListener('hashchange', reportUrl, true);
-  window.addEventListener('pageshow', reportUrl, true);
+  window.addEventListener('popstate', function () { reportUrl('pop'); }, true);
+  window.addEventListener('hashchange', function () { reportUrl('hash'); }, true);
+  window.addEventListener('pageshow', function () { reportUrl('pop'); }, true);
 
   /* ---------------------------------------------------------- DOM helpers */
   // DOM is built node by node: Trusted Types sites (YouTube) throw on any

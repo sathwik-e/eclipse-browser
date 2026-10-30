@@ -1,4 +1,5 @@
 use crate::config::{BrowserConfig, DownloadItem, EaselItem, FavoriteShortcut, NoteItem, SpaceProfile};
+use crate::history::{ClearRange, HistoryCursor};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -96,6 +97,21 @@ pub struct DocumentTrust {
 pub struct DownloadOrigin {
     pub tab_id: usize,
     pub page_url: String,
+}
+
+/// How a page's own document changed its address (bridge.js `url_changed`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UrlChangeKind {
+    /// history.pushState: a new back-forward entry, so a new visit.
+    #[default]
+    Push,
+    /// history.replaceState: the same entry under a new address.
+    Replace,
+    /// Back or forward within the document (popstate, pageshow).
+    Pop,
+    /// A fragment navigation (hashchange).
+    Hash,
 }
 
 #[derive(Debug, Deserialize)]
@@ -243,6 +259,38 @@ pub enum IpcCommand {
         id: String,
     },
     OpenNotesTab,
+    /// ⌘Y, the Library menu, the command bar: eclipse://history.
+    OpenHistoryTab,
+    /// eclipse://history asks for a page of entries (newest first) matching
+    /// `query`; the reply goes to its `onEclipseHistory` with `request_id`.
+    HistoryQuery {
+        #[serde(default)]
+        query: String,
+        #[serde(default)]
+        offset: usize,
+        #[serde(default)]
+        limit: Option<usize>,
+        /// The last row the page already shows: the entries after it.
+        #[serde(default)]
+        after: Option<HistoryCursor>,
+        #[serde(default)]
+        request_id: u64,
+    },
+    /// eclipse://history: delete one entry.
+    HistoryDelete {
+        url: String,
+    },
+    /// eclipse://history or Preferences: "Clear browsing history…".
+    HistoryClear {
+        range: ClearRange,
+    },
+    /// A command bar (the sidebar's, or the new-tab page's search box) asks
+    /// for history matching what is typed.
+    HistorySuggest {
+        query: String,
+        #[serde(default)]
+        request_id: u64,
+    },
     SaveEasel {
         id: Option<String>,
         title: String,
@@ -275,6 +323,8 @@ pub enum IpcCommand {
     },
     UrlChanged {
         url: String,
+        #[serde(default)]
+        kind: UrlChangeKind,
     },
     WindowClose,
     WindowMinimize,

@@ -525,6 +525,7 @@ body.eclipse-active .eclipse-loader > * {
 
 <div class="arc-quick-deck">
   <button class="quick-pill" data-action="open_notes_tab">📝 Notes</button>
+  <button class="quick-pill" data-action="open_history_tab">🕘 History</button>
   <button class="quick-pill" data-action="open_easel_tab">🎨 Easel</button>
   <button class="quick-pill" data-action="tidy_tabs">✨ Tidy Tabs</button>
   <button class="quick-pill" data-action="command_bar_open_url" data-command="open_downloads">⬇️ Downloads</button>
@@ -533,6 +534,11 @@ body.eclipse-active .eclipse-loader > * {
 <script>
 let openTabs = [];
 let selectedIndex = 0;
+// Pages from history matching the box, as Eclipse last answered for
+// `historyQuery`; replies to older queries are dropped by request id.
+let historyItems = [];
+let historyQuery = '';
+let historyRequest = 0;
 
 function postIpc(cmd) {
   if (window.__eclipseIpc) {
@@ -611,6 +617,18 @@ function getCommandItems() {
       });
   }
 
+  if (historyQuery === query) {
+    historyItems.forEach(h => {
+      items.push({
+        id: null,
+        title: h.title || h.host || h.url,
+        url: h.url,
+        icon: h.icon || '',
+        is_open: false
+      });
+    });
+  }
+
   return items;
 }
 
@@ -619,6 +637,7 @@ function cleanUrl(url) {
   if (url.startsWith('eclipse://settings')) return 'Preferences';
   if (url.startsWith('eclipse://notes')) return 'Eclipse Notes';
   if (url.startsWith('eclipse://easel')) return 'Eclipse Easel';
+  if (url.startsWith('eclipse://history')) return 'History';
   try {
     const u = new URL(url);
     return u.hostname.replace(/^www\./, '');
@@ -731,10 +750,29 @@ searchBox.addEventListener('keydown', (e) => {
 
 let eclipseIdleTimer = null;
 
+function requestHistorySuggestions() {
+  const query = (searchBox.value || '').trim();
+  if (!query) {
+    historyItems = [];
+    historyQuery = '';
+    return;
+  }
+  historyRequest += 1;
+  postIpc({ action: 'history_suggest', query, request_id: historyRequest });
+}
+
+window.onEclipseHistorySuggestions = function(reply) {
+  if (!reply || reply.request_id !== historyRequest || !Array.isArray(reply.items)) return;
+  historyItems = reply.items;
+  historyQuery = reply.query || '';
+  if (searchBox.value.trim() === historyQuery) renderCommandResults();
+};
+
 searchBox.addEventListener('input', () => {
   // A new query starts from the top result (search), not the old slot.
   selectedIndex = 0;
   renderCommandResults();
+  requestHistorySuggestions();
   document.body.classList.add('eclipse-active');
   clearTimeout(eclipseIdleTimer);
   eclipseIdleTimer = setTimeout(() => document.body.classList.remove('eclipse-active'), 1600);

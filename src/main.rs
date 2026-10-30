@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod events;
+mod history;
 #[cfg(target_os = "macos")]
 mod macos_menu;
 mod max;

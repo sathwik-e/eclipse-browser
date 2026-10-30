@@ -1,6 +1,6 @@
 [package]
 name = "eclipse"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 rust-version = "1.88"
 description = "A fast, minimal macOS web browser with a vertical tab sidebar, built on the system WebKit"

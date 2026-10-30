@@ -2135,6 +2135,13 @@ body.is-collapsed-state:not(.floating-popout) *::after {
   font-size: 13px;
 }
 
+.arc-cmd-item-icon img {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
 .arc-cmd-item-info {
   display: flex;
   flex-direction: column;
@@ -2390,7 +2397,7 @@ body.is-collapsed-state:not(.floating-popout) *::after {
 <!-- Bottom bar: Library (left), Space dots (middle), New (right) -->
 <div class="arc-bottom-bar">
   <div class="bottom-left-actions">
-    <button type="button" class="btn-icon" id="btn-library" title="Library: Downloads, Archive, Notes, Easel" aria-label="Library" aria-haspopup="menu" aria-expanded="false" aria-controls="library-menu">
+    <button type="button" class="btn-icon" id="btn-library" title="Library: Downloads, History, Archive, Notes, Easel" aria-label="Library" aria-haspopup="menu" aria-expanded="false" aria-controls="library-menu">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/></svg>
       <span class="btn-badge" id="downloads-badge">0</span>
     </button>
@@ -2415,6 +2422,11 @@ body.is-collapsed-state:not(.floating-popout) *::after {
     <span class="sb-menu-label">Downloads</span>
     <span class="sb-menu-badge" id="library-downloads-count" style="display:none;"></span>
     <kbd>⌘J</kbd>
+  </button>
+  <button type="button" class="sb-menu-item" role="menuitem" id="btn-history">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <span class="sb-menu-label">History</span>
+    <kbd>⌘Y</kbd>
   </button>
   <button type="button" class="sb-menu-item" role="menuitem" id="btn-archive">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
@@ -2834,6 +2846,7 @@ function omnibarDisplayValue(url) {
   if (url.startsWith('eclipse://settings')) return 'eclipse://settings';
   if (url.startsWith('eclipse://notes')) return 'eclipse://notes';
   if (url.startsWith('eclipse://easel')) return 'eclipse://easel';
+  if (url.startsWith('eclipse://history')) return 'eclipse://history';
   if (isWebUrl(url)) {
     try {
       const host = new URL(url).host.replace(/^www\./, '');
@@ -4016,6 +4029,7 @@ function cleanUrl(url) {
   if (url.startsWith('eclipse://settings')) return 'Preferences';
   if (url.startsWith('eclipse://notes')) return 'Eclipse Notes';
   if (url.startsWith('eclipse://easel')) return 'Eclipse Easel';
+  if (url.startsWith('eclipse://history')) return 'History';
   try {
     const u = new URL(url);
     return u.hostname.replace(/^www\./, '') || url;
@@ -4277,6 +4291,7 @@ const btnTidyTabs = document.getElementById('btn-tidy-tabs');
 if (btnTidyTabs) btnTidyTabs.addEventListener('click', () => sendCommand({ action: 'tidy_tabs' }));
 
 document.getElementById('btn-downloads').addEventListener('click', () => window.openDownloadsDrawer());
+document.getElementById('btn-history').addEventListener('click', () => sendCommand({ action: 'open_history_tab' }));
 document.getElementById('btn-close-downloads').addEventListener('click', closeDownloadsDrawer);
 document.getElementById('btn-open-downloads-folder').addEventListener('click', () => sendCommand({ action: 'open_downloads_folder' }));
 document.getElementById('btn-clear-downloads').addEventListener('click', () => sendCommand({ action: 'clear_downloads' }));
@@ -4544,7 +4559,8 @@ const CMD_ICONS = {
   globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>',
   star: '<svg viewBox="0 0 24 24" fill="#E5A93C" width="14" height="14"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
   tab: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18"/></svg>',
-  command: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>'
+  command: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>',
+  history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
 };
 
 const CMD_COMMANDS = [
@@ -4554,6 +4570,7 @@ const CMD_COMMANDS = [
   { title: 'Reopen Closed Tab', sub: '⇧⌘T', command: { action: 'reopen_closed_tab' } },
   { title: 'Preferences', sub: '⌘,', command: { action: 'open_settings' } },
   { title: 'Downloads', sub: '⌘J', command: { action: 'command_bar_open_url', command: 'open_downloads' } },
+  { title: 'History', sub: '⌘Y', command: { action: 'open_history_tab' } },
   { title: 'Notes', sub: 'Open Eclipse Notes', command: { action: 'open_notes_tab' } },
   { title: 'Easel', sub: 'Open Eclipse Easel', command: { action: 'open_easel_tab' } },
   { title: 'Tidy Tabs', sub: 'Group & deduplicate open tabs', command: { action: 'tidy_tabs' } },
@@ -4621,6 +4638,59 @@ function searchUrlFor(query) {
   }
 }
 
+// History matching what is typed comes from Rust (history_suggest, answered
+// through onHistorySuggestions); only the answer to the latest request is
+// shown, and only while the bar still holds that text.
+let cmdHistoryRequest = 0;
+let cmdHistoryQuery = '';
+let cmdHistoryItems = [];
+
+function requestHistorySuggestions(text) {
+  cmdHistoryRequest += 1;
+  const q = (text || '').trim();
+  if (!q || cmdMode) {
+    cmdHistoryQuery = '';
+    cmdHistoryItems = [];
+    return;
+  }
+  sendCommand({ action: 'history_suggest', query: q, request_id: cmdHistoryRequest });
+}
+
+window.onHistorySuggestions = function(reply) {
+  if (!reply || reply.request_id !== cmdHistoryRequest || !commandBarOpen) return;
+  cmdHistoryQuery = typeof reply.query === 'string' ? reply.query : '';
+  cmdHistoryItems = Array.isArray(reply.items) ? reply.items.filter(item => item && isWebUrl(item.url)) : [];
+  if (!cmdMode && cmdInput.value.trim() === cmdHistoryQuery && cmdHistoryItems.length > 0) {
+    renderCommandSuggestions(cmdInput.value);
+  }
+};
+
+// The same address however it is spelled ("https://a.example" and
+// "https://a.example/").
+function urlKey(url) {
+  try {
+    return new URL(url).href;
+  } catch (_) {
+    return url || '';
+  }
+}
+
+// The row's icon: the site's own (history rows) or a glyph.
+function commandItemIcon(item) {
+  const glyph = staticMarkup(CMD_ICONS[item.icon] || CMD_ICONS.command);
+  if (!item.favicon || !isWebUrl(item.favicon)) return glyph;
+  const frag = document.createDocumentFragment();
+  const img = el('img');
+  img.alt = '';
+  img.decoding = 'async';
+  img.draggable = false;
+  img.referrerPolicy = 'no-referrer';
+  img.addEventListener('error', () => img.replaceWith(staticMarkup(CMD_ICONS[item.icon] || CMD_ICONS.command)), { once: true });
+  img.src = item.favicon;
+  frag.appendChild(img);
+  return frag;
+}
+
 function renderCommandSuggestions(query) {
   const container = document.getElementById('arc-cmd-results');
   container.replaceChildren();
@@ -4662,11 +4732,24 @@ function renderCommandSuggestions(query) {
     .map(t => ({ title: t.title || cleanUrl(t.url), sub: cleanUrl(t.url), icon: 'tab', command: { action: 'select_tab', id: t.id } }));
   sections.push({ title: 'Open Tabs', items: tabs });
 
+  // Rust leaves out favourites and the tabs listed above; checked again here
+  // in case they changed since it answered.
+  const listed = new Set((currentConfig.favorites || []).map(f => urlKey(f.url))
+    .concat(currentTabs
+      .filter(t => t.is_pinned || t.favorite_index != null || (t.workspace || 'Default') === currentWorkspace)
+      .map(t => urlKey(t.url))));
+  const history = (cmdMode || !q || q !== cmdHistoryQuery) ? [] : cmdHistoryItems
+    .filter(h => !listed.has(urlKey(h.url)))
+    .map(h => ({ title: h.title || h.host || h.url, sub: h.host || cleanUrl(h.url), icon: 'history', favicon: h.icon, command: { action: 'navigate_or_new_tab', url: h.url } }));
+  sections.push({ title: 'History', items: history });
+
   const commands = cmdMode ? [] : CMD_COMMANDS
     .filter(c => (!c.when || c.when()) && matches(c.title))
     .map(c => ({ title: c.title, sub: c.sub, icon: 'command', command: c.command, run: c.run, mode: c.mode }));
   sections.push({ title: 'Commands', items: commands });
 
+  const itemCount = sections.reduce((n, section) => n + section.items.length, 0);
+  if (cmdActiveIndex >= itemCount) cmdActiveIndex = Math.max(0, itemCount - 1);
   sections.forEach(section => {
     if (section.items.length === 0) return;
     if (section.title) container.appendChild(el('div', 'arc-cmd-section-title', section.title));
@@ -4675,7 +4758,7 @@ function renderCommandSuggestions(query) {
       cmdItemsList.push(item);
       const row = el('div', 'arc-cmd-item' + (idx === cmdActiveIndex ? ' active' : ''));
       const icon = el('div', 'arc-cmd-item-icon');
-      icon.appendChild(staticMarkup(CMD_ICONS[item.icon] || CMD_ICONS.command));
+      icon.appendChild(commandItemIcon(item));
       const info = el('div', 'arc-cmd-item-info');
       info.append(el('div', 'arc-cmd-item-title', item.title), el('div', 'arc-cmd-item-sub', item.sub || ''));
       row.append(icon, info);
@@ -4704,6 +4787,7 @@ window.showCommandBar = function() {
     commandBarOpenedAt = Date.now();
     cmdInput.value = '';
     setCommandMode(null);
+    requestHistorySuggestions('');
     renderCommandSuggestions('');
     cmdOverlay.style.display = 'flex';
   }
@@ -4726,6 +4810,7 @@ function closeCommandBar() {
   if (!commandBarOpen) return;
   commandBarOpen = false;
   setCommandMode(null);
+  requestHistorySuggestions('');
   cmdOverlay.style.display = 'none';
   if (document.activeElement === cmdInput) cmdInput.blur();
   sendCommand({ action: 'command_bar_closed' });
@@ -4763,6 +4848,7 @@ function executeCommandItem(item) {
 
 cmdInput.addEventListener('input', (e) => {
   cmdActiveIndex = 0;
+  requestHistorySuggestions(e.target.value);
   renderCommandSuggestions(e.target.value);
 });
 

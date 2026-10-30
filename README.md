@@ -8,7 +8,7 @@ megabytes and starts in under a tenth of a second.
 Eclipse has an Arc-style vertical sidebar that hides itself, Spaces, a
 command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
 
-> **Status:** 1.0.1, macOS 11+ only. The app is ad-hoc signed, not notarized
+> **Status:** 1.0.2, macOS 11+ only. The app is ad-hoc signed, not notarized
 > (see [Installing](#installing)).
 
 ---
@@ -30,9 +30,19 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
 - **Spaces.** Separate tab sets (Work, Personal, …), each with its own theme,
   accent colour and ad-blocking choice. Favourites and pinned tabs show in
   every Space.
-- **Command bar (⌘K).** Jump to an open tab, a favourite, a command (copy the
-  page's link, rename a tab, open a Little Eclipse window, …), or search.
-  It runs in the browser's own sidebar, never inside the web page.
+- **Command bar (⌘K).** Jump to an open tab, a favourite, a page from your
+  history, a command (copy the page's link, rename a tab, open a Little
+  Eclipse window, …), or search. It runs in the browser's own sidebar, never
+  inside the web page.
+- **Browsing history (⌘Y).** History > Show All History, or History in the
+  sidebar's Library menu, opens `eclipse://history`: pages grouped by day,
+  with search, remove-one (the × on hover) and Clear browsing history (last
+  hour, today, today and yesterday, or all). Click a page to open it here,
+  ⌘-click or middle-click for a new tab. Pages visited in tabs and Little
+  Eclipse windows are kept for 90 days (up to 10,000 pages) and suggested in
+  the command bar, the new tab page and the ⌥⌘N bar, ranked by how often and
+  how recently you visited them. "Save browsing history" in Settings > History
+  turns recording off.
 - **Ad and tracker blocking.**
   - Network-level blocking with a native `WKContentRuleList`.
   - Cosmetic filtering and YouTube ad skipping on top of that.
@@ -140,6 +150,12 @@ command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
     extensions or manage tabs.
 - The page bridge never exposes its token to page scripts.
 - Settings, notes and extension code are never injected into websites.
+- Browsing history can only be read or changed by the `eclipse://history`
+  page itself (the Settings page may also clear it, and the new tab page and
+  sidebar only get suggestions for what is typed). Websites, Little Eclipse
+  windows and other internal pages are refused. It is stored in
+  `~/.config/eclipse-browser/history.json`; clearing or removing entries is
+  written to disk straight away.
 - Favicons come from the site itself, not a third-party favicon service.
 - Settings are stored in `~/.config/eclipse-browser/config.json`. An
   unreadable file is backed up instead of being overwritten.
@@ -216,6 +232,7 @@ cargo clippy --all-targets -- -D warnings
 | ⌘D | Bookmark tab as a favourite |
 | ⌘J | Downloads |
 | ⇧⌘N / ⇧⌘E | New note / new easel |
+| ⌘Y | Show all history |
 | ⇧⌘Y | Tidy tabs |
 | ⇧↩ (command bar, address field) | Open the top result (Instant Links) |
 | "chatgpt" or "claude", then Tab (command bar) | Ask ChatGPT or Claude |
@@ -234,6 +251,7 @@ in a web app), the site wins.
 src/main.rs        tao event loop, window, native menu, smoke-test hooks
 src/app.rs         tabs, Spaces, sessions, IPC trust model, state push to the sidebar
 src/max.rs         Max: title and download-name tidying, Instant Links, previews
+src/history.rs     browsing history: store, retention, search, frecency suggestions
 src/tab.rs         one WKWebView per tab, injected scripts, navigation policy, downloads
 src/config.rs      settings model, load/repair/save, settings patches
 src/events.rs      event-loop events, IPC commands, UI state types
@@ -244,7 +262,7 @@ src/menu.m         AppKit menu, window styling, edge hover, content blocker,
                    navigation-failure hooks, JavaScript dialogs, Little
                    Eclipse windows
 src/ui_assets.rs   eclipse:// protocol serving the embedded pages below
-assets/            sidebar, new tab, settings, notes and easel pages; app icon
+assets/            sidebar, new tab, settings, notes, easel and history pages; app icon
 scripts/           packaging (app bundle, dmg, zip), icon generation and the
                    Little Eclipse end-to-end checks
 ```

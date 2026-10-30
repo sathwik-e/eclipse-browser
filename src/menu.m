@@ -281,6 +281,9 @@ void eclipse_install_menu(EclipseMenuCallback callback) {
         [historyMenu addItem:[NSMenuItem separatorItem]];
         EclipseAddItem(historyMenu, @"Home", @selector(performEclipseAction:), @"h",
                        NSEventModifierFlagCommand | NSEventModifierFlagShift, gMenuTarget, @"home");
+        [historyMenu addItem:[NSMenuItem separatorItem]];
+        EclipseAddItem(historyMenu, @"Show All History", @selector(performEclipseAction:), @"y",
+                       NSEventModifierFlagCommand, gMenuTarget, @"show_history");
 
         /* ------------------------------------------------------------ View */
         NSMenuItem *viewMenuItem = [[NSMenuItem alloc] initWithTitle:@"View"
@@ -1021,6 +1024,9 @@ enum {
     /* A script in another webview started the navigation (a Little Eclipse
        popup setting window.opener.location, or targeting the tab by name). */
     ECLIPSE_POLICY_OTHER_VIEW = 4,
+    /* The navigation runs from a user gesture (a link the user clicked), so
+       it is no client-side redirect. */
+    ECLIPSE_POLICY_USER_GESTURE = 8,
 };
 
 typedef void (*EclipseDecidePolicyIMP)(id, SEL, WKWebView *, WKNavigationAction *,
@@ -1028,6 +1034,7 @@ typedef void (*EclipseDecidePolicyIMP)(id, SEL, WKWebView *, WKNavigationAction 
 
 static int gPolicyContext = 0;
 static NSMutableDictionary<NSString *, NSValue *> *gOriginalDecidePolicy = nil;
+static BOOL eclipse_action_user_initiated(WKNavigationAction *action);
 
 static IMP eclipse_original_decide_policy(Class cls) {
     for (Class current = cls; current != Nil; current = class_getSuperclass(current)) {
@@ -1052,6 +1059,9 @@ static void eclipse_decide_policy(id self, SEL _cmd, WKWebView *webView, WKNavig
         context |= ECLIPSE_POLICY_MAIN_FRAME;
         if (action.navigationType == WKNavigationTypeBackForward) {
             context |= ECLIPSE_POLICY_BACK_FORWARD;
+        }
+        if (eclipse_action_user_initiated(action)) {
+            context |= ECLIPSE_POLICY_USER_GESTURE;
         }
     }
     // The source frame is nil or this webview's own for the browser's loads
@@ -1703,6 +1713,8 @@ void eclipse_register_tab_view(void *viewPtr, uint64_t tabId) {
 - (void)captureScreenshot;
 - (void)showInspector;
 - (void)downloadStarted;
+- (void)reportVisit:(NSURL *)url;
+- (void)reportTitle;
 @end
 
 /* The bar's diagonal stripes, drawn faintly in the frame's own contrast
@@ -2417,6 +2429,36 @@ static NSView *eclipse_web_inspector_view(id inspector) {
         [self syncDisplayURL];
     }
     [self refreshTitle];
+    if ([keyPath isEqualToString:@"title"]) [self reportTitle];
+}
+
+/* History (app::record_little_window_visit): Rust records the address
+   WebKit committed (didCommitNavigation), never one the page claims, and
+   files the page's titles under it. Every commit is reported, a page
+   history does not keep (about:, blob:, an over-long address) with an
+   empty address, so Rust stops filing titles under the page before it.
+   Each title goes with the address WebKit has for the page that set it
+   (pushState is never reported as a visit), and Rust files it only under
+   that address's own entry. */
+- (void)reportVisit:(NSURL *)url {
+    if (self.closed || gCallback == NULL) return;
+    NSString *address = url.absoluteString ?: @"";
+    if (!eclipse_is_web_scheme(url.scheme) || address.length > kEclipseLittleMaxAddressLength) address = @"";
+    NSString *command = [NSString stringWithFormat:@"little_window_visit:%llu:%@",
+                                                   (unsigned long long)self.serial, address];
+    gCallback(command.UTF8String);
+}
+
+- (void)reportTitle {
+    NSString *title = self.webView.title;
+    NSURL *url = self.webView.URL;
+    if (self.closed || gCallback == NULL || title.length == 0 || !eclipse_is_web_scheme(url.scheme)) return;
+    NSString *address = url.absoluteString;
+    if (address.length == 0 || address.length > kEclipseLittleMaxAddressLength) return;
+    if (title.length > 1000) title = [title substringToIndex:1000];
+    NSString *command = [NSString stringWithFormat:@"little_window_title:%llu:%@ %@",
+                                                   (unsigned long long)self.serial, address, title];
+    gCallback(command.UTF8String);
 }
 
 /* WebKit's URL already names a pending load while the previous document (or
@@ -2950,7 +2992,16 @@ static NSView *eclipse_web_inspector_view(id inspector) {
     if (self.closed) return;
     self.displayURL = webView.URL;
     [self refreshTitle];
+    [self reportVisit:webView.URL];
     eclipse_little_log(@"committed", self);
+}
+
+/* WebKit reports a title only when it changes; a page titled like the one
+   before it is filed under its own address once it has loaded. */
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    (void)webView;
+    (void)navigation;
+    [self reportTitle];
 }
 
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
@@ -3785,9 +3836,9 @@ int eclipse_little_window_count_for_view(void *viewPtr) {
 /* ------------------------------------------------------------- New Little Eclipse Window bar */
 /* ⌥⌘N, as in Arc: a floating "Search or Enter URL…" bar near the top right
    of the screen with the pointer, over whatever is in front (also while the
-   browser window is hidden). Its suggestions come from Rust (open tabs and
-   favourites with the icons the sidebar shows for them,
-   eclipse_show_little_command_bar); typing filters them and
+   browser window is hidden). Its suggestions come from Rust (open tabs,
+   favourites and most-visited history with the icons the sidebar shows for
+   them, eclipse_show_little_command_bar); typing filters them and
    adds the typed text as the first row. ↑/↓ choose, Return opens the chosen
    row in a new standalone Little Eclipse window (Rust resolves typed text to
    an address or a search: "little_command_bar_open:<text>"), and Escape,
@@ -3799,7 +3850,8 @@ static const CGFloat kEclipseCommandBarWidth = 560.0;
 static const CGFloat kEclipseCommandBarSearchHeight = 52.0;
 static const CGFloat kEclipseCommandBarRowHeight = 38.0;
 static const NSUInteger kEclipseCommandBarMaxRows = 7;
-static const NSUInteger kEclipseCommandBarMaxSuggestions = 64;
+/* Keep in sync with COMMAND_BAR_SUGGESTIONS (app.rs). */
+static const NSUInteger kEclipseCommandBarMaxSuggestions = 160;
 
 /* A borderless panel that still takes the keyboard. */
 @interface EclipseCommandBarPanel : NSPanel

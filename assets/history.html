@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark light">
+<title>History</title>
+<style>
+:root {
+  --bg: #0E1017;
+  --card: rgba(255, 255, 255, 0.045);
+  --card-hover: rgba(255, 255, 255, 0.075);
+  --border: rgba(255, 255, 255, 0.085);
+  --border-active: rgba(255, 255, 255, 0.18);
+  --text-main: rgba(255, 255, 255, 0.94);
+  --text-muted: rgba(255, 255, 255, 0.62);
+  --text-dim: rgba(255, 255, 255, 0.40);
+  --accent: #5E9EFF;
+  --accent-glow: rgba(94, 158, 255, 0.28);
+  --accent-soft: rgba(94, 158, 255, 0.14);
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --surface: rgba(255, 255, 255, 0.05);
+  --surface-strong: rgba(255, 255, 255, 0.1);
+  --hairline: rgba(255, 255, 255, 0.06);
+  --scrim: rgba(4, 5, 9, 0.55);
+  --danger: #F87171;
+  color-scheme: dark;
+}
+
+[data-theme="void"] { --bg: #07080B; --card: rgba(255, 255, 255, 0.035); }
+[data-theme="lunar"] { --bg: #111723; }
+[data-theme="nebula"] { --bg: #15101F; }
+[data-theme="aurora"] { --bg: #0D1717; }
+[data-theme="sol"] {
+  --bg: #F4F5F8;
+  --card: rgba(0, 0, 0, 0.045);
+  --card-hover: rgba(0, 0, 0, 0.075);
+  --border: rgba(0, 0, 0, 0.09);
+  --border-active: rgba(0, 0, 0, 0.18);
+  --text-main: rgba(17, 24, 39, 0.92);
+  --text-muted: rgba(55, 65, 81, 0.76);
+  --text-dim: rgba(107, 114, 128, 0.9);
+  --surface: rgba(0, 0, 0, 0.04);
+  --surface-strong: rgba(0, 0, 0, 0.08);
+  --hairline: rgba(0, 0, 0, 0.08);
+  --scrim: rgba(17, 24, 39, 0.28);
+  --danger: #DC2626;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", sans-serif;
+  background: var(--bg);
+  color: var(--text-main);
+  padding: 44px 32px 64px 32px;
+  max-width: 760px;
+  margin: 0 auto;
+  -webkit-font-smoothing: antialiased;
+  animation: pageFadeIn 0.35s var(--ease-spring);
+}
+
+@keyframes pageFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 6px;
+}
+
+.header-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 14px var(--accent-glow);
+}
+
+.header-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+h1 {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+}
+
+p.sub {
+  color: var(--text-muted);
+  font-size: 13.5px;
+  margin-bottom: 22px;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0 12px 0;
+  background: var(--bg);
+}
+
+.search {
+  flex: 1;
+  position: relative;
+}
+
+.search svg {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+input[type="search"] {
+  width: 100%;
+  background: var(--surface);
+  color: var(--text-main);
+  border: 0.5px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 12px 9px 32px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+input[type="search"]:focus {
+  border-color: var(--accent);
+  background: var(--surface-strong);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.btn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 0.5px solid var(--border);
+  background: var(--card-hover);
+  color: var(--text-main);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s var(--ease-spring);
+}
+
+.btn:hover {
+  background: var(--surface-strong);
+  transform: translateY(-1px);
+}
+
+.btn:active {
+  transform: scale(0.96);
+}
+
+.btn:focus-visible,
+.entry:focus-visible,
+.entry-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn.danger {
+  color: var(--danger);
+}
+
+.btn.danger:hover {
+  background: rgba(239, 68, 68, 0.16);
+}
+
+.btn.primary-danger {
+  background: #EF4444;
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn.primary-danger:hover {
+  background: #F05252;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  border: 0.5px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.day {
+  margin-bottom: 18px;
+}
+
+.day-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.2px;
+  padding: 6px 4px 8px 4px;
+}
+
+.day-list {
+  background: var(--card);
+  border: 0.5px solid var(--border);
+  border-radius: 14px;
+  padding: 4px;
+}
+
+.entry-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: 9px;
+  transition: background 0.15s ease;
+}
+
+.entry-row:hover,
+.entry-row:focus-within {
+  background: var(--card-hover);
+}
+
+.entry {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 40px 8px 10px;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 9px;
+}
+
+.entry-time {
+  width: 62px;
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.entry-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+
+.entry-icon img {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.entry-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.entry-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-host {
+  flex: 0 1 auto;
+  max-width: 40%;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-remove {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.entry-row:hover .entry-remove,
+.entry-row:focus-within .entry-remove {
+  opacity: 1;
+}
+
+.entry-remove:hover {
+  background: rgba(239, 68, 68, 0.16);
+  color: var(--danger);
+}
+
+.entry-remove svg {
+  width: 13px;
+  height: 13px;
+}
+
+.empty {
+  text-align: center;
+  padding: 64px 20px;
+  color: var(--text-muted);
+}
+
+.empty svg {
+  width: 34px;
+  height: 34px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 4px;
+}
+
+.empty-sub {
+  font-size: 12.5px;
+}
+
+.more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 24px 0;
+}
+
+.status {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 4px 0 16px 0;
+}
+
+/* "Clear browsing history…" */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+}
+
+/* Classes that set a display (flex) would otherwise beat the hidden
+   attribute. */
+[hidden] {
+  display: none !important;
+}
+
+.dialog {
+  width: min(380px, calc(100vw - 40px));
+  background: var(--bg);
+  border: 0.5px solid var(--border-active);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
+  animation: pageFadeIn 0.22s var(--ease-spring);
+}
+
+.dialog h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.dialog p {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+
+.range-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 18px;
+}
+
+.range-list label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.range-list label:hover {
+  background: var(--card-hover);
+}
+
+.range-list input {
+  accent-color: var(--accent);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-icon" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>
+  </div>
+  <h1>History</h1>
+</div>
+<p class="sub">Pages you visited in the last 90 days. History stays on this Mac.</p>
+
+<div class="notice" id="paused-notice" hidden>
+  <span>Eclipse is not saving new pages to your history.</span>
+  <button type="button" class="btn" id="btn-open-settings">Preferences…</button>
+</div>
+
+<div class="toolbar">
+  <div class="search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input type="search" id="search" placeholder="Search history" autocomplete="off" spellcheck="false" aria-label="Search history" />
+  </div>
+  <button type="button" class="btn danger" id="btn-clear" aria-haspopup="dialog">Clear browsing history…</button>
+</div>
+
+<main id="list" aria-live="polite"></main>
+<div class="more" id="more" hidden>
+  <button type="button" class="btn" id="btn-more">Show more</button>
+</div>
+<div class="status" id="status"></div>
+
+<div class="scrim" id="clear-scrim" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="clear-title">
+    <h2 id="clear-title">Clear browsing history</h2>
+    <p>Removes the pages you visited in this period from History and from the command bar's suggestions. Cookies and site data are not affected.</p>
+    <div class="range-list" role="radiogroup" aria-label="Time range">
+      <label><input type="radio" name="clear-range" value="last_hour" checked /> Last hour</label>
+      <label><input type="radio" name="clear-range" value="today" /> Today</label>
+      <label><input type="radio" name="clear-range" value="today_and_yesterday" /> Today and yesterday</label>
+      <label><input type="radio" name="clear-range" value="all" /> All history</label>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="btn" id="btn-clear-cancel">Cancel</button>
+      <button type="button" class="btn primary-danger" id="btn-clear-confirm">Clear History</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// History never lives in this page: Rust answers each history_query with one
+// page of entries (window.onEclipseHistory) and tells the page when history
+// changed (window.onEclipseHistoryChanged). Only this page may ask; titles
+// and addresses come from websites, so they are only ever set as text.
+const PAGE_SIZE = 100;
+// The most rows Rust sends for one request.
+const MAX_PAGE = 200;
+const SEARCH_DEBOUNCE_MS = 180;
+
+let query = '';
+let entries = [];
+let total = 0;
+// More rows are listed after the last one loaded.
+let more = false;
+let requestId = 0;
+let loading = false;
+let loaded = false;
+let searchTimer = null;
+// A refresh under way: the rows it collected so far, and how many it wants.
+let refreshing = null;
+
+const listEl = document.getElementById('list');
+const moreEl = document.getElementById('more');
+const statusEl = document.getElementById('status');
+const searchEl = document.getElementById('search');
+const scrimEl = document.getElementById('clear-scrim');
+
+function postIpc(cmd) {
+  if (window.__eclipseIpc) {
+    window.__eclipseIpc(cmd);
+  } else if (window.ipc && typeof window.ipc.postMessage === 'function') {
+    window.ipc.postMessage(JSON.stringify(cmd));
+  }
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgIcon(shapes) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.8');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  shapes.forEach(([tag, attrs]) => {
+    const node = document.createElementNS(SVG_NS, tag);
+    Object.keys(attrs).forEach(k => node.setAttribute(k, attrs[k]));
+    svg.appendChild(node);
+  });
+  return svg;
+}
+
+function globeIcon() {
+  return svgIcon([
+    ['circle', { cx: '12', cy: '12', r: '9' }],
+    ['path', { d: 'M3 12h18M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18' }]
+  ]);
+}
+
+// The page's own icon or its site's /favicon.ico (https only, so looking at
+// history sends nothing in the clear); a globe while there is none or it
+// fails to load.
+function faviconNode(entry) {
+  const box = el('span', 'entry-icon');
+  const src = typeof entry.icon === 'string' ? entry.icon : '';
+  if (/^https:\/\//i.test(src)) {
+    const img = document.createElement('img');
+    img.alt = '';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.draggable = false;
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('error', () => img.replaceWith(globeIcon()), { once: true });
+    img.src = src;
+    box.appendChild(img);
+  } else {
+    box.appendChild(globeIcon());
+  }
+  return box;
+}
+
+function isWebUrl(url) {
+  return /^https?:\/\//i.test(url || '');
+}
+
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+function dayKey(date) {
+  return date.getFullYear() + '-' + date.getMonth() + '-' + date.getDate();
+}
+
+function dayTitle(date) {
+  const today = new Date();
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  const label = dayFormat.format(date);
+  if (dayKey(date) === dayKey(today)) return 'Today — ' + label;
+  if (dayKey(date) === dayKey(yesterday)) return 'Yesterday — ' + label;
+  return label;
+}
+
+// Where a list of rows ends, for the request that continues it: Rust lists
+// what comes after that row, so visits made meanwhile (which move rows to
+// the top) never show a row twice.
+function cursorAfter(rows) {
+  const last = rows[rows.length - 1];
+  return last ? { last_visit: last.last_visit || 0, url: last.url } : null;
+}
+
+function sendQuery(after, limit) {
+  loading = true;
+  requestId += 1;
+  const cmd = { action: 'history_query', query: query, limit: limit, request_id: requestId };
+  if (after) cmd.after = after;
+  postIpc(cmd);
+  renderStatus();
+}
+
+// A new search: from the top.
+function requestFirstPage() {
+  refreshing = null;
+  entries = [];
+  total = 0;
+  more = false;
+  sendQuery(null, PAGE_SIZE);
+}
+
+function requestNextPage() {
+  refreshing = null;
+  sendQuery(cursorAfter(entries), PAGE_SIZE);
+}
+
+// Reload what is shown (history changed, or the tab came back into view)
+// without losing the reader's place: as many rows as were loaded, fetched a
+// page at a time and shown together once all have arrived.
+function refresh() {
+  refreshing = { rows: [], target: Math.max(PAGE_SIZE, entries.length) };
+  sendQuery(null, Math.min(MAX_PAGE, refreshing.target));
+}
+
+function appendRows(rows, page) {
+  const seen = new Set(rows.map(e => e.url));
+  return rows.concat(page.filter(e => !seen.has(e.url) && seen.add(e.url)));
+}
+
+function openEntry(url, inNewTab) {
+  if (!isWebUrl(url)) return;
+  if (inNewTab) {
+    postIpc({ action: 'new_tab', url: url, background: true });
+  } else {
+    postIpc({ action: 'navigate', url: url });
+  }
+}
+
+// Rust tells the other history pages; this one keeps its rows (and the
+// reader's place) and just drops the row.
+function removeEntry(url, row) {
+  entries = entries.filter(e => e.url !== url);
+  if (refreshing) refreshing.rows = refreshing.rows.filter(e => e.url !== url);
+  total = Math.max(0, total - 1);
+  // Keep the keyboard in the list.
+  const next = row && (row.nextElementSibling || row.previousElementSibling);
+  postIpc({ action: 'history_delete', url: url });
+  render();
+  if (next) {
+    const link = listEl.querySelector('.entry[data-url="' + CSS.escape(next.dataset.url || '') + '"]');
+    if (link) link.focus({ preventScroll: true });
+  }
+}
+
+function entryRow(entry) {
+  const row = el('div', 'entry-row');
+  row.dataset.url = entry.url;
+  const link = el('a', 'entry');
+  link.href = entry.url;
+  link.dataset.url = entry.url;
+  link.title = entry.url;
+  link.draggable = true;
+  const when = new Date((entry.last_visit || 0) * 1000);
+  const title = entry.title || entry.host || entry.url;
+  link.append(
+    el('span', 'entry-time', timeFormat.format(when)),
+    faviconNode(entry),
+    el('span', 'entry-title', title),
+    el('span', 'entry-host', entry.host || '')
+  );
+  link.setAttribute('aria-label', title + ', ' + (entry.host || '') + ', ' + timeFormat.format(when));
+  // Plain clicks open here, ⌘-click and middle-click in a new tab; the page
+  // itself never navigates to the link.
+  link.addEventListener('click', (e) => {
+    e.preventDefault();
+    openEntry(entry.url, e.metaKey || e.ctrlKey);
+  });
+  link.addEventListener('auxclick', (e) => {
+    if (e.button !== 1) return;
+    e.preventDefault();
+    openEntry(entry.url, true);
+  });
+  link.addEventListener('keydown', (e) => {
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      removeEntry(entry.url, row);
+    }
+  });
+  const remove = el('button', 'entry-remove');
+  remove.type = 'button';
+  remove.title = 'Remove from History';
+  remove.setAttribute('aria-label', 'Remove ' + title + ' from History');
+  remove.appendChild(svgIcon([['path', { d: 'M18 6L6 18M6 6l12 12' }]]));
+  remove.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    removeEntry(entry.url, row);
+  });
+  row.append(link, remove);
+  return row;
+}
+
+function emptyState(title, sub) {
+  const box = el('div', 'empty');
+  box.appendChild(svgIcon([
+    ['path', { d: 'M3 12a9 9 0 1 0 3-6.7' }],
+    ['path', { d: 'M3 4v5h5' }],
+    ['path', { d: 'M12 7v5l3 2' }]
+  ]));
+  box.append(el('div', 'empty-title', title), el('div', 'empty-sub', sub));
+  return box;
+}
+
+// Rebuilds the list. The row that had the keyboard keeps it, and the page
+// stays scrolled where it was.
+function render() {
+  const active = document.activeElement;
+  const focusedRow = active && listEl.contains(active) ? active.closest('.entry-row') : null;
+  const focusedUrl = focusedRow ? focusedRow.dataset.url : null;
+  const focusedRemove = !!(active && active.classList && active.classList.contains('entry-remove'));
+  const scrollY = window.scrollY;
+  const fragment = document.createDocumentFragment();
+  if (loaded && entries.length === 0) {
+    fragment.appendChild(query
+      ? emptyState('No results', 'Nothing in your history matches “' + query + '”.')
+      : emptyState('No history yet', 'Pages you visit will appear here.'));
+  }
+  let currentKey = null;
+  let currentList = null;
+  for (const entry of entries) {
+    const when = new Date((entry.last_visit || 0) * 1000);
+    const key = dayKey(when);
+    if (key !== currentKey) {
+      currentKey = key;
+      const day = el('section', 'day');
+      const heading = el('h2', 'day-title', dayTitle(when));
+      currentList = el('div', 'day-list');
+      currentList.setAttribute('role', 'list');
+      day.append(heading, currentList);
+      fragment.appendChild(day);
+    }
+    const row = entryRow(entry);
+    row.setAttribute('role', 'listitem');
+    currentList.appendChild(row);
+  }
+  listEl.replaceChildren(fragment);
+  moreEl.hidden = !loaded || !more;
+  if (focusedUrl !== null) {
+    const row = listEl.querySelector('.entry-row[data-url="' + CSS.escape(focusedUrl) + '"]');
+    const target = row && row.querySelector(focusedRemove ? '.entry-remove' : '.entry');
+    if (target) target.focus({ preventScroll: true });
+  }
+  if (window.scrollY !== scrollY) window.scrollTo(0, scrollY);
+  renderStatus();
+}
+
+function renderStatus() {
+  if (loading && !loaded) {
+    statusEl.textContent = 'Loading…';
+  } else if (query && loaded && total > 0) {
+    statusEl.textContent = total === 1 ? '1 page' : total.toLocaleString() + ' pages';
+  } else {
+    statusEl.textContent = '';
+  }
+}
+
+window.onEclipseHistory = function(reply) {
+  if (!reply || reply.request_id !== requestId) return;
+  const page = (Array.isArray(reply.entries) ? reply.entries : []).filter(e => e && isWebUrl(e.url));
+  const hasMore = reply.more === true;
+  if (refreshing) {
+    refreshing.rows = appendRows(refreshing.rows, page);
+    if (hasMore && page.length > 0 && refreshing.rows.length < refreshing.target) {
+      sendQuery(cursorAfter(refreshing.rows), Math.min(MAX_PAGE, refreshing.target - refreshing.rows.length));
+      return;
+    }
+    entries = refreshing.rows;
+    refreshing = null;
+  } else {
+    entries = appendRows(entries, page);
+  }
+  more = hasMore && page.length > 0;
+  total = typeof reply.total === 'number' ? reply.total : entries.length;
+  loading = false;
+  loaded = true;
+  render();
+};
+
+window.onEclipseHistoryChanged = function() {
+  refresh();
+};
+
+// Load the next page as the end of the list comes into view.
+const moreObserver = new IntersectionObserver((items) => {
+  if (items.some(item => item.isIntersecting) && !loading && loaded && more) {
+    requestNextPage();
+  }
+}, { rootMargin: '400px' });
+moreObserver.observe(moreEl);
+document.getElementById('btn-more').addEventListener('click', () => {
+  if (!loading) requestNextPage();
+});
+
+searchEl.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    const next = searchEl.value.trim();
+    if (next === query) return;
+    query = next;
+    requestFirstPage();
+  }, SEARCH_DEBOUNCE_MS);
+});
+
+searchEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && searchEl.value) {
+    e.preventDefault();
+    searchEl.value = '';
+    searchEl.dispatchEvent(new Event('input'));
+  } else if (e.key === 'ArrowDown') {
+    const first = listEl.querySelector('.entry');
+    if (first) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+});
+
+// ↑/↓ move between rows.
+listEl.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  const links = Array.from(listEl.querySelectorAll('.entry'));
+  const index = links.indexOf(document.activeElement);
+  if (index < 0) return;
+  e.preventDefault();
+  if (e.key === 'ArrowUp' && index === 0) {
+    searchEl.focus();
+    return;
+  }
+  const next = links[index + (e.key === 'ArrowDown' ? 1 : -1)];
+  if (next) next.focus();
+});
+
+/* ---------------------------------------------- Clear browsing history… */
+let clearReturnFocus = null;
+
+function openClearDialog() {
+  clearReturnFocus = document.activeElement;
+  scrimEl.hidden = false;
+  const checked = scrimEl.querySelector('input[name="clear-range"]:checked');
+  if (checked) checked.focus();
+}
+
+function closeClearDialog() {
+  scrimEl.hidden = true;
+  if (clearReturnFocus && typeof clearReturnFocus.focus === 'function') clearReturnFocus.focus();
+}
+
+document.getElementById('btn-clear').addEventListener('click', openClearDialog);
+document.getElementById('btn-clear-cancel').addEventListener('click', closeClearDialog);
+document.getElementById('btn-clear-confirm').addEventListener('click', () => {
+  const checked = scrimEl.querySelector('input[name="clear-range"]:checked');
+  const range = checked ? checked.value : 'last_hour';
+  closeClearDialog();
+  // Rust answers with onEclipseHistoryChanged once it is done.
+  postIpc({ action: 'history_clear', range: range });
+});
+scrimEl.addEventListener('click', (e) => {
+  if (e.target === scrimEl) closeClearDialog();
+});
+scrimEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeClearDialog();
+  } else if (e.key === 'Tab') {
+    // Keep the keyboard inside the dialog.
+    const focusable = Array.from(scrimEl.querySelectorAll('input:checked, button'));
+    const index = focusable.indexOf(document.activeElement);
+    const next = e.shiftKey ? (index <= 0 ? focusable.length - 1 : index - 1) : (index + 1) % focusable.length;
+    e.preventDefault();
+    focusable[next].focus();
+  }
+});
+
+document.getElementById('btn-open-settings').addEventListener('click', () => {
+  postIpc({ action: 'open_settings_tab' });
+});
+
+/* ---------------------------------------------------------------- Theme */
+function hexToRgba(hex, alpha) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return `rgba(94, 158, 255, ${alpha})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+window.onEclipseConfigUpdated = function(cfg) {
+  if (!cfg || typeof cfg !== 'object') return;
+  const root = document.documentElement;
+  root.dataset.theme = typeof cfg.theme === 'string' ? cfg.theme : 'eclipse';
+  if (typeof cfg.accent_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(cfg.accent_color)) {
+    root.style.setProperty('--accent', cfg.accent_color);
+    root.style.setProperty('--accent-glow', hexToRgba(cfg.accent_color, 0.28));
+    root.style.setProperty('--accent-soft', hexToRgba(cfg.accent_color, 0.14));
+  }
+  document.getElementById('paused-notice').hidden = cfg.save_history !== false;
+};
+
+// Visits made in other tabs show when this tab is looked at again.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && loaded && scrimEl.hidden) refresh();
+});
+
+window.onEclipseConfigUpdated(window.__ECLIPSE_CONFIG__);
+requestFirstPage();
+searchEl.focus();
+</script>
+</body>
+</html>

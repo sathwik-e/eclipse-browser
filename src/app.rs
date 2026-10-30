@@ -11,12 +11,14 @@ use crate::config::{
     BrowserConfig, DownloadItem, EaselItem, FavoriteShortcut, NoteItem, Session, SessionTab,
     normalize_site_domain, write_atomic,
 };
-use crate::events::{BrowserUiState, DocumentTrust, DownloadOrigin, IpcCommand, UserEvent};
+use crate::events::{BrowserUiState, DocumentTrust, DownloadOrigin, IpcCommand, UrlChangeKind, UserEvent};
+use crate::history::{ClearRange, History, HistoryCursor, HistoryItem, history_url};
 use crate::max;
 use crate::tab::{
-    LOADING_TITLE, NavigationError, Tab, canonicalize_eclipse_url, classify_navigation_error,
+    CommitOrigin, LOADING_TITLE, NavigationError, Tab, canonicalize_eclipse_url, classify_navigation_error,
     downloads_dir, generate_ipc_token, get_default_favicon, get_favicon_url,
 };
+use crate::ui_assets::InternalPage;
 
 pub const ARC_BORDER: f64 = 8.0;
 const STATE_FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -24,6 +26,34 @@ const CLOSED_TAB_LIMIT: usize = 25;
 /// Config writes are coalesced: Notes/Easel autosave every few hundred ms.
 const CONFIG_SAVE_DELAY: Duration = Duration::from_millis(800);
 const SESSION_SAVE_DELAY: Duration = Duration::from_secs(2);
+/// History writes are coalesced too: every page load records a visit.
+const HISTORY_SAVE_DELAY: Duration = Duration::from_secs(5);
+/// History rows a command bar shows for what is typed.
+const HISTORY_SUGGESTIONS: usize = 6;
+/// Most-visited history entries handed to the New Little Eclipse Window bar,
+/// which filters its suggestions itself.
+const LITTLE_BAR_HISTORY: usize = 96;
+/// Little Eclipse windows whose recorded address is remembered for their
+/// title updates (window ids are never reused).
+const LITTLE_HISTORY_WINDOWS: usize = 64;
+/// Title changes (and, apart, icon changes) a page may make to its history
+/// entry per visit. A page that keeps retitling itself (a timer, an unread
+/// count) would otherwise rewrite history.json every few seconds for as
+/// long as it is open.
+const HISTORY_UPDATES_PER_VISIT: u8 = 5;
+/// A page the tab's page navigated to itself (a script or a meta refresh,
+/// not the user) this soon after committing was only a redirect: its visit
+/// is taken back, so only where it led is kept.
+const CLIENT_REDIRECT_WINDOW: Duration = Duration::from_secs(2);
+/// A title a page set this shortly before it changed its own address
+/// (`document.title = …; history.pushState(…)`) is the new address's.
+const TITLE_BEFORE_URL_WINDOW: Duration = Duration::from_millis(250);
+/// New visits a tab's same-document address changes (pushState, back,
+/// fragments) may add in a burst, and how often one more is allowed after
+/// it. Past that a change only moves the tab's latest visit, so a page
+/// changing its address in a loop cannot flood history.
+const SAME_DOCUMENT_VISIT_BURST: u32 = 20;
+const SAME_DOCUMENT_VISIT_INTERVAL: Duration = Duration::from_secs(3);
 const MAX_SESSION_TABS: usize = 200;
 /// How long the sidebar stays open after Rust reveals it for an interaction
 /// (⌘L, ⌘J, Preferences) before the sidebar's own `sidebar_interaction` hold
@@ -46,6 +76,74 @@ struct ClosedTab {
     url: String,
     workspace: String,
     is_pinned: bool,
+}
+
+/// What history knows of the page a tab or Little Eclipse window shows.
+struct PageVisit {
+    /// The entry its title and icon reports go to (as `history_url` spells
+    /// it), and nowhere else.
+    url: String,
+    /// The visit recorded for it, as filed. None when none was (a woken or
+    /// reloaded tab, a change past the visit budget onto a new address):
+    /// its reports still update an entry that exists.
+    at: Option<u64>,
+    /// When its document committed (a client-side redirect follows soon).
+    committed: Instant,
+    title_updates: u8,
+    icon_updates: u8,
+    /// The entry's title before the page's latest change to it, and when
+    /// that was (`TITLE_BEFORE_URL_WINDOW`).
+    title_before: Option<(String, Instant)>,
+}
+
+impl PageVisit {
+    fn new(url: String, at: Option<u64>, committed: Instant) -> Self {
+        Self {
+            url,
+            at,
+            committed,
+            title_updates: 0,
+            icon_updates: 0,
+            title_before: None,
+        }
+    }
+}
+
+/// A token bucket for the new visits one tab's same-document address
+/// changes may add (`SAME_DOCUMENT_VISIT_*`).
+#[derive(Debug, Clone, Copy)]
+struct VisitBudget {
+    tokens: u32,
+    refilled: Instant,
+}
+
+impl VisitBudget {
+    fn new(now: Instant) -> Self {
+        Self {
+            tokens: SAME_DOCUMENT_VISIT_BURST,
+            refilled: now,
+        }
+    }
+
+    /// Spends one new visit, if there is one left.
+    fn take(&mut self, now: Instant) -> bool {
+        let interval = SAME_DOCUMENT_VISIT_INTERVAL.as_millis().max(1);
+        let earned = now.saturating_duration_since(self.refilled).as_millis() / interval;
+        if earned > 0 {
+            let earned = u32::try_from(earned).unwrap_or(u32::MAX);
+            self.tokens = self.tokens.saturating_add(earned).min(SAME_DOCUMENT_VISIT_BURST);
+            self.refilled = if self.tokens == SAME_DOCUMENT_VISIT_BURST {
+                now
+            } else {
+                self.refilled + SAME_DOCUMENT_VISIT_INTERVAL * earned
+            };
+        }
+        if self.tokens == 0 {
+            return false;
+        }
+        self.tokens -= 1;
+        true
+    }
 }
 
 /// Who posted an IPC message. Decides which commands it may run (C1).
@@ -151,6 +249,17 @@ pub struct BrowserApp {
     link_preview_window: Option<u64>,
     /// The frame colour last given to Little Eclipse windows.
     little_theme_pushed: Option<([u8; 3], bool)>,
+    /// Browsing history (history.json; in memory only for ECLIPSE_TEST_URL
+    /// runs, like the session).
+    history: History,
+    history_save_due: Option<Instant>,
+    /// The visit each tab's committed page was recorded under: its title
+    /// and icon updates go there and nowhere else.
+    history_urls: HashMap<usize, PageVisit>,
+    /// The same for Little Eclipse windows, by menu.m's window id.
+    little_history_urls: HashMap<u64, PageVisit>,
+    /// Each tab's budget for new visits from same-document address changes.
+    same_document_visits: HashMap<usize, VisitBudget>,
 }
 
 impl BrowserApp {
@@ -241,6 +350,13 @@ impl BrowserApp {
             .unwrap_or(0)
             + 1;
 
+        let persist_session = std::env::var_os("ECLIPSE_TEST_URL").is_none();
+        let history = if persist_session {
+            History::load()
+        } else {
+            History::in_memory()
+        };
+
         let mut app = Self {
             window: window.clone(),
             proxy: proxy.clone(),
@@ -277,7 +393,7 @@ impl BrowserApp {
             sidebar_hide_due: None,
             crash_history: HashMap::new(),
             last_web_url: String::new(),
-            persist_session: std::env::var_os("ECLIPSE_TEST_URL").is_none(),
+            persist_session,
             closing_tabs: HashMap::new(),
             quit_deadline: None,
             quit_waiting: HashSet::new(),
@@ -291,6 +407,11 @@ impl BrowserApp {
             download_sources: HashMap::new(),
             last_link_preview: None,
             link_preview_window: None,
+            history,
+            history_save_due: None,
+            history_urls: HashMap::new(),
+            little_history_urls: HashMap::new(),
+            same_document_visits: HashMap::new(),
         };
         app.last_broadcast_memory_mb = app.memory_mb;
 
@@ -506,7 +627,8 @@ impl BrowserApp {
                     last_active: tab.last_active,
                 })
                 .collect();
-            let suggestions = little_command_bar_suggestions(&tabs, &self.config.favorites);
+            let history = self.history.top_sites(LITTLE_BAR_HISTORY, now_unix_secs());
+            let suggestions = little_command_bar_suggestions(&tabs, &self.config.favorites, &history);
             let accent = parse_hex_rgb(&self.config.accent_color).unwrap_or([0x5E, 0x9E, 0xFF]);
             if crate::macos_menu::show_little_command_bar(&suggestions, accent) {
                 return;
@@ -730,6 +852,8 @@ impl BrowserApp {
         tab.set_visible(false);
         let id = tab.id;
         self.custom_titles.remove(&id);
+        self.history_urls.remove(&id);
+        self.same_document_visits.remove(&id);
         let proxy = self.proxy.clone();
         let flushing = tab.flush_internal_page(move |_| {
             let _ = proxy.send_event(UserEvent::PageFlushed { tab_id: id });
@@ -1191,6 +1315,20 @@ impl BrowserApp {
         }
     }
 
+    /// eclipse://history, reusing this Space's history tab if it has one.
+    pub fn open_history_tab(&mut self) {
+        if let Some(existing_id) = self
+            .tabs
+            .iter()
+            .find(|tab| tab.url == "eclipse://history" && tab.workspace == self.current_workspace)
+            .map(|tab| tab.id)
+        {
+            self.select_tab(existing_id);
+        } else {
+            self.create_tab("eclipse://history", true);
+        }
+    }
+
     pub fn open_easel_tab(&mut self) {
         if let Some(existing_id) = self
             .tabs
@@ -1371,7 +1509,7 @@ impl BrowserApp {
         let Some((token, command)) = parse_ipc(raw, IpcSender::Sidebar.message_limit()) else {
             return;
         };
-        if token == self.sidebar_token {
+        if token == self.sidebar_token && is_command_allowed(IpcSender::Sidebar, &command) {
             self.handle_ipc_command(None, command);
         }
     }
@@ -1420,7 +1558,8 @@ impl BrowserApp {
             }
             return;
         }
-        if !is_command_allowed(sender, &command) {
+        let page = tab_internal_page(origin, &tab.committed_url());
+        if !is_tab_command_allowed(sender, page, &command) {
             if self.perf {
                 eprintln!(
                     "[ipc] dropped {} from {sender:?} tab {tab_id} ({})",
@@ -1505,6 +1644,7 @@ impl BrowserApp {
                         "clean_memory" => self.clean_memory(),
                         "tidy_tabs" => self.tidy_tabs(),
                         "open_notes" => self.open_notes_tab(),
+                        "open_history" => self.open_history_tab(),
                         "open_easel" => self.open_easel_tab(),
                         "open_downloads" => self.open_downloads_panel(),
                         // The sidebar's "+" menu and the command bar.
@@ -1704,6 +1844,27 @@ impl BrowserApp {
             IpcCommand::OpenNotesTab => {
                 self.open_notes_tab();
             }
+            IpcCommand::OpenHistoryTab => self.open_history_tab(),
+            IpcCommand::HistoryQuery {
+                query,
+                offset,
+                limit,
+                after,
+                request_id,
+            } => self.answer_history_query(source_tab_id, &query, after.as_ref(), offset, limit, request_id),
+            IpcCommand::HistoryDelete { url } => {
+                if self.history.remove(&url) {
+                    // Gone from disk now, not after the save delay. The page
+                    // that asked already took the row out (and keeps its
+                    // place and focus); other history pages reload.
+                    self.save_history_now();
+                    self.notify_history_pages(source_tab_id);
+                }
+            }
+            IpcCommand::HistoryClear { range } => self.clear_history(range),
+            IpcCommand::HistorySuggest { query, request_id } => {
+                self.answer_history_suggestions(source_tab_id, &query, request_id);
+            }
             IpcCommand::SaveEasel {
                 id,
                 title,
@@ -1772,6 +1933,15 @@ impl BrowserApp {
                     return;
                 }
                 let target_id = source_tab_id.unwrap_or(self.active_tab_id);
+                let committed = self.tab_committed_history_url(target_id);
+                if let Some(visit) = self.history_urls.get_mut(&target_id)
+                    && committed.as_deref() == Some(visit.url.as_str())
+                    && visit.icon_updates < HISTORY_UPDATES_PER_VISIT
+                    && self.history.set_icon(&visit.url, &favicon)
+                {
+                    visit.icon_updates += 1;
+                    self.history_changed();
+                }
                 if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == target_id)
                     && tab.favicon_url.as_deref() != Some(favicon.as_str())
                 {
@@ -1797,19 +1967,26 @@ impl BrowserApp {
                     eprintln!("[chrome-js] {origin}: {}", truncate_message(&message, 500));
                 }
             }
-            IpcCommand::UrlChanged { url } => {
+            IpcCommand::UrlChanged { url, kind } => {
                 if !is_http_url(&url) || url.len() > 8 * 1024 {
                     return;
                 }
                 let target_id = source_tab_id.unwrap_or(self.active_tab_id);
+                let mut document_title = None;
                 if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == target_id)
                     && tab.url != url
                 {
                     tab.note_same_document_url(&url);
-                    tab.url = url;
+                    tab.url = url.clone();
                     if tab.id == self.active_tab_id {
                         self.last_web_url = tab.url.clone();
                     }
+                    document_title = Some((tab.title != LOADING_TITLE).then(|| tab.title.clone()));
+                }
+                // A same-document navigation (pushState) is a visit too; the
+                // page keeps its title until it sets a new one.
+                if let Some(title) = document_title {
+                    self.record_same_document_change(target_id, &url, kind, title.as_deref());
                     self.broadcast_state();
                 }
             }
@@ -2092,6 +2269,8 @@ impl BrowserApp {
             }
             sync_tab_config(tab, &self.config, self.config_revision, &reference);
         }
+        // The page reports its own title once it has one.
+        self.record_tab_commit(tab_id, &canonical);
         self.broadcast_state();
     }
 
@@ -2109,6 +2288,14 @@ impl BrowserApp {
                 "[perf] tab {tab_id} finished {canonical} at {:.1} ms",
                 self.started_at.elapsed().as_secs_f64() * 1000.0
             );
+        }
+        // WebKit reports a title only when it changes: a page titled like
+        // the one before it would stay untitled in history.
+        if self
+            .tab_history_url(tab_id)
+            .is_some_and(|url| self.history.is_untitled(&url))
+        {
+            self.refresh_title_from_page(tab_id);
         }
         let reference = self.reference_url();
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
@@ -2152,6 +2339,13 @@ impl BrowserApp {
     }
 
     pub fn handle_title_changed(&mut self, tab_id: usize, title: String) {
+        let committed = self.tab_committed_history_url(tab_id);
+        if let Some(visit) = self.history_urls.get_mut(&tab_id)
+            && committed.as_deref() == Some(visit.url.as_str())
+            && note_history_title(&mut self.history, visit, &title)
+        {
+            self.history_changed();
+        }
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id)
             && !title.is_empty()
             && tab.title != title
@@ -2502,6 +2696,30 @@ impl BrowserApp {
             }
             return;
         }
+        // A Little Eclipse window committed a page (WebKit's URL, never the
+        // page's word for it; empty for one history does not keep) or its
+        // page's title changed (with WebKit's URL for the page it is on).
+        if let Some(rest) = action.strip_prefix("little_window_visit:") {
+            if let Some((id, url)) = rest.split_once(':')
+                && let Ok(id) = id.parse::<u64>()
+            {
+                self.record_little_window_visit(id, url);
+            }
+            return;
+        }
+        if let Some(rest) = action.strip_prefix("little_window_title:") {
+            // A URL never holds a space, so the title is what follows one.
+            if let Some((id, rest)) = rest.split_once(':')
+                && let Ok(id) = id.parse::<u64>()
+                && let Some((url, title)) = rest.split_once(' ')
+                && let Some(visit) = self.little_history_urls.get_mut(&id)
+                && history_url(url).as_deref() == Some(visit.url.as_str())
+                && note_history_title(&mut self.history, visit, title)
+            {
+                self.history_changed();
+            }
+            return;
+        }
         if let Some(index) = action.strip_prefix("select_tab_index:") {
             if let Ok(index) = index.parse::<usize>() {
                 self.select_tab_by_workspace_index(index.min(7));
@@ -2522,6 +2740,7 @@ impl BrowserApp {
             "open_notes" => {
                 self.open_notes_tab();
             }
+            "show_history" => self.open_history_tab(),
             "open_easel" => {
                 self.open_easel_tab();
             }
@@ -2714,6 +2933,259 @@ impl BrowserApp {
         }
     }
 
+    /// A main-frame document tab `tab_id` committed. Recorded as a visit
+    /// when it is a web page and saving history is on, and only while it
+    /// is still what WebKit says the tab has committed: an event that a
+    /// newer commit already overtook records nothing (the newer one is
+    /// recorded when it arrives). A reload or a woken tab is no new visit,
+    /// though the page's title still lands on its entry. A page the
+    /// previous one sent the tab to on its own moments after committing
+    /// makes that one a redirect, whose visit is taken back.
+    fn record_tab_commit(&mut self, tab_id: usize, url: &str) {
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id == tab_id) else {
+            return;
+        };
+        let origin = tab.commit_origin();
+        if tab.committed_web_url().as_deref() != Some(url) {
+            self.history_urls.remove(&tab_id);
+            return;
+        }
+        let now = Instant::now();
+        if let Some(previous) = self.history_urls.remove(&tab_id)
+            && origin == CommitOrigin::Page
+            && now.saturating_duration_since(previous.committed) < CLIENT_REDIRECT_WINDOW
+            && let Some(at) = previous.at
+            && self.history.remove_visit(&previous.url, at)
+        {
+            self.history_changed();
+        }
+        if !self.config.save_history {
+            return;
+        }
+        let visit = if origin == CommitOrigin::Reload {
+            history_url(url).map(|key| PageVisit::new(key, None, now))
+        } else {
+            self.history
+                .record_visit(url, None, now_unix_secs())
+                .map(|visit| PageVisit::new(visit.url, Some(visit.at), now))
+        };
+        if let Some(visit) = visit {
+            if visit.at.is_some() {
+                self.history_changed();
+            }
+            self.history_urls.insert(tab_id, visit);
+        }
+    }
+
+    /// Tab `tab_id`'s document changed its own address to `url` (pushState,
+    /// replaceState, back within it, a fragment). A new back-forward entry
+    /// is a new visit, within the tab's budget for them; a replaced address,
+    /// or one past the budget, moves the tab's latest visit there instead.
+    /// `title`: the document's.
+    fn record_same_document_change(&mut self, tab_id: usize, url: &str, kind: UrlChangeKind, title: Option<&str>) {
+        let committed = self
+            .tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .and_then(Tab::committed_web_url);
+        let previous = self.history_urls.remove(&tab_id);
+        if committed.as_deref() != Some(url) || !self.config.save_history {
+            return;
+        }
+        let now = Instant::now();
+        let committed_at = previous.as_ref().map_or(now, |previous| previous.committed);
+        // A title set just before the address changed was the new page's
+        // (which is given it below); the entry left gets its own back.
+        if let Some((before, at)) = previous.as_ref().and_then(|previous| previous.title_before.clone())
+            && now.saturating_duration_since(at) < TITLE_BEFORE_URL_WINDOW
+            && !before.is_empty()
+            && let Some(previous) = &previous
+            && self.history.restore_title(&previous.url, &before)
+        {
+            self.history_changed();
+        }
+        let new_entry = matches!(kind, UrlChangeKind::Push | UrlChangeKind::Pop | UrlChangeKind::Hash)
+            && self
+                .same_document_visits
+                .entry(tab_id)
+                .or_insert_with(|| VisitBudget::new(now))
+                .take(now);
+        let visit = if new_entry {
+            self.history
+                .record_visit(url, title, now_unix_secs())
+                .map(|visit| PageVisit::new(visit.url, Some(visit.at), committed_at))
+        } else {
+            let moved = previous.as_ref().and_then(|previous| {
+                let at = previous.at?;
+                self.history.move_visit(&previous.url, at, url, title)
+            });
+            match (moved, previous) {
+                // Still the same visit to the same document.
+                (Some(visit), Some(mut previous)) => {
+                    previous.url = visit.url;
+                    previous.at = Some(visit.at);
+                    previous.title_before = None;
+                    Some(previous)
+                }
+                _ => history_url(url).map(|key| PageVisit::new(key, None, committed_at)),
+            }
+        };
+        if let Some(visit) = visit {
+            if visit.at.is_some() {
+                self.history_changed();
+            }
+            self.history_urls.insert(tab_id, visit);
+        }
+    }
+
+    /// A Little Eclipse window committed `url` (WebKit's, from menu.m; empty
+    /// for a page history does not keep, which ends the previous page's
+    /// claim on its entry).
+    fn record_little_window_visit(&mut self, id: u64, url: &str) {
+        let recorded = if self.config.save_history {
+            self.history.record_visit(url, None, now_unix_secs())
+        } else {
+            None
+        };
+        match recorded {
+            Some(visit) => {
+                if self.little_history_urls.len() >= LITTLE_HISTORY_WINDOWS
+                    && !self.little_history_urls.contains_key(&id)
+                {
+                    self.little_history_urls.clear();
+                }
+                self.little_history_urls
+                    .insert(id, PageVisit::new(visit.url, Some(visit.at), Instant::now()));
+                self.history_changed();
+            }
+            None => {
+                self.little_history_urls.remove(&id);
+            }
+        }
+    }
+
+    /// The history address of the page WebKit has committed in a tab.
+    fn tab_committed_history_url(&self, tab_id: usize) -> Option<String> {
+        let tab = self.tabs.iter().find(|tab| tab.id == tab_id)?;
+        history_url(&tab.committed_web_url()?)
+    }
+
+    /// The history address a tab's title or icon report may update: the one
+    /// its committed page was recorded under, while WebKit still has that
+    /// page committed in the tab, so a late report from a page the tab has
+    /// left never lands on another address.
+    fn tab_history_url(&self, tab_id: usize) -> Option<String> {
+        let recorded = self.history_urls.get(&tab_id)?;
+        let committed = self.tab_committed_history_url(tab_id)?;
+        (committed == recorded.url).then_some(committed)
+    }
+
+    fn history_changed(&mut self) {
+        self.history_save_due
+            .get_or_insert_with(|| Instant::now() + HISTORY_SAVE_DELAY);
+    }
+
+    fn save_history_now(&mut self) {
+        self.history_save_due = None;
+        self.history.save(now_unix_secs());
+    }
+
+    /// "Clear browsing history…" (eclipse://history or Preferences).
+    fn clear_history(&mut self, range: ClearRange) {
+        let removed = self.history.clear_since(range.start(now_unix_secs()));
+        if self.perf {
+            eprintln!("[history] cleared {range:?}: {removed} entries removed");
+        }
+        self.save_history_now();
+        self.notify_history_pages(None);
+        self.show_toast(&format!("Cleared browsing history from {}", range.description()));
+    }
+
+    /// Open eclipse://history pages (but the one in tab `except`) reload
+    /// what they show.
+    fn notify_history_pages(&self, except: Option<usize>) {
+        for tab in self
+            .tabs
+            .iter()
+            .filter(|tab| Some(tab.id) != except && tab.committed_is_internal())
+        {
+            if InternalPage::from_url(&tab.committed_url()) == Some(InternalPage::History) {
+                tab.evaluate_script(
+                    "if (location.protocol === 'eclipse:' && typeof window.onEclipseHistoryChanged === 'function') { window.onEclipseHistoryChanged(); }",
+                );
+            }
+        }
+    }
+
+    /// A page of history for the eclipse://history page in `source_tab_id`
+    /// (`is_tab_command_allowed` let only that page ask).
+    fn answer_history_query(
+        &self,
+        source_tab_id: Option<usize>,
+        query: &str,
+        after: Option<&HistoryCursor>,
+        offset: usize,
+        limit: Option<usize>,
+        request_id: u64,
+    ) {
+        let Some(tab) = source_tab_id.and_then(|id| self.tabs.iter().find(|tab| tab.id == id)) else {
+            return;
+        };
+        let page = self.history.query_after(query, after, offset, limit);
+        let reply = serde_json::json!({
+            "request_id": request_id,
+            "query": query,
+            "offset": page.offset,
+            "total": page.total,
+            "more": page.more,
+            "entries": page.entries,
+        });
+        tab.evaluate_script(&format!(
+            "if (location.protocol === 'eclipse:' && typeof window.onEclipseHistory === 'function') {{ window.onEclipseHistory({reply}); }}"
+        ));
+    }
+
+    /// History matches for a command bar: the sidebar's (`source_tab_id`
+    /// None), which already lists favourites and the tabs it shows, or the
+    /// new-tab page's search box, which lists every open tab.
+    fn answer_history_suggestions(&self, source_tab_id: Option<usize>, query: &str, request_id: u64) {
+        let shown: Vec<&str> = match source_tab_id {
+            None => self
+                .tabs
+                .iter()
+                .filter(|tab| {
+                    tab.is_pinned || tab.favorite_index.is_some() || tab.workspace == self.current_workspace
+                })
+                .map(|tab| tab.url.as_str())
+                .chain(self.config.favorites.iter().map(|favorite| favorite.url.as_str()))
+                .collect(),
+            Some(_) => self.tabs.iter().map(|tab| tab.url.as_str()).collect(),
+        };
+        let exclude: HashSet<String> = shown.into_iter().filter_map(history_url).collect();
+        let items = self
+            .history
+            .suggestions(query, HISTORY_SUGGESTIONS, now_unix_secs(), &exclude);
+        let reply = serde_json::json!({
+            "request_id": request_id,
+            "query": query,
+            "items": items,
+        });
+        match source_tab_id {
+            None => {
+                let _ = self.sidebar_webview.evaluate_script(&format!(
+                    "window.onHistorySuggestions && window.onHistorySuggestions({reply});"
+                ));
+            }
+            Some(id) => {
+                if let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) {
+                    tab.evaluate_script(&format!(
+                        "if (location.protocol === 'eclipse:' && typeof window.onEclipseHistorySuggestions === 'function') {{ window.onEclipseHistorySuggestions({reply}); }}"
+                    ));
+                }
+            }
+        }
+    }
+
     pub fn favorite_active_tab(&mut self) {
         if let Some(tab) = self.tabs.iter().find(|tab| tab.id == self.active_tab_id) {
             let url = tab.url.clone();
@@ -2861,6 +3333,9 @@ impl BrowserApp {
         if self.session_save_due.is_some_and(|due| now >= due) {
             self.save_session();
         }
+        if self.history_save_due.is_some_and(|due| now >= due) {
+            self.save_history_now();
+        }
         if self.hover_hold_until.is_some_and(|until| now >= until) {
             self.hover_hold_until = None;
             self.release_sidebar_hold_if_idle();
@@ -2883,6 +3358,7 @@ impl BrowserApp {
             self.state_dirty.then_some(self.next_state_flush),
             self.config_save_due,
             self.session_save_due,
+            self.history_save_due,
             self.hover_hold_until,
             self.sidebar_hide_due.map(|(due, _)| due),
             self.sidebar_reload_due,
@@ -2901,6 +3377,9 @@ impl BrowserApp {
         self.save_session();
         if self.config_save_due.is_some() {
             self.save_config_now();
+        }
+        if self.history_save_due.is_some() {
+            self.save_history_now();
         }
     }
 
@@ -3253,8 +3732,28 @@ fn is_restorable_url(url: &str) -> bool {
     is_http_url(url)
         || matches!(
             url,
-            "eclipse://newtab" | "eclipse://settings" | "eclipse://notes" | "eclipse://easel"
+            "eclipse://newtab"
+                | "eclipse://settings"
+                | "eclipse://notes"
+                | "eclipse://easel"
+                | "eclipse://history"
         )
+}
+
+/// A title the page of `visit` reported for its entry, within the visit's
+/// allowance (`HISTORY_UPDATES_PER_VISIT`). Remembers the entry's previous
+/// title for `TITLE_BEFORE_URL_WINDOW`. Returns whether history changed.
+fn note_history_title(history: &mut History, visit: &mut PageVisit, title: &str) -> bool {
+    if visit.title_updates >= HISTORY_UPDATES_PER_VISIT {
+        return false;
+    }
+    let before = history.title_of(&visit.url).unwrap_or_default().to_string();
+    if !history.set_title(&visit.url, title) {
+        return false;
+    }
+    visit.title_updates += 1;
+    visit.title_before = Some((before, Instant::now()));
+    true
 }
 
 fn now_unix_secs() -> u64 {
@@ -3333,7 +3832,7 @@ fn is_plausible_url_report(url: &str, frame_origin: &str, committed_url: &str) -
 /// Other commands are left to the sender allowlist.
 fn is_plausible_page_report(command: &IpcCommand, frame_origin: &str, committed_url: &str) -> bool {
     match command {
-        IpcCommand::UrlChanged { url } => is_plausible_url_report(url, frame_origin, committed_url),
+        IpcCommand::UrlChanged { url, .. } => is_plausible_url_report(url, frame_origin, committed_url),
         IpcCommand::UpdateFavicon { .. }
         | IpcCommand::SetAudible { .. }
         | IpcCommand::UpdateScroll { .. }
@@ -3345,15 +3844,25 @@ fn is_plausible_page_report(command: &IpcCommand, frame_origin: &str, committed_
 /// The per-sender command allowlist (C1). Websites may only report their own
 /// page state and open http(s) links in new tabs; a Little Eclipse popup is
 /// not the tab's page, so it may only open http(s) links in new tabs.
+/// History is not the sidebar's to read or change (it may only ask for
+/// command bar suggestions); internal pages reach it only through
+/// `is_tab_command_allowed`, which knows which page is asking.
 pub fn is_command_allowed(sender: IpcSender, command: &IpcCommand) -> bool {
     match sender {
-        IpcSender::Sidebar => true,
+        IpcSender::Sidebar => !matches!(
+            command,
+            IpcCommand::HistoryQuery { .. } | IpcCommand::HistoryDelete { .. } | IpcCommand::HistoryClear { .. }
+        ),
         IpcSender::Internal => !matches!(
             command,
             IpcCommand::WindowClose
                 | IpcCommand::WindowMinimize
                 | IpcCommand::WindowZoom
                 | IpcCommand::DragWindow
+                | IpcCommand::HistoryQuery { .. }
+                | IpcCommand::HistoryDelete { .. }
+                | IpcCommand::HistoryClear { .. }
+                | IpcCommand::HistorySuggest { .. }
         ),
         IpcSender::DepartingInternal => matches!(
             command,
@@ -3375,6 +3884,33 @@ pub fn is_command_allowed(sender: IpcSender, command: &IpcCommand) -> bool {
             matches!(command, IpcCommand::NewTab { url: Some(url), .. } if is_http_url(url.trim()))
         }
     }
+}
+
+/// `is_command_allowed` for a message from a tab, which also knows the
+/// internal page that sent it (`page`, see `tab_internal_page`). History may
+/// be read and changed only by eclipse://history, cleared also from
+/// Preferences, and searched for suggestions by the new-tab page's search
+/// box. No website, Little Eclipse window or departing page ever reaches it,
+/// whatever page it claims to be.
+pub fn is_tab_command_allowed(sender: IpcSender, page: Option<InternalPage>, command: &IpcCommand) -> bool {
+    let history_page = match command {
+        IpcCommand::HistoryQuery { .. } | IpcCommand::HistoryDelete { .. } => page == Some(InternalPage::History),
+        IpcCommand::HistoryClear { .. } => {
+            matches!(page, Some(InternalPage::History | InternalPage::Settings))
+        }
+        IpcCommand::HistorySuggest { .. } => page == Some(InternalPage::NewTab),
+        _ => return is_command_allowed(sender, command),
+    };
+    sender == IpcSender::Internal && history_page
+}
+
+/// The internal page that posted a tab's message: the posting frame's page,
+/// by the URL WebKit reports for the frame, when the tab's committed document
+/// is that same page. None for a website, the error page, or a frame and
+/// document that disagree.
+fn tab_internal_page(frame_url: &str, committed_url: &str) -> Option<InternalPage> {
+    let page = InternalPage::from_url(frame_url)?;
+    (InternalPage::from_url(committed_url) == Some(page)).then_some(page)
 }
 
 /// The variant name of a command, for logs (never its payload).
@@ -3825,6 +4361,8 @@ pub fn title_for_url(url: &str) -> String {
         "Eclipse Notes".into()
     } else if url == "eclipse://easel" {
         "Eclipse Easel".into()
+    } else if url == "eclipse://history" {
+        "History".into()
     } else if url.starts_with("eclipse://") {
         "New Tab".into()
     } else {
@@ -3918,7 +4456,8 @@ pub(crate) struct CommandBarTab<'a> {
     pub last_active: Instant,
 }
 
-const COMMAND_BAR_SUGGESTIONS: usize = 64;
+/// Keep in sync with kEclipseCommandBarMaxSuggestions (menu.m).
+const COMMAND_BAR_SUGGESTIONS: usize = 160;
 
 /// One row of the New Little Eclipse Window bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3932,13 +4471,14 @@ pub(crate) struct CommandBarSuggestion {
 
 /// What the New Little Eclipse Window bar (⌥⌘N) suggests: the current
 /// Space's tabs, most recently used first, then the favourites, then other
-/// Spaces' tabs. Web pages only, each address once, titles cleaned of
-/// control characters (the URL's host stands in for a missing one), each
-/// with the icon the sidebar shows for it (a favourite's is its site's
-/// /favicon.ico).
+/// Spaces' tabs, then `history` (most visited first). Web pages only, each
+/// address once, titles cleaned of control characters (the URL's host stands
+/// in for a missing one), each with the icon the sidebar shows for it (a
+/// favourite's is its site's /favicon.ico).
 pub(crate) fn little_command_bar_suggestions(
     tabs: &[CommandBarTab],
     favorites: &[FavoriteShortcut],
+    history: &[HistoryItem],
 ) -> Vec<CommandBarSuggestion> {
     let mut ordered: Vec<&CommandBarTab> = tabs.iter().collect();
     ordered.sort_by_key(|tab| (!tab.current_space, std::cmp::Reverse(tab.last_active)));
@@ -3956,7 +4496,12 @@ pub(crate) fn little_command_bar_suggestions(
                 .iter()
                 .map(|favorite| (favorite.title.as_str(), favorite.url.as_str(), get_favicon_url(&favorite.url))),
         )
-        .chain(other.iter().map(tab_candidate));
+        .chain(other.iter().map(tab_candidate))
+        .chain(
+            history
+                .iter()
+                .map(|item| (item.title.as_str(), item.url.as_str(), item.icon.clone())),
+        );
     let mut seen = HashSet::new();
     let mut suggestions = Vec::new();
     for (title, url, icon) in candidates {
@@ -4250,7 +4795,7 @@ mod tests {
             favorite("Old again", "https://old.example/"),
             favorite("Script", "javascript:alert(1)"),
         ];
-        let suggestions = little_command_bar_suggestions(&tabs, &favorites);
+        let suggestions = little_command_bar_suggestions(&tabs, &favorites, &[]);
         let urls: Vec<&str> = suggestions.iter().map(|s| s.url.as_str()).collect();
         assert_eq!(
             urls,
@@ -4264,7 +4809,7 @@ mod tests {
         );
         assert_eq!(suggestions[0].title, "Recent page");
         assert_eq!(suggestions[2].title, "untitled.example");
-        assert!(little_command_bar_suggestions(&[], &[]).is_empty());
+        assert!(little_command_bar_suggestions(&[], &[], &[]).is_empty());
     }
 
     #[test]
@@ -4291,7 +4836,7 @@ mod tests {
             url: "https://chatgpt.com/".into(),
             icon: String::new(),
         }];
-        let icons: Vec<(String, Option<String>)> = little_command_bar_suggestions(&tabs, &favorites)
+        let icons: Vec<(String, Option<String>)> = little_command_bar_suggestions(&tabs, &favorites, &[])
             .into_iter()
             .map(|s| (s.url, s.icon))
             .collect();
@@ -4308,6 +4853,50 @@ mod tests {
                 ("https://chatgpt.com/".into(), Some("https://chatgpt.com/favicon.ico".into())),
             ]
         );
+    }
+
+    #[test]
+    fn the_little_window_bar_suggests_history_after_tabs_and_favourites() {
+        let now = Instant::now();
+        let tabs = [CommandBarTab {
+            title: "Open",
+            url: "https://open.example/",
+            favicon_url: None,
+            current_space: true,
+            last_active: now,
+        }];
+        let favorites = [FavoriteShortcut {
+            title: "Fav".into(),
+            url: "https://fav.example".into(),
+            icon: String::new(),
+        }];
+        let item = |title: &str, url: &str| HistoryItem {
+            url: url.into(),
+            title: title.into(),
+            host: String::new(),
+            icon: get_favicon_url(url),
+            last_visit: 0,
+            visit_count: 1,
+        };
+        let history = [
+            item("Visited", "https://visited.example/a"),
+            // Already a tab or a favourite: listed once.
+            item("Open again", "https://open.example/"),
+            item("Fav again", "https://fav.example/"),
+            item("", "https://untitled.example/"),
+        ];
+        let suggestions = little_command_bar_suggestions(&tabs, &favorites, &history);
+        let rows: Vec<(&str, &str)> = suggestions.iter().map(|s| (s.title.as_str(), s.url.as_str())).collect();
+        assert_eq!(
+            rows,
+            [
+                ("Open", "https://open.example/"),
+                ("Fav", "https://fav.example/"),
+                ("Visited", "https://visited.example/a"),
+                ("untitled.example", "https://untitled.example/"),
+            ]
+        );
+        assert_eq!(suggestions[2].icon.as_deref(), Some("https://visited.example/favicon.ico"));
     }
 
     #[test]
@@ -4381,6 +4970,15 @@ mod tests {
             normalize_url("eclipse://easel", &config()),
             "eclipse://easel"
         );
+        assert_eq!(
+            normalize_url("eclipse://history", &config()),
+            "eclipse://history"
+        );
+        assert_eq!(
+            normalize_url("eclipse://localhost/history", &config()),
+            "eclipse://history"
+        );
+        assert_eq!(title_for_url("eclipse://history"), "History");
         assert!(normalize_url("hello world", &config()).starts_with("https://duckduckgo.com/?q="));
         assert!(
             normalize_url("javascript:alert(1)", &config()).starts_with("https://duckduckgo.com")
@@ -4655,6 +5253,100 @@ mod tests {
             tab_ipc_sender("eclipse://localhost/settings", INTERNAL_DOC, true, false),
             IpcSender::DepartingInternal
         );
+    }
+
+    const HISTORY_COMMANDS: [&str; 4] = [
+        r#"{"action":"history_query","query":"bank","offset":0,"limit":50,"request_id":1}"#,
+        r#"{"action":"history_delete","url":"https://a.example/"}"#,
+        r#"{"action":"history_clear","range":"all"}"#,
+        r#"{"action":"history_suggest","query":"bank","request_id":2}"#,
+    ];
+
+    /// Whether a message posted by a frame at `frame_url` in a tab whose
+    /// committed document is `committed_url` may run `json`.
+    fn tab_may(frame_url: &str, committed_url: &str, document: DocumentTrust, closing: bool, little: bool, json: &str) -> bool {
+        let sender = tab_ipc_sender(frame_url, document, closing, little);
+        is_tab_command_allowed(sender, tab_internal_page(frame_url, committed_url), &command(json))
+    }
+
+    #[test]
+    fn websites_can_never_read_or_change_history() {
+        let history = "eclipse://localhost/history";
+        for json in HISTORY_COMMANDS {
+            // A website, also one on a path or host named like the page,
+            // or one claiming the page's URL as its frame.
+            for (frame, committed) in [
+                ("https://evil.example/", "https://evil.example/"),
+                ("https://evil.example/history", "https://evil.example/history"),
+                ("https://history/", "https://history/"),
+                ("eclipse://localhost/history", "https://evil.example/"),
+            ] {
+                assert!(!tab_may(frame, committed, WEB_DOC, false, false, json), "{frame} {json}");
+                assert!(!is_tab_command_allowed(IpcSender::Web, Some(InternalPage::History), &command(json)), "{json}");
+            }
+            // A web document still current while eclipse://history loads.
+            assert!(!tab_may("https://evil.example/", history, INTERNAL_DOC, false, false, json), "{json}");
+            // A Little Eclipse popup, whatever it claims to be.
+            assert!(!tab_may(history, history, INTERNAL_DOC, false, true, json), "{json}");
+            assert!(!is_tab_command_allowed(IpcSender::LittleWindow, Some(InternalPage::History), &command(json)));
+            // The history page as it closes or once the tab left it.
+            assert!(!tab_may(history, history, INTERNAL_DOC, true, false, json), "{json}");
+            assert!(!tab_may(history, "https://next.example/", LEFT_INTERNAL_DOC, false, false, json), "{json}");
+            // The error page.
+            assert!(!tab_may("about:blank", "https://down.example/", WEB_DOC, false, false, json), "{json}");
+        }
+    }
+
+    #[test]
+    fn only_the_history_page_reads_and_changes_history() {
+        let page = |route: &str| format!("eclipse://localhost/{route}");
+        let (query, delete, clear, suggest) = (
+            HISTORY_COMMANDS[0],
+            HISTORY_COMMANDS[1],
+            HISTORY_COMMANDS[2],
+            HISTORY_COMMANDS[3],
+        );
+        let history = page("history");
+        assert!(tab_may(&history, &history, INTERNAL_DOC, false, false, query));
+        assert!(tab_may(&history, &history, INTERNAL_DOC, false, false, delete));
+        assert!(tab_may(&history, &history, INTERNAL_DOC, false, false, clear));
+        // Preferences may only clear it; the new-tab page may only ask for
+        // suggestions; Notes and Easel may do neither.
+        let settings = page("settings");
+        assert!(tab_may(&settings, &settings, INTERNAL_DOC, false, false, clear));
+        assert!(!tab_may(&settings, &settings, INTERNAL_DOC, false, false, query));
+        assert!(!tab_may(&settings, &settings, INTERNAL_DOC, false, false, delete));
+        let newtab = page("newtab");
+        assert!(tab_may(&newtab, &newtab, INTERNAL_DOC, false, false, suggest));
+        assert!(!tab_may(&history, &history, INTERNAL_DOC, false, false, suggest));
+        for json in [query, delete, clear] {
+            assert!(!tab_may(&newtab, &newtab, INTERNAL_DOC, false, false, json), "{json}");
+        }
+        for route in ["notes", "easel"] {
+            for json in HISTORY_COMMANDS {
+                assert!(!tab_may(&page(route), &page(route), INTERNAL_DOC, false, false, json), "{route} {json}");
+            }
+        }
+        // A frame and committed document that disagree name no page.
+        assert!(!tab_may(&history, &settings, INTERNAL_DOC, false, false, query));
+        assert_eq!(tab_internal_page(&history, &settings), None);
+        assert_eq!(tab_internal_page(&history, "eclipse://localhost/history/"), Some(InternalPage::History));
+        // Without knowing the page, internal senders get nothing.
+        for json in HISTORY_COMMANDS {
+            assert!(!is_command_allowed(IpcSender::Internal, &command(json)), "{json}");
+        }
+        // The sidebar may ask for suggestions and open the page, nothing more.
+        assert!(is_command_allowed(IpcSender::Sidebar, &command(suggest)));
+        for json in [query, delete, clear] {
+            assert!(!is_command_allowed(IpcSender::Sidebar, &command(json)), "{json}");
+        }
+        let open = command(r#"{"action":"open_history_tab"}"#);
+        assert!(is_command_allowed(IpcSender::Sidebar, &open));
+        assert!(is_tab_command_allowed(IpcSender::Internal, Some(InternalPage::NewTab), &open));
+        assert!(!is_command_allowed(IpcSender::Web, &open));
+        assert!(!is_command_allowed(IpcSender::LittleWindow, &open));
+        // Unknown ranges are not commands at all.
+        assert!(serde_json::from_str::<IpcCommand>(r#"{"action":"history_clear","range":"forever"}"#).is_err());
     }
 
     #[test]
@@ -4940,6 +5632,7 @@ mod tests {
     fn restorable_urls_exclude_transient_pages() {
         assert!(is_restorable_url("https://a.example/"));
         assert!(is_restorable_url("eclipse://notes"));
+        assert!(is_restorable_url("eclipse://history"));
         assert!(!is_restorable_url("about:blank"));
         assert!(!is_restorable_url("eclipse://sidebar"));
         assert!(!is_restorable_url("eclipse://error"));
@@ -5014,5 +5707,77 @@ mod tests {
         let manifest = serde_json::json!({"name": "__MSG_EXTNAME__", "default_locale": "en"});
         assert_eq!(manifest_text(&base, &manifest, "name").as_deref(), Some("Real Name"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn same_document_visits_are_rate_limited_per_tab() {
+        let start = Instant::now();
+        let mut budget = VisitBudget::new(start);
+        // A burst is allowed, then nothing until time has passed.
+        for _ in 0..SAME_DOCUMENT_VISIT_BURST {
+            assert!(budget.take(start));
+        }
+        assert!(!budget.take(start));
+        assert!(!budget.take(start + SAME_DOCUMENT_VISIT_INTERVAL / 2));
+        assert!(budget.take(start + SAME_DOCUMENT_VISIT_INTERVAL));
+        assert!(!budget.take(start + SAME_DOCUMENT_VISIT_INTERVAL));
+        // A page changing its address ten times a second for an hour gets
+        // one new visit per interval, not 36,000.
+        let mut granted = 0;
+        for tick in 0..36_000u32 {
+            if budget.take(start + SAME_DOCUMENT_VISIT_INTERVAL + Duration::from_millis(100) * tick) {
+                granted += 1;
+            }
+        }
+        assert!(granted <= 3600 / SAME_DOCUMENT_VISIT_INTERVAL.as_secs() as u32 + 1, "{granted}");
+        // A long pause refills the burst, and no more.
+        let later = start + Duration::from_secs(24 * 60 * 60);
+        for _ in 0..SAME_DOCUMENT_VISIT_BURST {
+            assert!(budget.take(later));
+        }
+        assert!(!budget.take(later));
+    }
+
+    #[test]
+    fn a_page_may_retitle_its_history_entry_only_a_few_times_per_visit() {
+        let mut history = History::in_memory();
+        let visit = history.record_visit("https://timer.example/", None, now_unix_secs()).unwrap();
+        let mut page = PageVisit::new(visit.url.clone(), Some(visit.at), Instant::now());
+        let mut changed = 0;
+        for second in 0..60 {
+            if note_history_title(&mut history, &mut page, &format!("00:{second:02} remaining")) {
+                changed += 1;
+            }
+        }
+        assert_eq!(changed, HISTORY_UPDATES_PER_VISIT as usize);
+        let title = format!("00:{:02} remaining", HISTORY_UPDATES_PER_VISIT - 1);
+        assert_eq!(history.title_of(&visit.url), Some(title.as_str()));
+        // The title before the latest change is kept for a page that
+        // changes its address right after (pushState).
+        let (before, _) = page.title_before.clone().unwrap();
+        assert_eq!(before, format!("00:{:02} remaining", HISTORY_UPDATES_PER_VISIT - 2));
+        // A new visit starts a new allowance.
+        let mut next = PageVisit::new(visit.url.clone(), Some(visit.at), Instant::now());
+        assert!(note_history_title(&mut history, &mut next, "Done"));
+        assert!(!note_history_title(&mut history, &mut next, "Done"));
+        assert_eq!(next.title_updates, 1);
+    }
+
+    #[test]
+    fn url_changes_say_how_the_address_changed() {
+        let kind = |json: &str| match command(json) {
+            IpcCommand::UrlChanged { kind, .. } => kind,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            kind(r#"{"action":"url_changed","url":"https://a.example/x","kind":"replace"}"#),
+            UrlChangeKind::Replace
+        );
+        assert_eq!(kind(r#"{"action":"url_changed","url":"https://a.example/x","kind":"hash"}"#), UrlChangeKind::Hash);
+        assert_eq!(kind(r#"{"action":"url_changed","url":"https://a.example/x"}"#), UrlChangeKind::Push);
+        assert!(
+            serde_json::from_str::<IpcCommand>(r#"{"action":"url_changed","url":"https://a.example/x","kind":"teleport"}"#)
+                .is_err()
+        );
     }
 }

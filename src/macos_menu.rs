@@ -83,6 +83,7 @@ type NavigationCallback = extern "C" fn(
 const POLICY_MAIN_FRAME: i32 = 1;
 const POLICY_BACK_FORWARD: i32 = 2;
 const POLICY_OTHER_VIEW: i32 = 4;
+const POLICY_USER_GESTURE: i32 = 8;
 
 static MENU_PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
 static EDGE_PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
@@ -300,6 +301,7 @@ pub fn navigation_policy_context() -> PolicyContext {
         main_frame: bits & POLICY_MAIN_FRAME != 0,
         back_forward: bits & POLICY_BACK_FORWARD != 0,
         other_view: bits & POLICY_OTHER_VIEW != 0,
+        user_gesture: bits & POLICY_USER_GESTURE != 0,
     }
 }
 

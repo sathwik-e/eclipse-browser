@@ -560,6 +560,12 @@ textarea.code-input {
   border-radius: 8px;
 }
 
+.clear-history-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .install-box-title {
   font-size: 13px;
   font-weight: 600;
@@ -694,6 +700,32 @@ textarea.code-input {
     <input type="checkbox" id="chk-autoplay" checked />
   </div>
   <p class="hint">DRM and autoplay preferences apply only to tabs opened after the change. Content shields, search engine and tab suspension changes apply immediately.</p>
+</div>
+
+<div class="card" id="history-card">
+  <div class="card-header">
+    <h2>History</h2>
+    <button type="button" class="btn" id="btn-show-history">Show All History</button>
+  </div>
+  <div class="row">
+    <div>
+      <div style="font-weight: 500;">Save browsing history</div>
+      <div class="hint" style="margin-top:2px;">Pages you visit in tabs and Little Eclipse windows are kept on this Mac for 90 days, for History (⌘Y) and the command bar's suggestions. When off, nothing new is added; what is already saved stays until you clear it or it is 90 days old.</div>
+    </div>
+    <input type="checkbox" id="chk-save-history" checked />
+  </div>
+  <div class="row">
+    <span>Clear browsing history…</span>
+    <div class="clear-history-controls">
+      <select id="clear-history-range" aria-label="Time range to clear">
+        <option value="last_hour">Last hour</option>
+        <option value="today">Today</option>
+        <option value="today_and_yesterday">Today and yesterday</option>
+        <option value="all">All history</option>
+      </select>
+      <button type="button" class="btn danger" id="btn-clear-history">Clear</button>
+    </div>
+  </div>
 </div>
 
 <div class="card" id="max-card">
@@ -848,6 +880,7 @@ const DEFAULT_CONFIG = {
   tidy_tab_titles: true,
   tidy_downloads: true,
   ai_in_command_bar: true,
+  save_history: true,
   adblock_enabled: true,
   adblock_disabled_domains: [],
   webextensions_enabled: true,
@@ -1011,6 +1044,7 @@ function renderUI() {
   document.getElementById('chk-drm').checked = cfg.drm_fairplay_enabled !== false;
   document.getElementById('chk-autoplay').checked = cfg.autoplay_enabled !== false;
   document.getElementById('chk-little-links').checked = cfg.open_links_in_little_window !== false;
+  document.getElementById('chk-save-history').checked = cfg.save_history !== false;
   document.getElementById('chk-extensions').checked = cfg.webextensions_enabled !== false;
   document.querySelectorAll('input[data-max-setting]').forEach(input => {
     input.checked = cfg[input.dataset.maxSetting] !== false;
@@ -1312,6 +1346,38 @@ document.getElementById('chk-little-links').addEventListener('change', (e) => {
 document.querySelectorAll('input[data-max-setting]').forEach(input => {
   input.addEventListener('change', () => setSetting(input.dataset.maxSetting, input.checked));
 });
+
+document.getElementById('chk-save-history').addEventListener('change', (e) => {
+  setSetting('save_history', e.target.checked);
+});
+
+document.getElementById('btn-show-history').addEventListener('click', () => {
+  postIpc({ action: 'open_history_tab' });
+});
+
+// Clearing takes a second click within a few seconds; Eclipse confirms with
+// a notice in the sidebar.
+const CLEAR_CONFIRM_MS = 3000;
+const clearHistoryBtn = document.getElementById('btn-clear-history');
+const clearHistoryRange = document.getElementById('clear-history-range');
+let clearHistoryArmed = null;
+
+function disarmClearHistory() {
+  if (clearHistoryArmed) clearTimeout(clearHistoryArmed);
+  clearHistoryArmed = null;
+  clearHistoryBtn.textContent = 'Clear';
+}
+
+clearHistoryBtn.addEventListener('click', () => {
+  if (!clearHistoryArmed) {
+    clearHistoryBtn.textContent = 'Click again to clear';
+    clearHistoryArmed = setTimeout(disarmClearHistory, CLEAR_CONFIRM_MS);
+    return;
+  }
+  disarmClearHistory();
+  postIpc({ action: 'history_clear', range: clearHistoryRange.value });
+});
+clearHistoryRange.addEventListener('change', disarmClearHistory);
 
 document.getElementById('chk-extensions').addEventListener('change', (e) => {
   setSetting('webextensions_enabled', e.target.checked);

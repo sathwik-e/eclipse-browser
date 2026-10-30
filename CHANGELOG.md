@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.0.2 — 2026-10-30
+
+### Added
+- **Browsing history.** Eclipse now remembers the pages you visit, like other
+  browsers.
+  - **History > Show All History** (⌘Y), History in the sidebar's Library
+    menu, the History command in the command bar or the History pill on the
+    new tab page opens `eclipse://history` (an open history tab in the
+    current Space is reused). Pages are grouped by day with their time,
+    icon, title and site. Search as you type; click to open a page in the
+    current tab, ⌘-click or middle-click for a new tab; the × on hover
+    removes a page.
+  - **Clear browsing history…** on the history page and in Settings >
+    History removes the last hour, today, today and yesterday, or all
+    history.
+  - **Suggestions.** Pages from history appear in the command bar (⌘K), the
+    new tab page's search box and the ⌥⌘N bar, after open tabs and
+    favourites, ranked by how often and how recently you visited them.
+  - **Save browsing history** in Settings > History (on by default) stops
+    recording when switched off.
+  - Pages in tabs and Little Eclipse windows are recorded once they load;
+    in tabs, so are address changes made by single-page apps (a page that
+    replaces its address, as maps and search boxes do, keeps one visit that
+    moves along, and a page changing its address in a loop cannot flood
+    history). For a server redirect only the final address is kept, and a
+    page that sends you on by script or meta refresh within two seconds is
+    dropped (a link you click is never treated as a redirect). Reloading a page, or waking a hibernated or restored tab, is
+    not a new visit. Internal pages, error pages and non-web addresses are
+    not recorded.
+  - History is stored in `~/.config/eclipse-browser/history.json`, keeps
+    visits for 90 days and at most 10,000 pages (addresses), and is written
+    a few seconds after a change and on quit (clearing and removing are
+    written at once). An unreadable file is set aside instead of being
+    overwritten, and removed when all history is cleared.
+  - Icons on the history page are https only and from each page's own
+    site.
+  - Only the history page can read or change history (Settings may also
+    clear it); websites and Little Eclipse windows cannot.
+
 ## 1.0.1 — 2026-10-29
 
 ### Added

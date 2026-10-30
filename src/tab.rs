@@ -111,11 +111,33 @@ struct NavState {
     native_adblock: AtomicU8,
     /// The tab's ad-blocking rules, for decisions made at navigation time.
     adblock: Mutex<AdblockPolicy>,
+    /// How the next main-frame commit comes about, for history (COMMIT_*):
+    /// set when the browser starts a load, taken by the commit.
+    next_commit_origin: AtomicU8,
+    /// The same for the committed document.
+    commit_origin: AtomicU8,
     /// The tab's WKWebView as an NSView pointer once it is built (0 before).
     /// It lives exactly as long as the webview that owns this state's
     /// navigation handler.
     view: AtomicUsize,
 }
+
+/// How a main-frame document came to be committed (`Tab::commit_origin`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitOrigin {
+    /// The page navigated itself (a link, a script, a redirect).
+    Page,
+    /// The browser loaded it for the user: an address typed or picked, a
+    /// new tab, back or forward.
+    User,
+    /// The browser loaded again what the tab already showed: a hibernated
+    /// or restored tab woken, a reload. Not a new visit.
+    Reload,
+}
+
+const COMMIT_BY_PAGE: u8 = 0;
+const COMMIT_BY_USER: u8 = 1;
+const COMMIT_RELOAD: u8 = 2;
 
 impl NavState {
     fn committed_url(&self) -> String {
@@ -169,6 +191,19 @@ impl NavState {
     fn begin_browser_load(&self, url: &str) {
         self.set_browser_target(is_eclipse_scheme(url).then(|| url.to_string()));
         self.browser_load_pending.store(true, Ordering::Relaxed);
+        self.next_commit_origin.store(COMMIT_BY_USER, Ordering::Relaxed);
+    }
+
+    /// The user started the next main-frame load from the page (a link they
+    /// clicked), so it commits as theirs, not as the page's own navigation.
+    /// A reload or a browser load already pending keeps its origin.
+    fn note_user_navigation(&self) {
+        let _ = self.next_commit_origin.compare_exchange(
+            COMMIT_BY_PAGE,
+            COMMIT_BY_USER,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
     }
 
     /// A document committed: the previous one's grants and flags are over.
@@ -181,6 +216,8 @@ impl NavState {
         self.left_internal
             .store(was_internal && !internal, Ordering::Relaxed);
         self.set_committed_url(url);
+        let origin = self.next_commit_origin.swap(COMMIT_BY_PAGE, Ordering::Relaxed);
+        self.commit_origin.store(origin, Ordering::Relaxed);
         self.epoch.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -332,6 +369,8 @@ impl Tab {
             "Eclipse Notes".to_string()
         } else if is_eclipse_url && url.contains("easel") {
             "Eclipse Easel".to_string()
+        } else if is_eclipse_url && url.contains("history") {
+            "History".to_string()
         } else if is_eclipse_url {
             "New Tab".to_string()
         } else {
@@ -498,6 +537,9 @@ impl Tab {
                 let allowed = nav_policy.allows_navigation(&url, context);
                 if allowed && context.main_frame {
                     nav_policy.prepare_main_frame_load(&url);
+                    if context.user_gesture {
+                        nav_policy.note_user_navigation();
+                    }
                 }
                 allowed
             })
@@ -732,6 +774,28 @@ impl Tab {
         self.nav.committed_url()
     }
 
+    /// The committed web page, as history records it: None while an
+    /// internal page or the error page is on screen, before anything
+    /// committed and for a hibernated tab.
+    pub fn committed_web_url(&self) -> Option<String> {
+        let trust = self.nav.document_trust();
+        if self.webview.is_none() || self.nav.showing_error_page.load(Ordering::Relaxed) || trust.internal {
+            return None;
+        }
+        let url = self.nav.committed_url();
+        is_http_url(&url).then_some(url)
+    }
+
+    /// How the committed document came about (for history: a reload is no
+    /// new visit, and only a page's own navigation can be a redirect).
+    pub fn commit_origin(&self) -> CommitOrigin {
+        match self.nav.commit_origin.load(Ordering::Relaxed) {
+            COMMIT_BY_USER => CommitOrigin::User,
+            COMMIT_RELOAD => CommitOrigin::Reload,
+            _ => CommitOrigin::Page,
+        }
+    }
+
     /// The committed document changed its own URL (pushState, a fragment).
     pub fn note_same_document_url(&self, url: &str) {
         self.nav.set_committed_url(url);
@@ -836,6 +900,7 @@ impl Tab {
                 let _ = wv.load_url(&target);
                 return;
             }
+            self.nav.next_commit_origin.store(COMMIT_RELOAD, Ordering::Relaxed);
             let _ = wv.reload();
         }
     }
@@ -857,6 +922,7 @@ impl Tab {
         if let Some(ref wv) = self.webview {
             if wv.can_go_back().unwrap_or(false) {
                 self.flush_before_leaving();
+                self.nav.next_commit_origin.store(COMMIT_BY_USER, Ordering::Relaxed);
                 let _ = wv.go_back();
             } else {
                 let _ = wv.evaluate_script("if (window.history) { window.history.back(); }");
@@ -868,6 +934,7 @@ impl Tab {
         if let Some(ref wv) = self.webview {
             if wv.can_go_forward().unwrap_or(false) {
                 self.flush_before_leaving();
+                self.nav.next_commit_origin.store(COMMIT_BY_USER, Ordering::Relaxed);
                 let _ = wv.go_forward();
             } else {
                 let _ = wv.evaluate_script("if (window.history) { window.history.forward(); }");
@@ -1074,6 +1141,8 @@ impl Tab {
         if self.is_hibernated || self.webview.is_none() {
             let saved_scroll = (self.scroll_x, self.scroll_y);
             let webview = self.build_webview(window, proxy, bounds, config);
+            // The page the tab already showed, not a new visit.
+            self.nav.next_commit_origin.store(COMMIT_RELOAD, Ordering::Relaxed);
             if (self.zoom - 1.0).abs() > f64::EPSILON {
                 let _ = webview.zoom(self.zoom);
             }
@@ -1131,6 +1200,7 @@ pub fn tab_webview_url(url: &str) -> String {
         "eclipse://settings" => "eclipse://localhost/settings".to_string(),
         "eclipse://notes" => "eclipse://localhost/notes".to_string(),
         "eclipse://easel" => "eclipse://localhost/easel".to_string(),
+        "eclipse://history" => "eclipse://localhost/history".to_string(),
         other => other.to_string(),
     }
 }
@@ -1145,6 +1215,9 @@ pub fn canonicalize_eclipse_url(url: &str) -> String {
         }
         if url.contains("easel") {
             return "eclipse://easel".to_string();
+        }
+        if url.contains("history") {
+            return "eclipse://history".to_string();
         }
         return "eclipse://newtab".to_string();
     }
@@ -1216,6 +1289,9 @@ pub struct PolicyContext {
     /// popup setting `window.opener.location` (or targeting the tab by
     /// name). Never the browser's own loads or the tab's own pages.
     pub other_view: bool,
+    /// A main-frame navigation the user started in the page (a link they
+    /// clicked): a new visit, never a client-side redirect.
+    pub user_gesture: bool,
 }
 
 fn navigation_policy_context() -> PolicyContext {
@@ -2114,6 +2190,10 @@ mod tests {
             "eclipse://easel"
         );
         assert_eq!(
+            canonicalize_eclipse_url("eclipse://localhost/history"),
+            "eclipse://history"
+        );
+        assert_eq!(
             canonicalize_eclipse_url("eclipse://sidebar"),
             "eclipse://newtab"
         );
@@ -2140,6 +2220,10 @@ mod tests {
         assert_eq!(
             tab_webview_url("eclipse://easel"),
             "eclipse://localhost/easel"
+        );
+        assert_eq!(
+            tab_webview_url("eclipse://history"),
+            "eclipse://localhost/history"
         );
         assert_eq!(
             tab_webview_url("https://example.com"),
@@ -2304,22 +2388,26 @@ mod tests {
         main_frame: true,
         back_forward: false,
         other_view: false,
+        user_gesture: false,
     };
     const BACK: PolicyContext = PolicyContext {
         main_frame: true,
         back_forward: true,
         other_view: false,
+        user_gesture: false,
     };
     const SUBFRAME: PolicyContext = PolicyContext {
         main_frame: false,
         back_forward: false,
         other_view: false,
+        user_gesture: false,
     };
     /// A Little Eclipse popup navigating its opener tab.
     const POPUP: PolicyContext = PolicyContext {
         main_frame: true,
         back_forward: false,
         other_view: true,
+        user_gesture: false,
     };
 
     #[test]
@@ -2366,6 +2454,39 @@ mod tests {
 
         nav.current_is_internal.store(true, Ordering::Relaxed);
         assert!(nav.allows_navigation("eclipse://localhost/easel", MAIN));
+    }
+
+    #[test]
+    fn each_commit_knows_who_started_it() {
+        let origin = |nav: &NavState| nav.commit_origin.load(Ordering::Relaxed);
+        let nav = NavState::default();
+        nav.begin_browser_load("https://example.com/");
+        nav.note_commit("https://example.com/");
+        assert_eq!(origin(&nav), COMMIT_BY_USER);
+        // The next commit was not asked for: the page navigated itself (a
+        // link, a client-side redirect).
+        nav.note_commit("https://example.com/next");
+        assert_eq!(origin(&nav), COMMIT_BY_PAGE);
+        // A reload or a woken tab is taken by exactly one commit.
+        nav.next_commit_origin.store(COMMIT_RELOAD, Ordering::Relaxed);
+        nav.note_commit("https://example.com/next");
+        assert_eq!(origin(&nav), COMMIT_RELOAD);
+        nav.note_commit("https://example.com/other");
+        assert_eq!(origin(&nav), COMMIT_BY_PAGE);
+        // A link the user clicked commits as theirs (never a redirect), but
+        // does not turn a pending reload into a visit.
+        nav.note_user_navigation();
+        nav.note_commit("https://example.com/clicked");
+        assert_eq!(origin(&nav), COMMIT_BY_USER);
+        nav.next_commit_origin.store(COMMIT_RELOAD, Ordering::Relaxed);
+        nav.note_user_navigation();
+        nav.note_commit("https://example.com/clicked");
+        assert_eq!(origin(&nav), COMMIT_RELOAD);
+        // A load the user starts meanwhile is no reload.
+        nav.next_commit_origin.store(COMMIT_RELOAD, Ordering::Relaxed);
+        nav.begin_browser_load("https://example.org/");
+        nav.note_commit("https://example.org/");
+        assert_eq!(origin(&nav), COMMIT_BY_USER);
     }
 
     #[test]

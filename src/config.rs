@@ -325,6 +325,10 @@ pub struct BrowserConfig {
     /// when Return is pressed does the question leave Eclipse).
     #[serde(default = "default_true")]
     pub ai_in_command_bar: bool,
+    /// Pages visited in tabs and Little Eclipse windows are added to
+    /// history (history.json, eclipse://history). Off: nothing new is.
+    #[serde(default = "default_true")]
+    pub save_history: bool,
 }
 
 impl Default for BrowserConfig {
@@ -359,12 +363,13 @@ impl Default for BrowserConfig {
             tidy_tab_titles: true,
             tidy_downloads: true,
             ai_in_command_bar: true,
+            save_history: true,
         }
     }
 }
 
 impl BrowserConfig {
-    fn config_dir() -> PathBuf {
+    pub(crate) fn config_dir() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         let mut path = PathBuf::from(home);
         path.push(".config");
@@ -392,7 +397,7 @@ impl BrowserConfig {
             Err(err) => {
                 // Unreadable (permissions, I/O): move it aside, so the next
                 // save cannot replace the user's data with these defaults.
-                let backup = bad_config_path(path);
+                let backup = bad_file_path(path);
                 match fs::rename(path, &backup) {
                     Ok(()) => eprintln!(
                         "[eclipse] config at {path:?} could not be read ({err}); moved to {backup:?}, starting from defaults"
@@ -416,7 +421,7 @@ impl BrowserConfig {
         }
         config.sanitize();
         if !problems.is_empty() {
-            let backup = bad_config_path(path);
+            let backup = bad_file_path(path);
             match fs::copy(path, &backup) {
                 Ok(_) => eprintln!(
                     "[eclipse] config at {path:?} had unreadable data ({}); original kept at {backup:?}",
@@ -560,6 +565,7 @@ impl BrowserConfig {
         "tidy_tab_titles",
         "tidy_downloads",
         "ai_in_command_bar",
+        "save_history",
     ];
 
     /// Applies an `update_settings` patch. Only keys in `PATCHABLE_SETTINGS`
@@ -619,6 +625,7 @@ impl BrowserConfig {
             "tidy_tab_titles" => value.as_bool().is_some_and(|b| set(&mut self.tidy_tab_titles, b)),
             "tidy_downloads" => value.as_bool().is_some_and(|b| set(&mut self.tidy_downloads, b)),
             "ai_in_command_bar" => value.as_bool().is_some_and(|b| set(&mut self.ai_in_command_bar, b)),
+            "save_history" => value.as_bool().is_some_and(|b| set(&mut self.save_history, b)),
             "tab_hibernation_mins" => value
                 .as_u64()
                 .filter(|m| *m <= MAX_HIBERNATION_MINS)
@@ -746,13 +753,13 @@ pub fn write_atomic(path: &Path, contents: &str) {
     }
 }
 
-/// Where a config that could not be used as-is is kept:
-/// `config.json.bad-<timestamp>`.
-fn bad_config_path(path: &Path) -> PathBuf {
+/// Where a file that could not be used as-is is kept:
+/// `config.json.bad-<timestamp>` (or `history.json.bad-…`).
+pub(crate) fn bad_file_path(path: &Path) -> PathBuf {
     path.with_extension(format!("json.bad-{}", unix_now()))
 }
 
-fn unix_now() -> u64 {
+pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -917,6 +924,18 @@ mod tests {
     }
 
     #[test]
+    fn saving_history_is_on_by_default_and_patchable() {
+        assert!(BrowserConfig::default().save_history);
+        // A config saved before history existed gets the default.
+        let old: BrowserConfig = serde_json::from_str(r#"{"theme": "void"}"#).unwrap();
+        assert!(old.save_history);
+        let mut config = BrowserConfig::default();
+        assert!(config.apply_settings_patch(&patch(r#"{"save_history": "off"}"#)).is_empty());
+        assert_eq!(config.apply_settings_patch(&patch(r#"{"save_history": false}"#)), vec!["save_history"]);
+        assert!(!config.save_history);
+    }
+
+    #[test]
     fn default_config_is_sane() {
         let config = BrowserConfig::default();
         assert_eq!(config.search_engine, "duckduckgo");
@@ -1073,7 +1092,8 @@ mod tests {
                 "custom_js": "1", "custom_css": "a{}", "custom_user_agent": "UA/2",
                 "rounded_corners_radius": 4, "open_links_in_little_window": false,
                 "tidy_tabs_button": false, "instant_links": false, "link_previews": false,
-                "tidy_tab_titles": false, "tidy_downloads": false, "ai_in_command_bar": false
+                "tidy_tab_titles": false, "tidy_downloads": false, "ai_in_command_bar": false,
+                "save_history": false
             }"##,
         );
         let changed = config.apply_settings_patch(&samples);

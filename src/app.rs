@@ -14,6 +14,7 @@ use crate::config::{
 use crate::events::{BrowserUiState, DocumentTrust, DownloadOrigin, IpcCommand, UrlChangeKind, UserEvent};
 use crate::history::{ClearRange, History, HistoryCursor, HistoryItem, history_url};
 use crate::max;
+use crate::updates::{self, CheckTrigger, Outcome, UpdateChecker};
 use crate::tab::{
     CommitOrigin, LOADING_TITLE, NavigationError, Tab, canonicalize_eclipse_url, classify_navigation_error,
     downloads_dir, generate_ipc_token, get_default_favicon, get_favicon_url,
@@ -260,6 +261,15 @@ pub struct BrowserApp {
     little_history_urls: HashMap<u64, PageVisit>,
     /// Each tab's budget for new visits from same-document address changes.
     same_document_visits: HashMap<usize, VisitBudget>,
+    /// Update checks of this run (updates.rs); the last check time and the
+    /// skipped version are in the config.
+    updates: UpdateChecker,
+    /// The title last given to Eclipse > Check for Updates….
+    update_menu_title: String,
+    /// The tab Download opened on a release file: it closes once the file
+    /// turns into a download, instead of staying blank (and downloading it
+    /// again when the session is restored).
+    update_download_tab: Option<usize>,
 }
 
 impl BrowserApp {
@@ -412,6 +422,9 @@ impl BrowserApp {
             history_urls: HashMap::new(),
             little_history_urls: HashMap::new(),
             same_document_visits: HashMap::new(),
+            updates: UpdateChecker::default(),
+            update_menu_title: updates::menu_title(None),
+            update_download_tab: None,
         };
         app.last_broadcast_memory_mb = app.memory_mb;
 
@@ -804,6 +817,11 @@ impl BrowserApp {
     }
 
     pub fn close_tab(&mut self, id: usize) {
+        self.close_tab_remembering(id, true);
+    }
+
+    /// `remember`: Reopen Closed Tab can bring it back.
+    fn close_tab_remembering(&mut self, id: usize, remember: bool) {
         let Some(position) = self.tabs.iter().position(|tab| tab.id == id) else {
             return;
         };
@@ -817,7 +835,9 @@ impl BrowserApp {
         } else {
             closed.workspace.clone()
         };
-        self.remember_closed_tab(&closed);
+        if remember {
+            self.remember_closed_tab(&closed);
+        }
         self.retire_tab(closed);
         self.forget_closed_web_url();
 
@@ -2009,6 +2029,15 @@ impl BrowserApp {
                     tab.open_devtools();
                 }
             }
+            IpcCommand::CheckForUpdates => self.check_for_updates(CheckTrigger::Settings),
+            IpcCommand::DownloadUpdate => self.open_update_download(),
+            IpcCommand::DismissUpdateNotice => self.dismiss_update_notice(),
+            IpcCommand::SkipUpdate => {
+                let version = self.updates.latest().map(|release| release.version.clone());
+                if let Some(version) = version {
+                    self.skip_update(&version);
+                }
+            }
             IpcCommand::Ready => {
                 // A (re)loaded document has none of the previous state.
                 match source_tab_id {
@@ -2410,6 +2439,9 @@ impl BrowserApp {
         }
         self.show_toast(&format!("Downloading {file_name}…"));
         self.config_changed();
+        if let Some(origin) = origin {
+            self.close_blank_update_download_tab(origin.tab_id);
+        }
     }
 
     /// A completion names the download it belongs to by `seq` when its start
@@ -2511,7 +2543,7 @@ impl BrowserApp {
                 return;
             }
             NavigationError::Interrupted => {
-                if tab.abandon_pending_load() {
+                if tab.abandon_pending_load() && !self.close_blank_update_download_tab(tab_id) {
                     self.after_abandoned_load(tab_id);
                 }
                 return;
@@ -2726,6 +2758,14 @@ impl BrowserApp {
             }
             return;
         }
+        // "Skip This Version" in an update alert, for the version it showed.
+        if let Some(version) = action.strip_prefix(updates::ACTION_SKIP_PREFIX) {
+            if self.updates.latest().is_some_and(|release| release.version == version) {
+                let version = version.to_string();
+                self.skip_update(&version);
+            }
+            return;
+        }
         match action {
             "new_tab" => {
                 self.create_tab("eclipse://newtab", true);
@@ -2801,6 +2841,20 @@ impl BrowserApp {
             "find_prev" => self.find_active("prev"),
             "print" => self.print_active(),
             "favorite_tab" => self.favorite_active_tab(),
+            "check_for_updates" => self.check_for_updates(CheckTrigger::Menu),
+            // The buttons of an update alert (menu.m).
+            updates::ACTION_DOWNLOAD => self.open_update_download(),
+            updates::ACTION_RELEASE_NOTES => {
+                let url = self
+                    .updates
+                    .latest()
+                    .map_or_else(|| updates::LATEST_RELEASE_PAGE.to_string(), updates::release_page_url);
+                self.open_update_page(&url);
+            }
+            updates::ACTION_LATER => self.dismiss_update_notice(),
+            updates::ACTION_RELEASES_PAGE => {
+                self.open_update_page(updates::LATEST_RELEASE_PAGE);
+            }
             "duplicate_tab" => {
                 if let Some(tab) = self.tabs.iter().find(|tab| tab.id == self.active_tab_id) {
                     let url = tab.url.clone();
@@ -3260,6 +3314,8 @@ impl BrowserApp {
             }
         }
 
+        self.maybe_check_for_updates();
+
         self.memory_mb = get_process_memory_mb();
         if hibernated_any {
             self.broadcast_state();
@@ -3273,6 +3329,151 @@ impl BrowserApp {
             );
             let _ = self.sidebar_webview.evaluate_script(&script);
         }
+    }
+
+    /// The daily automatic update check, from the maintenance tick (wall
+    /// clock, so a Mac that slept still checks once a day).
+    fn maybe_check_for_updates(&mut self) {
+        if self.updates.auto_check_due(
+            self.config.check_for_updates,
+            self.config.update_last_checked,
+            now_unix_secs(),
+            self.started_at.elapsed(),
+        ) {
+            self.check_for_updates(CheckTrigger::Automatic);
+        }
+    }
+
+    /// Asks GitHub for the latest release (menu.m makes the request). A
+    /// check the user asked for always goes out, past the daily throttle;
+    /// one already in flight is joined instead of repeated.
+    fn check_for_updates(&mut self, trigger: CheckTrigger) {
+        let Some(request_id) = self.updates.start(trigger) else {
+            return;
+        };
+        if self.perf {
+            eprintln!("[update] checking ({trigger:?}) for a release newer than {}", updates::CURRENT_VERSION);
+        }
+        #[cfg(target_os = "macos")]
+        let sent = crate::macos_menu::fetch_update_feed(&updates::feed_url(), &updates::user_agent(), request_id);
+        #[cfg(not(target_os = "macos"))]
+        let sent = false;
+        if !sent {
+            self.handle_update_feed(request_id, 0, &[], Some("The update check could not start."));
+            return;
+        }
+        self.broadcast_state();
+    }
+
+    /// The answer to update-check request `request_id`.
+    pub fn handle_update_feed(&mut self, request_id: u64, status: i32, body: &[u8], error: Option<&str>) {
+        let now = now_unix_secs();
+        let result = updates::evaluate_response(status, body, error);
+        let Some(finished) = self.updates.finish(request_id, result, now) else {
+            return;
+        };
+        if self.perf {
+            match &finished.outcome {
+                Outcome::UpToDate => eprintln!("[update] up to date ({})", updates::CURRENT_VERSION),
+                Outcome::Available(release) => eprintln!(
+                    "[update] {} is available (notice {})",
+                    release.version,
+                    if self.updates.notice_version(&self.config.update_skipped_version).is_some() {
+                        "shown"
+                    } else {
+                        "hidden"
+                    }
+                ),
+                Outcome::Failed(error) => eprintln!("[update] check failed: {error:?}"),
+            }
+        }
+        if finished.alert {
+            #[cfg(target_os = "macos")]
+            crate::macos_menu::show_update_alert(&updates::alert_for(&finished.outcome));
+        }
+        if finished.reached_server {
+            // Restarts the daily throttle, also across launches.
+            self.config.update_last_checked = now;
+            self.config_changed();
+        } else {
+            self.broadcast_state();
+        }
+        self.refresh_update_menu();
+        if self.perf {
+            // Pushes the new state first, so the probe sees the notice.
+            self.flush_state();
+            self.probe_sidebar();
+        }
+    }
+
+    /// "Update Available: 1.0.2…" while a newer, not skipped version waits.
+    fn refresh_update_menu(&mut self) {
+        let title = updates::menu_title(self.updates.pending_version(&self.config.update_skipped_version));
+        if title == self.update_menu_title {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        crate::macos_menu::set_update_menu_title(&title);
+        if self.perf {
+            eprintln!("[update] menu item: {title}");
+        }
+        self.update_menu_title = title;
+    }
+
+    /// Download (notice, Settings, alert): the newest release's file for
+    /// this Mac in a new tab, so the downloads list handles it; the release
+    /// page when there is no such file. Only Eclipse's GitHub releases are
+    /// ever opened (updates::download_url).
+    fn open_update_download(&mut self) {
+        let url = match self.updates.latest() {
+            Some(release) => updates::download_url(release, updates::Arch::current()),
+            None => updates::LATEST_RELEASE_PAGE.to_string(),
+        };
+        self.updates.dismiss();
+        let id = self.open_update_page(&url);
+        if updates::is_release_download_url(&url) {
+            self.update_download_tab = Some(id);
+        }
+    }
+
+    fn open_update_page(&mut self, url: &str) -> usize {
+        let url = updates::trusted_release_url(url).unwrap_or_else(|| updates::LATEST_RELEASE_PAGE.to_string());
+        let id = self.create_tab(&url, true);
+        self.broadcast_state();
+        id
+    }
+
+    /// The load of the tab Download opened ended (it became a download, or
+    /// was refused or stopped): close the tab if nothing ever showed in it.
+    /// Returns whether it was closed.
+    fn close_blank_update_download_tab(&mut self, tab_id: usize) -> bool {
+        if self.update_download_tab != Some(tab_id) {
+            return false;
+        }
+        self.update_download_tab = None;
+        let blank = self
+            .tabs
+            .iter()
+            .any(|tab| tab.id == tab_id && tab.committed_url().is_empty());
+        if blank {
+            // Reopen Closed Tab would only download the file again.
+            self.close_tab_remembering(tab_id, false);
+        }
+        blank
+    }
+
+    fn dismiss_update_notice(&mut self) {
+        self.updates.dismiss();
+        self.broadcast_state();
+    }
+
+    /// "Skip This Version": `version` and older ones are no longer announced.
+    fn skip_update(&mut self, version: &str) {
+        if self.config.update_skipped_version != version {
+            self.config.update_skipped_version = version.to_string();
+            self.config_changed();
+        }
+        self.refresh_update_menu();
     }
 
     pub fn update_layout(&mut self) {
@@ -3416,6 +3617,7 @@ impl BrowserApp {
             is_fullscreen: self.is_fullscreen,
             current_workspace: self.current_workspace.clone(),
             memory_mb: self.memory_mb,
+            update: self.updates.ui_state(&self.config.update_skipped_version),
             config: None,
             favorites: None,
             downloads: None,
@@ -3615,7 +3817,7 @@ impl BrowserApp {
             var grid = document.getElementById('pinned-container');
             // Rows whose content is wider than the row (clipped icons or text).
             var overflowing = Array.prototype.filter.call(
-                document.querySelectorAll('.arc-header-row, .arc-omnibar-row, .arc-space-row, .arc-newtab-row, .arc-bottom-bar'),
+                document.querySelectorAll('.arc-header-row, .arc-omnibar-row, .arc-space-row, .arc-newtab-row, .arc-bottom-bar, .update-notice'),
                 function (row) { return row.scrollWidth > row.clientWidth + 1; }
             ).map(function (row) { return row.className; });
             var unlabeled = Array.prototype.filter.call(document.querySelectorAll('button'), function (b) {
@@ -3623,6 +3825,7 @@ impl BrowserApp {
                     && !b.textContent.trim() && !b.title;
             }).length;
             var activeDot = document.querySelector('#space-dots .space-dot.active');
+            var updateNotice = document.getElementById('update-notice');
             return JSON.stringify({
                 tokenBridge: !!window.__eclipseIpc,
                 stateHandler: typeof window.updateBrowserState,
@@ -3638,6 +3841,7 @@ impl BrowserApp {
                 spaceDots: document.querySelectorAll('#space-dots .space-dot').length,
                 activeSpaceDot: activeDot ? activeDot.dataset.space : null,
                 bottomBar: ['btn-library', 'btn-new-menu'].every(function (id) { return !!document.getElementById(id); }),
+                updateNotice: updateNotice && !updateNotice.hidden ? text('update-notice-text') : null,
                 drawer: drawer ? getComputedStyle(drawer).display : null,
                 sidebarWidth: window.innerWidth,
                 overflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
@@ -3727,9 +3931,10 @@ fn is_sidebar_document_url(url: &str) -> bool {
 }
 
 /// Saved tabs worth restoring: web pages and the internal pages. Error pages
-/// (load_html → about:blank), data:, blob:, file: and the like are skipped.
+/// (load_html → about:blank), data:, blob:, file: and the like are skipped,
+/// and so is an Eclipse release file: restoring it would download it again.
 fn is_restorable_url(url: &str) -> bool {
-    is_http_url(url)
+    (is_http_url(url) && !updates::is_release_download_url(url))
         || matches!(
             url,
             "eclipse://newtab"
@@ -5439,6 +5644,39 @@ mod tests {
         assert!(!is_command_allowed(IpcSender::LittleWindow, &command(json)));
     }
 
+    #[test]
+    fn only_trusted_chrome_may_drive_update_checks() {
+        let commands = [
+            r#"{"action":"check_for_updates"}"#,
+            r#"{"action":"download_update"}"#,
+            r#"{"action":"dismiss_update_notice"}"#,
+            r#"{"action":"skip_update"}"#,
+        ];
+        for json in commands {
+            let cmd = command(json);
+            assert!(is_command_allowed(IpcSender::Sidebar, &cmd), "{json}");
+            assert!(is_command_allowed(IpcSender::Internal, &cmd), "{json}");
+            assert!(!is_command_allowed(IpcSender::Web, &cmd), "{json}");
+            assert!(!is_command_allowed(IpcSender::LittleWindow, &cmd), "{json}");
+            assert!(!is_command_allowed(IpcSender::DepartingInternal, &cmd), "{json}");
+        }
+        // A website (also one claiming an eclipse:// origin while a web
+        // document is committed) or a Little Eclipse popup is never trusted.
+        let check = command(commands[0]);
+        assert!(!is_command_allowed(classify_tab_sender("https://evil.example/", INTERNAL_DOC), &check));
+        assert!(!is_command_allowed(classify_tab_sender("eclipse://localhost/settings", WEB_DOC), &check));
+        assert!(!is_command_allowed(
+            tab_ipc_sender("eclipse://localhost/settings", INTERNAL_DOC, false, true),
+            &check
+        ));
+        assert!(is_command_allowed(classify_tab_sender("eclipse://localhost/settings", INTERNAL_DOC), &check));
+        // Download never takes a URL from the page.
+        assert!(matches!(
+            command(r#"{"action":"download_update","url":"https://evil.example/x.dmg"}"#),
+            IpcCommand::DownloadUpdate
+        ));
+    }
+
     /// Every action the sidebar sends names a real command: a typo would
     /// otherwise be dropped silently by `parse_ipc`.
     #[test]
@@ -5631,6 +5869,11 @@ mod tests {
     #[test]
     fn restorable_urls_exclude_transient_pages() {
         assert!(is_restorable_url("https://a.example/"));
+        // Restoring the tab Download left would download the file again.
+        assert!(!is_restorable_url(
+            "https://github.com/sathwik-e/eclipse-browser/releases/download/v1.0.2/Eclipse-1.0.2-macos-arm64.dmg"
+        ));
+        assert!(is_restorable_url(updates::LATEST_RELEASE_PAGE));
         assert!(is_restorable_url("eclipse://notes"));
         assert!(is_restorable_url("eclipse://history"));
         assert!(!is_restorable_url("about:blank"));

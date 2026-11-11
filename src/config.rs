@@ -329,6 +329,18 @@ pub struct BrowserConfig {
     /// history (history.json, eclipse://history). Off: nothing new is.
     #[serde(default = "default_true")]
     pub save_history: bool,
+    /// About once a day, ask GitHub whether a newer release exists (see
+    /// updates.rs). Nothing is ever installed automatically.
+    #[serde(default = "default_true")]
+    pub check_for_updates: bool,
+    /// When an update check last reached GitHub (unix seconds; 0: never).
+    /// Set by Rust only, never by a settings patch.
+    #[serde(default)]
+    pub update_last_checked: u64,
+    /// "Skip This Version": this version and older ones are not announced.
+    /// Set by Rust only.
+    #[serde(default)]
+    pub update_skipped_version: String,
 }
 
 impl Default for BrowserConfig {
@@ -364,6 +376,9 @@ impl Default for BrowserConfig {
             tidy_downloads: true,
             ai_in_command_bar: true,
             save_history: true,
+            check_for_updates: true,
+            update_last_checked: 0,
+            update_skipped_version: String::new(),
         }
     }
 }
@@ -566,6 +581,7 @@ impl BrowserConfig {
         "tidy_downloads",
         "ai_in_command_bar",
         "save_history",
+        "check_for_updates",
     ];
 
     /// Applies an `update_settings` patch. Only keys in `PATCHABLE_SETTINGS`
@@ -626,6 +642,7 @@ impl BrowserConfig {
             "tidy_downloads" => value.as_bool().is_some_and(|b| set(&mut self.tidy_downloads, b)),
             "ai_in_command_bar" => value.as_bool().is_some_and(|b| set(&mut self.ai_in_command_bar, b)),
             "save_history" => value.as_bool().is_some_and(|b| set(&mut self.save_history, b)),
+            "check_for_updates" => value.as_bool().is_some_and(|b| set(&mut self.check_for_updates, b)),
             "tab_hibernation_mins" => value
                 .as_u64()
                 .filter(|m| *m <= MAX_HIBERNATION_MINS)
@@ -936,6 +953,25 @@ mod tests {
     }
 
     #[test]
+    fn update_checks_are_on_by_default_and_their_state_is_not_patchable() {
+        assert!(BrowserConfig::default().check_for_updates);
+        let old: BrowserConfig = serde_json::from_str(r#"{"theme": "void"}"#).unwrap();
+        assert!(old.check_for_updates);
+        assert_eq!(old.update_last_checked, 0);
+        assert!(old.update_skipped_version.is_empty());
+        let mut config = BrowserConfig::default();
+        let changed = config.apply_settings_patch(&patch(
+            r#"{"check_for_updates": false, "update_last_checked": 5, "update_skipped_version": "9.9.9"}"#,
+        ));
+        assert_eq!(changed, vec!["check_for_updates"]);
+        assert!(!config.check_for_updates);
+        assert_eq!(config.update_last_checked, 0);
+        assert!(config.update_skipped_version.is_empty());
+        let changed = config.apply_settings_patch(&patch(r#"{"check_for_updates": "yes"}"#));
+        assert!(changed.is_empty());
+    }
+
+    #[test]
     fn default_config_is_sane() {
         let config = BrowserConfig::default();
         assert_eq!(config.search_engine, "duckduckgo");
@@ -1093,7 +1129,8 @@ mod tests {
                 "rounded_corners_radius": 4, "open_links_in_little_window": false,
                 "tidy_tabs_button": false, "instant_links": false, "link_previews": false,
                 "tidy_tab_titles": false, "tidy_downloads": false, "ai_in_command_bar": false,
-                "save_history": false
+                "save_history": false,
+                "check_for_updates": false
             }"##,
         );
         let changed = config.apply_settings_patch(&samples);

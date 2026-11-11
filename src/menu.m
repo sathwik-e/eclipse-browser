@@ -14,6 +14,8 @@ typedef void (*EclipseMenuCallback)(const char *action);
 static EclipseMenuCallback gCallback = NULL;
 static EclipseMenuTarget *gMenuTarget = nil;
 static NSMenuItem *gFullScreenMenuItem = nil;
+/* Eclipse > Check for Updates… (retitled by eclipse_set_update_menu_title). */
+static NSMenuItem *gUpdateMenuItem = nil;
 
 /* The browser window, set by eclipse_configure_window. Fullscreen and edge
    hover always act on it, never on whatever window happens to be key (the Web
@@ -165,6 +167,10 @@ void eclipse_install_menu(EclipseMenuCallback callback) {
 
         EclipseAddItem(appMenu, @"About Eclipse", @selector(orderFrontStandardAboutPanel:),
                        @"", 0, NSApp, nil);
+        // Rust makes the request (through eclipse_fetch_update_feed) and
+        // reports the result in an alert.
+        gUpdateMenuItem = EclipseAddItem(appMenu, @"Check for Updates…", @selector(performEclipseAction:),
+                                         @"", 0, gMenuTarget, @"check_for_updates");
         [appMenu addItem:[NSMenuItem separatorItem]];
         EclipseAddItem(appMenu, @"Settings…", @selector(performEclipseAction:), @",",
                        NSEventModifierFlagCommand, gMenuTarget, @"open_settings");
@@ -4472,4 +4478,120 @@ int eclipse_show_little_command_bar(const char *const *titles, const char *const
         }
         return 1;
     }
+}
+
+/* ------------------------------------------------------- Update checks
+
+   Rust (updates.rs) decides when to check, parses the answer and decides
+   what to show; this is only the request and the alert. The request goes to
+   the one URL Rust passes (GitHub's latest-release API) on an ephemeral
+   session: no cookies, credentials or cache, and only an Accept and a
+   User-Agent header (a fixed Accept-Language replaces the system's). */
+
+typedef void (*EclipseUpdateFeedCallback)(uint64_t requestId, int32_t status, const uint8_t *body,
+                                          size_t length, const char *error);
+
+static const NSUInteger kEclipseUpdateFeedMaxBytes = 1024 * 1024;
+static NSURLSession *gUpdateSession = nil;
+
+/* Starts the request; `callback` runs once on the session's queue (not the
+   main thread). 0 when `url` is not an http(s) address. */
+int eclipse_fetch_update_feed(const char *url, const char *userAgent, uint64_t requestId,
+                              EclipseUpdateFeedCallback callback) {
+    if (url == NULL || callback == NULL) return 0;
+    @autoreleasepool {
+        NSURL *feed = [NSURL URLWithString:[NSString stringWithUTF8String:url] ?: @""];
+        if (feed == nil || !eclipse_is_web_scheme(feed.scheme) || feed.host.length == 0) return 0;
+        if (gUpdateSession == nil) {
+            NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+            configuration.HTTPCookieAcceptPolicy = NSHTTPCookieAcceptPolicyNever;
+            configuration.HTTPShouldSetCookies = NO;
+            configuration.HTTPCookieStorage = nil;
+            configuration.URLCredentialStorage = nil;
+            configuration.URLCache = nil;
+            configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+            configuration.timeoutIntervalForRequest = 15.0;
+            configuration.timeoutIntervalForResource = 20.0;
+            configuration.HTTPMaximumConnectionsPerHost = 1;
+            gUpdateSession = [NSURLSession sessionWithConfiguration:configuration];
+        }
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:feed
+                                                               cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                           timeoutInterval:15.0];
+        request.HTTPShouldHandleCookies = NO;
+        [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+        [request setValue:@"en" forHTTPHeaderField:@"Accept-Language"];
+        NSString *agent = userAgent != NULL ? [NSString stringWithUTF8String:userAgent] : nil;
+        if (agent.length > 0) [request setValue:agent forHTTPHeaderField:@"User-Agent"];
+        NSURLSessionDataTask *task = [gUpdateSession
+            dataTaskWithRequest:request
+              completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+                  NSInteger status = [response isKindOfClass:[NSHTTPURLResponse class]]
+                                         ? ((NSHTTPURLResponse *)response).statusCode
+                                         : 0;
+                  if (status != 0 && data.length > kEclipseUpdateFeedMaxBytes) {
+                      // Not a release: Rust reads an empty body as malformed.
+                      data = nil;
+                  }
+                  NSString *why = error != nil ? error.localizedDescription : nil;
+                  if (status == 0 && why.length == 0) why = @"No response from GitHub.";
+                  callback(requestId, (int32_t)status, (const uint8_t *)data.bytes, (size_t)data.length,
+                           status == 0 ? why.UTF8String : NULL);
+              }];
+        [task resume];
+        if (eclipse_perf_enabled()) {
+            fprintf(stderr, "[update] request %llu sent to %s\n", (unsigned long long)requestId,
+                    feed.host.UTF8String);
+        }
+        return 1;
+    }
+}
+
+/* An alert on the browser window for a check the user asked for. Button i
+   sends `actions[i]` back through the menu callback (nothing when empty);
+   `cancelIndex` is the button Escape presses. */
+int eclipse_show_update_alert(const char *message, const char *info, const char *const *titles,
+                              const char *const *actions, size_t count, int cancelIndex, int warning) {
+    if (message == NULL || titles == NULL || actions == NULL || count == 0) return 0;
+    NSWindow *window = gBrowserWindow;
+    if (window == nil) return 0;
+    @autoreleasepool {
+        NSString *messageText = [NSString stringWithUTF8String:message] ?: @"Eclipse";
+        NSString *infoText = info != NULL ? ([NSString stringWithUTF8String:info] ?: @"") : @"";
+        NSMutableArray<NSString *> *buttonTitles = [NSMutableArray array];
+        NSMutableArray<NSString *> *buttonActions = [NSMutableArray array];
+        for (size_t i = 0; i < count && i < 4; i++) {
+            if (titles[i] == NULL || actions[i] == NULL) return 0;
+            [buttonTitles addObject:[NSString stringWithUTF8String:titles[i]] ?: @"OK"];
+            [buttonActions addObject:[NSString stringWithUTF8String:actions[i]] ?: @""];
+        }
+        // Shown after the menu action that asked for it has returned.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSWindow *target = gBrowserWindow;
+            if (target == nil) return;
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.alertStyle = warning ? NSAlertStyleWarning : NSAlertStyleInformational;
+            alert.messageText = messageText;
+            alert.informativeText = infoText;
+            for (NSUInteger i = 0; i < buttonTitles.count; i++) {
+                NSButton *button = [alert addButtonWithTitle:buttonTitles[i]];
+                if ((NSInteger)i == cancelIndex && i != 0) button.keyEquivalent = @"\033";
+            }
+            if (target.isMiniaturized) [target deminiaturize:nil];
+            [target makeKeyAndOrderFront:nil];
+            [alert beginSheetModalForWindow:target completionHandler:^(NSModalResponse response) {
+                NSInteger index = response - NSAlertFirstButtonReturn;
+                if (index < 0 || index >= (NSInteger)buttonActions.count) return;
+                NSString *action = buttonActions[(NSUInteger)index];
+                if (action.length > 0 && gCallback != NULL) gCallback(action.UTF8String);
+            }];
+        });
+        return 1;
+    }
+}
+
+void eclipse_set_update_menu_title(const char *title) {
+    if (title == NULL || gUpdateMenuItem == nil) return;
+    NSString *text = [NSString stringWithUTF8String:title];
+    if (text.length > 0) gUpdateMenuItem.title = text;
 }

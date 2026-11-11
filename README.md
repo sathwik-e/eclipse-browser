@@ -8,7 +8,7 @@ megabytes and starts in under a tenth of a second.
 Eclipse has an Arc-style vertical sidebar that hides itself, Spaces, a
 command bar, built-in ad and tracker blocking, Notes and an Easel canvas.
 
-> **Status:** 1.0.2, macOS 11+ only. The app is ad-hoc signed, not notarized
+> **Status:** 1.0.3, macOS 11+ only. The app is ad-hoc signed, not notarized
 > (see [Installing](#installing)).
 
 ---
@@ -177,6 +177,22 @@ To have links you click in other apps open in Eclipse (in a Little Eclipse
 window), make it your default browser: **System Settings > Desktop & Dock >
 Default web browser**, then choose Eclipse.
 
+### Updates
+
+Eclipse tells you when a newer release is out; it never downloads or
+installs anything on its own. About once a day (and when you choose
+**Eclipse > Check for Updates…**) it asks GitHub's releases API
+(`api.github.com/repos/sathwik-e/eclipse-browser/releases/latest`) for the
+newest release. The request carries no cookies and only an `Eclipse/<version>`
+user agent. When there is a newer version, a notice appears above the
+sidebar's bottom bar and the menu item reads **Update Available**; Download
+opens the release's `.dmg` (or `.zip`) for your Mac in a new tab, which
+closes once the file is in the Downloads list, and you install it as above. Links from the answer are opened only when they point to
+this repository's GitHub releases.
+
+To turn the daily check off, open **Settings > Updates** and clear **Check
+for updates automatically**. Check for Updates… still works when you ask.
+
 ## Building from source
 
 Requirements:
@@ -281,6 +297,7 @@ ECLIPSE_PERF=1                # print startup timing and UI probes
 ECLIPSE_SMOKE_TEST_MS=8000    # quit automatically after N ms
 ECLIPSE_SMOKE_URL=https://example.com   # open a URL through the normal tab path
 ECLIPSE_SMOKE_LITTLE_URL=https://example.com   # open a URL as a link from another app
+ECLIPSE_SMOKE_UPDATE_FEED_URL=http://127.0.0.1:8899/latest.json   # update checks ask this local feed (loopback only)
 ```
 
 `scripts/little-eclipse-e2e/run.sh` checks Little Eclipse windows end to end
